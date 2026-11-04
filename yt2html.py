@@ -100,20 +100,21 @@ MARKERS_KEY = "yt2html_marker_lists"
 
 
 def fetch_marker_lists(ydl: yt_dlp.YoutubeDL, info: dict) -> list[dict] | None:
-    """Read YouTube's timestamp lists (Walkthroughs, Chapters, Key moments).
+    """Read chapters and YouTube's other timestamp lists (e.g. Walkthroughs).
 
-    yt-dlp keeps only one such list, as `chapters`, and drops its name, so the
-    watch page is fetched once more (with yt-dlp's cookies and consent) and the
-    lists are read from its ytInitialData. Returns None if that fails.
+    yt-dlp keeps only one such list, as `chapters`, and drops its name and
+    origin, so the watch page is fetched once more (with yt-dlp's cookies and
+    consent) and read from its ytInitialData. Returns None if that fails.
     """
     url = f"{YOUTUBE}/watch?v={info.get('id')}&hl=en"
     try:
-        log("Downloading timestamp lists (Walkthroughs, Chapters)...")
+        log("Downloading chapters and timestamp lists (e.g. Walkthroughs)...")
         with ydl.urlopen(url) as response:
             webpage = response.read().decode("utf-8", errors="replace")
-        return parse_marker_lists(webpage)
+        return parse_marker_lists(webpage, info.get("description") or "",
+                                  info.get("duration"))
     except Exception as error:
-        log(f"  Could not read timestamp lists ({error}); using yt-dlp chapters.")
+        log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
         return None
 
 
@@ -126,12 +127,18 @@ def text_of(node) -> str:
     return "".join(str(run.get("text", "")) for run in node.get("runs") or [])
 
 
-def parse_marker_lists(webpage: str) -> list[dict]:
-    """Extract every macro-markers panel from a watch page's ytInitialData."""
-    match = re.search(r"ytInitialData\s*=\s*", webpage)
+def initial_data_of(webpage: str) -> dict:
+    """The ytInitialData object embedded in a watch page."""
+    match = re.search(r"""(?:window\s*\[\s*["']ytInitialData["']\s*\]|\bytInitialData)\s*=\s*""",
+                      webpage)
     if not match:
         raise ValueError("ytInitialData not found")
     data, _ = json.JSONDecoder().raw_decode(webpage, match.end())
+    return data
+
+
+def read_panels(data: dict) -> list[dict]:
+    """Every engagement panel with a timestamp list (macroMarkersListRenderer)."""
     lists = []
     for panel in data.get("engagementPanels") or []:
         renderer = panel.get("engagementPanelSectionListRenderer") or {}
@@ -140,6 +147,7 @@ def parse_marker_lists(webpage: str) -> list[dict]:
                     .get("contents") or [])
         items = []
         for content in contents:
+            # Info rows ("These chapters are auto-generated") are skipped.
             marker = content.get("macroMarkersListItemRenderer")
             if not marker:
                 continue
@@ -152,9 +160,47 @@ def parse_marker_lists(webpage: str) -> list[dict]:
         if items:
             header = (renderer.get("header") or {}).get("engagementPanelTitleHeaderRenderer") or {}
             lists.append({"id": renderer.get("panelIdentifier") or "",
-                          "title": text_of(header.get("title")) or "Chapters",
+                          "title": text_of(header.get("title")),
                           "items": items})
     return lists
+
+
+def read_player_bar(data: dict) -> list[dict]:
+    """Chapters marked on the progress bar: [{key, items}].
+
+    The key says where YouTube took them from (DESCRIPTION_CHAPTERS,
+    AUTO_CHAPTERS). Heatmap entries have no chapters and are skipped.
+    """
+    bar = (((((data.get("playerOverlays") or {})
+              .get("playerOverlayRenderer") or {})
+             .get("decoratedPlayerBarRenderer") or {})
+            .get("decoratedPlayerBarRenderer") or {})
+           .get("playerBar") or {})
+    entries = []
+    for marker in (bar.get("multiMarkersPlayerBarRenderer") or {}).get("markersMap") or []:
+        chapters = (marker.get("value") or {}).get("chapters") or []
+        entries.append({"key": marker.get("key") or "", "chapters": chapters})
+    # Older page layout without a key.
+    old = (bar.get("chapteredPlayerBarRenderer") or {}).get("chapters")
+    if old:
+        entries.append({"key": "", "chapters": old})
+    result = []
+    for entry in entries:
+        items = []
+        for chapter in entry["chapters"]:
+            renderer = chapter.get("chapterRenderer") or {}
+            millis = renderer.get("timeRangeStartMillis")
+            if millis is None:
+                continue
+            start = int(millis) // 1000
+            items.append({"start_time": start, "time_text": format_duration(start),
+                          "title": text_of(renderer.get("title"))})
+        if items:
+            result.append({"key": entry["key"], "items": items})
+    return result
+
+
+CLOCK_RE = re.compile(r"(?<![\d:])(?:\d{1,2}:)?\d{1,2}:\d{2}(?![\d:])")
 
 
 def parse_clock(text: str) -> int | None:
@@ -164,8 +210,109 @@ def parse_clock(text: str) -> int | None:
     return sum(int(p) * 60 ** i for i, p in enumerate(reversed(text.split(":"))))
 
 
+def description_chapter_starts(description: str, duration) -> list[int] | None:
+    """Start times of a chapter list in the description, or None if none is valid.
+
+    YouTube's rules: the list starts at 0:00, has at least three timestamps in
+    ascending order, and every chapter is at least 10 seconds long. The list
+    is the run of consecutive timestamped lines that begins with the first
+    0:00 line; it ends at the first line without a timestamp.
+    """
+    starts = []
+    for line in description.splitlines():
+        match = CLOCK_RE.search(line)
+        if not match:
+            if starts:
+                break
+            continue
+        seconds = parse_clock(match.group(0))
+        if not starts:
+            if seconds == 0:
+                starts.append(0)
+            continue
+        if seconds <= starts[-1]:
+            break
+        starts.append(seconds)
+    if len(starts) < 3:
+        return None
+    ends = starts[1:] + ([duration] if duration else [])
+    if any(end - start < 10 for start, end in zip(starts, ends)):
+        return None
+    return starts
+
+
+# Where YouTube says the chapters come from, by progress-bar key and panel id.
+BAR_SOURCES = {"DESCRIPTION_CHAPTERS": "description", "AUTO_CHAPTERS": "auto"}
+PANEL_SOURCES = {
+    "engagement-panel-macro-markers-description-chapters": "description",
+    "engagement-panel-macro-markers-auto-chapters": "auto",
+}
+
+
+def decide_chapter_source(claims: list[str], items: list[dict],
+                          description: str, duration) -> tuple[str, str | None]:
+    """Combine YouTube's own markings with a check of the description.
+
+    Returns (source, problem): source is "description", "auto" or "uncertain";
+    problem explains an "uncertain" result.
+    """
+    unknown = [c for c in claims if c not in ("description", "auto")]
+    if unknown:
+        return "uncertain", f"unknown chapter type {', '.join(unknown)}"
+    if not claims:
+        return "uncertain", "YouTube does not say where the chapters come from"
+    if len(set(claims)) > 1:
+        return "uncertain", "YouTube's own markings disagree: " + ", ".join(claims)
+    claim = claims[0]
+    listed = description_chapter_starts(description, duration)
+    shown = [item["start_time"] for item in items]
+    matches = listed is not None and listed == shown
+    if claim == "description":
+        if matches:
+            return "description", None
+        return "uncertain", ("YouTube says the chapters come from the description, "
+                             "but the description has no matching chapter list")
+    if listed is None:
+        return "auto", None
+    return "uncertain", ("YouTube says the chapters are auto-generated, "
+                         "but the description has a valid chapter list")
+
+
+def parse_marker_lists(webpage: str, description: str = "", duration=None) -> list[dict]:
+    """Chapters first, then every other timestamp list (e.g. Walkthroughs).
+
+    Each list: {id, title, source, items: [{start_time, time_text, title}]},
+    where source is "description", "auto", "uncertain" (chapters) or None.
+    """
+    data = initial_data_of(webpage)
+    panels = read_panels(data)
+    bar = read_player_bar(data)
+    chapter_panels = [p for p in panels if "chapters" in p["id"]]
+    other_panels = [p for p in panels if "chapters" not in p["id"]]
+
+    lists = []
+    if bar or chapter_panels:
+        # The progress bar defines the chapters; panels give name and origin.
+        items = bar[0]["items"] if bar else chapter_panels[0]["items"]
+        claims = [BAR_SOURCES.get(b["key"], b["key"] or "(no key)") for b in bar[:1]]
+        claims += [PANEL_SOURCES.get(p["id"], p["id"]) for p in chapter_panels]
+        source, problem = decide_chapter_source(claims, items, description, duration)
+        if problem:
+            log(f"  Chapter source unclear: {problem}. Shown without a source note.")
+        title = next((p["title"] for p in chapter_panels if p["title"]), "") or "Chapters"
+        lists.append({"id": "chapters", "title": title, "source": source,
+                      "source_problem": problem, "items": items})
+    for panel in other_panels:
+        lists.append({**panel, "title": panel["title"] or "Timestamps", "source": None})
+    return lists
+
+
 def marker_lists_of(info: dict) -> list[dict]:
-    """Timestamp lists to show; falls back to yt-dlp's `chapters`."""
+    """Timestamp lists to show; falls back to yt-dlp's `chapters`.
+
+    The fallback has no source note: yt-dlp may even return a Walkthroughs
+    list as chapters.
+    """
     lists = info.get(MARKERS_KEY)
     if lists is not None:
         return lists
@@ -173,7 +320,8 @@ def marker_lists_of(info: dict) -> list[dict]:
     items = [{"start_time": int(c.get("start_time") or 0),
               "time_text": format_duration(c.get("start_time") or 0),
               "title": c.get("title") or ""} for c in chapters]
-    return [{"id": "chapters", "title": "Chapters", "items": items}] if items else []
+    return ([{"id": "chapters", "title": "Chapters", "source": None, "items": items}]
+            if items else [])
 
 
 def fetch_image(url: str) -> str | None:
@@ -469,6 +617,7 @@ h1.title a{color:var(--text)}
 .fact.extra .value{color:var(--muted)}
 .markers{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
 .markers h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
+.markers h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .markers ol{list-style:none;margin:0;padding:0}
 .markers li{display:flex;gap:12px;padding:3px 0}
 .markers .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:500}
@@ -580,6 +729,10 @@ def fact(label: str, value: str, extra: bool = False) -> str:
             f'<div class="label">{esc(label)}</div></div>')
 
 
+# Grey note next to a chapter heading; only for a source the program verified.
+SOURCE_NOTES = {"description": "from description", "auto": "auto-generated"}
+
+
 def render_marker_lists(lists: list[dict], video_id: str) -> str:
     """Timestamp lists (Walkthroughs, Chapters, ...) as plain vertical lists."""
     sections = []
@@ -593,8 +746,10 @@ def render_marker_lists(lists: list[dict], video_id: str) -> str:
             rows.append(f'<li><span class="time">{time_html}</span>'
                         f'<span class="label">{esc(item.get("title") or "")}</span></li>')
         list_id = re.sub(r"[^a-z0-9-]+", "-", (marker_list.get("id") or "markers").lower())
+        note = SOURCE_NOTES.get(marker_list.get("source"))
+        note_html = f' <span class="source">{esc(note)}</span>' if note else ""
         sections.append(f'<section class="markers" id="{esc(list_id)}">'
-                        f'<h2>{esc(marker_list.get("title") or "Chapters")}</h2>'
+                        f'<h2>{esc(marker_list.get("title") or "Chapters")}{note_html}</h2>'
                         f'<ol>{"".join(rows)}</ol></section>')
     return "\n".join(sections)
 
