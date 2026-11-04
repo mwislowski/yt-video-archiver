@@ -1,9 +1,9 @@
 """yt2html - archive a YouTube video page as a single self-contained HTML file.
 
 The page contains the video's metadata (thumbnail, title, channel, counts,
-dates, full description), YouTube's timestamp lists (Walkthroughs, Chapters)
-and all comments with their reply threads, sorted
-oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
+dates, full description, AI-generated video summary), YouTube's timestamp
+lists (Chapters, Walkthroughs) and all comments with their reply threads,
+sorted oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
 result is one file that works offline, like a page saved with SingleFile.
 The video itself is not downloaded.
 
@@ -87,7 +87,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
         info[ARCHIVED_KEY] = dt.date.today().isoformat()
         if info.get("_type") not in ("playlist", "multi_video"):
-            info[MARKERS_KEY] = fetch_marker_lists(ydl, info)
+            add_watch_page_data(ydl, info)
         return info
 
 
@@ -98,24 +98,31 @@ ARCHIVED_KEY = "yt2html_archived"
 # --save-json file). Not a yt-dlp field.
 MARKERS_KEY = "yt2html_marker_lists"
 
+# Key for extra description elements (e.g. the AI-generated video summary).
+EXTRAS_KEY = "yt2html_description_extras"
 
-def fetch_marker_lists(ydl: yt_dlp.YoutubeDL, info: dict) -> list[dict] | None:
-    """Read chapters and YouTube's other timestamp lists (e.g. Walkthroughs).
 
-    yt-dlp keeps only one such list, as `chapters`, and drops its name and
-    origin, so the watch page is fetched once more (with yt-dlp's cookies and
-    consent) and read from its ytInitialData. Returns None if that fails.
+def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
+    """Add what yt-dlp does not return: timestamp lists and description extras.
+
+    yt-dlp keeps only one timestamp list, as `chapters`, without its name and
+    origin, and nothing of the extra description elements. So the watch page
+    is fetched once more (with yt-dlp's cookies and consent) and read from its
+    ytInitialData. On failure both keys are set to None.
     """
     url = f"{YOUTUBE}/watch?v={info.get('id')}&hl=en"
     try:
-        log("Downloading chapters and timestamp lists (e.g. Walkthroughs)...")
+        log("Downloading chapters, timestamp lists and description extras...")
         with ydl.urlopen(url) as response:
             webpage = response.read().decode("utf-8", errors="replace")
-        return parse_marker_lists(webpage, info.get("description") or "",
-                                  info.get("duration"))
+        data = initial_data_of(webpage)
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
-        return None
+        info[MARKERS_KEY] = info[EXTRAS_KEY] = None
+        return
+    info[MARKERS_KEY] = parse_marker_lists(data, info.get("description") or "",
+                                           info.get("duration"))
+    info[EXTRAS_KEY] = parse_description_extras(data)
 
 
 def text_of(node) -> str:
@@ -124,6 +131,8 @@ def text_of(node) -> str:
         return ""
     if "simpleText" in node:
         return str(node["simpleText"])
+    if "content" in node:
+        return str(node["content"])
     return "".join(str(run.get("text", "")) for run in node.get("runs") or [])
 
 
@@ -278,13 +287,12 @@ def decide_chapter_source(claims: list[str], items: list[dict],
                          "but the description has a valid chapter list")
 
 
-def parse_marker_lists(webpage: str, description: str = "", duration=None) -> list[dict]:
+def parse_marker_lists(data: dict, description: str = "", duration=None) -> list[dict]:
     """Chapters first, then every other timestamp list (e.g. Walkthroughs).
 
     Each list: {id, title, source, items: [{start_time, time_text, title}]},
     where source is "description", "auto", "uncertain" (chapters) or None.
     """
-    data = initial_data_of(webpage)
     panels = read_panels(data)
     bar = read_player_bar(data)
     chapter_panels = [p for p in panels if "chapters" in p["id"]]
@@ -305,6 +313,41 @@ def parse_marker_lists(webpage: str, description: str = "", duration=None) -> li
     for panel in other_panels:
         lists.append({**panel, "title": panel["title"] or "Timestamps", "source": None})
     return lists
+
+
+def structured_description_items(data: dict) -> list[dict]:
+    """Items of the expanded description panel, in YouTube's display order."""
+    for panel in data.get("engagementPanels") or []:
+        renderer = panel.get("engagementPanelSectionListRenderer") or {}
+        if renderer.get("panelIdentifier") == "engagement-panel-structured-description":
+            content = (renderer.get("content") or {}).get("structuredDescriptionContentRenderer") or {}
+            return content.get("items") or []
+    return []
+
+
+def parse_description_extras(data: dict) -> list[dict]:
+    """Extra elements YouTube shows below the description text.
+
+    Currently: the AI-generated video summary (expandableMetadataRenderer with
+    videoSummaryContentViewModel). Each extra: {type, title, paragraphs}.
+    """
+    extras = []
+    for item in structured_description_items(data):
+        metadata = item.get("expandableMetadataRenderer")
+        if metadata:
+            summary = (metadata.get("expandedContent") or {}).get("videoSummaryContentViewModel")
+            if summary:
+                paragraphs = [
+                    ((p.get("videoSummaryParagraphViewModel") or {}).get("text") or {}).get("content") or ""
+                    for p in summary.get("paragraphs") or []
+                ]
+                paragraphs = [p for p in paragraphs if p.strip()]
+                if paragraphs:
+                    title = text_of((metadata.get("header") or {}).get("expandedTitle"))
+                    extras.append({"type": "video_summary",
+                                   "title": title or "AI-generated video summary",
+                                   "paragraphs": paragraphs})
+    return extras
 
 
 def marker_lists_of(info: dict) -> list[dict]:
@@ -615,6 +658,10 @@ h1.title a{color:var(--text)}
 .fact .value{font-size:16px;font-weight:700;line-height:22px;white-space:nowrap}
 .fact .label{color:var(--muted);font-size:12px;line-height:18px}
 .fact.extra .value{color:var(--muted)}
+.desc-extra{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
+.desc-extra h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
+.desc-extra p{margin:0 0 8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.desc-extra p:last-child{margin-bottom:0}
 .markers{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
 .markers h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
 .markers h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
@@ -733,6 +780,18 @@ def fact(label: str, value: str, extra: bool = False) -> str:
 SOURCE_NOTES = {"description": "from description", "auto": "auto-generated"}
 
 
+def render_description_extras(extras: list[dict], video_id: str, duration) -> str:
+    """Extra description elements (e.g. the AI-generated video summary)."""
+    sections = []
+    for extra in extras:
+        paragraphs = "".join(f"<p>{linkify(p, video_id, duration)}</p>"
+                             for p in extra.get("paragraphs") or [])
+        css_type = re.sub(r"[^a-z0-9-]+", "-", (extra.get("type") or "extra").lower())
+        sections.append(f'<section class="desc-extra {esc(css_type)}">'
+                        f'<h2>{esc(extra.get("title") or "")}</h2>{paragraphs}</section>')
+    return "\n".join(sections)
+
+
 def render_marker_lists(lists: list[dict], video_id: str) -> str:
     """Timestamp lists (Walkthroughs, Chapters, ...) as plain vertical lists."""
     sections = []
@@ -803,6 +862,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         body.append(f'<section class="description">{linkify(description, video_id, duration)}</section>')
     else:
         body.append('<section class="description empty">No description.</section>')
+
+    extras = info.get(EXTRAS_KEY) or []
+    if extras:
+        body.append(render_description_extras(extras, video_id, duration))
 
     markers = marker_lists_of(info)
     if markers:
