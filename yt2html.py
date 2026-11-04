@@ -1,7 +1,8 @@
 """yt2html - archive a YouTube video page as a single self-contained HTML file.
 
 The page contains the video's metadata (thumbnail, title, channel, counts,
-dates, full description) and all comments with their reply threads, sorted
+dates, full description), YouTube's timestamp lists (Walkthroughs, Chapters)
+and all comments with their reply threads, sorted
 oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
 result is one file that works offline, like a page saved with SingleFile.
 The video itself is not downloaded.
@@ -83,8 +84,96 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
     if args.cookies_from_browser:
         opts["cookiesfrombrowser"] = (args.cookies_from_browser,)
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        return ydl.sanitize_info(info)
+        info = ydl.sanitize_info(ydl.extract_info(url, download=False))
+        info[ARCHIVED_KEY] = dt.date.today().isoformat()
+        if info.get("_type") not in ("playlist", "multi_video"):
+            info[MARKERS_KEY] = fetch_marker_lists(ydl, info)
+        return info
+
+
+# Date of fetching, stored so that --from-json keeps the original snapshot date.
+ARCHIVED_KEY = "yt2html_archived"
+
+# Key under which the timestamp lists are stored in the info dict (and in a
+# --save-json file). Not a yt-dlp field.
+MARKERS_KEY = "yt2html_marker_lists"
+
+
+def fetch_marker_lists(ydl: yt_dlp.YoutubeDL, info: dict) -> list[dict] | None:
+    """Read YouTube's timestamp lists (Walkthroughs, Chapters, Key moments).
+
+    yt-dlp keeps only one such list, as `chapters`, and drops its name, so the
+    watch page is fetched once more (with yt-dlp's cookies and consent) and the
+    lists are read from its ytInitialData. Returns None if that fails.
+    """
+    url = f"{YOUTUBE}/watch?v={info.get('id')}&hl=en"
+    try:
+        log("Downloading timestamp lists (Walkthroughs, Chapters)...")
+        with ydl.urlopen(url) as response:
+            webpage = response.read().decode("utf-8", errors="replace")
+        return parse_marker_lists(webpage)
+    except Exception as error:
+        log(f"  Could not read timestamp lists ({error}); using yt-dlp chapters.")
+        return None
+
+
+def text_of(node) -> str:
+    """Text of a YouTube text object ({'simpleText': ...} or {'runs': [...]})."""
+    if not isinstance(node, dict):
+        return ""
+    if "simpleText" in node:
+        return str(node["simpleText"])
+    return "".join(str(run.get("text", "")) for run in node.get("runs") or [])
+
+
+def parse_marker_lists(webpage: str) -> list[dict]:
+    """Extract every macro-markers panel from a watch page's ytInitialData."""
+    match = re.search(r"ytInitialData\s*=\s*", webpage)
+    if not match:
+        raise ValueError("ytInitialData not found")
+    data, _ = json.JSONDecoder().raw_decode(webpage, match.end())
+    lists = []
+    for panel in data.get("engagementPanels") or []:
+        renderer = panel.get("engagementPanelSectionListRenderer") or {}
+        contents = (((renderer.get("content") or {})
+                     .get("macroMarkersListRenderer") or {})
+                    .get("contents") or [])
+        items = []
+        for content in contents:
+            marker = content.get("macroMarkersListItemRenderer")
+            if not marker:
+                continue
+            time_text = text_of(marker.get("timeDescription"))
+            start = ((marker.get("onTap") or {}).get("watchEndpoint") or {}).get("startTimeSeconds")
+            if start is None:
+                start = parse_clock(time_text)
+            items.append({"start_time": start, "time_text": time_text,
+                          "title": text_of(marker.get("title"))})
+        if items:
+            header = (renderer.get("header") or {}).get("engagementPanelTitleHeaderRenderer") or {}
+            lists.append({"id": renderer.get("panelIdentifier") or "",
+                          "title": text_of(header.get("title")) or "Chapters",
+                          "items": items})
+    return lists
+
+
+def parse_clock(text: str) -> int | None:
+    """'1:02:03' -> 3723; None if the text is not a clock time."""
+    if not re.fullmatch(r"\d+(?::\d{1,2}){1,2}", text or ""):
+        return None
+    return sum(int(p) * 60 ** i for i, p in enumerate(reversed(text.split(":"))))
+
+
+def marker_lists_of(info: dict) -> list[dict]:
+    """Timestamp lists to show; falls back to yt-dlp's `chapters`."""
+    lists = info.get(MARKERS_KEY)
+    if lists is not None:
+        return lists
+    chapters = info.get("chapters") or []
+    items = [{"start_time": int(c.get("start_time") or 0),
+              "time_text": format_duration(c.get("start_time") or 0),
+              "title": c.get("title") or ""} for c in chapters]
+    return [{"id": "chapters", "title": "Chapters", "items": items}] if items else []
 
 
 def fetch_image(url: str) -> str | None:
@@ -377,6 +466,13 @@ h1.title a{color:var(--text)}
 .fact{background:var(--panel);border-radius:12px;padding:10px 16px;min-width:120px}
 .fact .value{font-size:16px;font-weight:700;line-height:22px;white-space:nowrap}
 .fact .label{color:var(--muted);font-size:12px;line-height:18px}
+.fact.extra .value{color:var(--muted)}
+.markers{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
+.markers h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
+.markers ol{list-style:none;margin:0;padding:0}
+.markers li{display:flex;gap:12px;padding:3px 0}
+.markers .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:500}
+.markers .label{overflow-wrap:anywhere}
 .description{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px;
   white-space:pre-wrap;overflow-wrap:anywhere}
 .description.empty{color:var(--muted)}
@@ -477,13 +573,34 @@ def render_comment(c: dict, children: dict, avatars: AvatarStyles,
     return "\n".join(parts)
 
 
-def fact(label: str, value: str) -> str:
-    return (f'<div class="fact"><div class="value">{esc(value)}</div>'
+def fact(label: str, value: str, extra: bool = False) -> str:
+    """One fact tile; extra=True marks information added by this program (grey)."""
+    cls = "fact extra" if extra else "fact"
+    return (f'<div class="{cls}"><div class="value">{esc(value)}</div>'
             f'<div class="label">{esc(label)}</div></div>')
 
 
+def render_marker_lists(lists: list[dict], video_id: str) -> str:
+    """Timestamp lists (Walkthroughs, Chapters, ...) as plain vertical lists."""
+    sections = []
+    for marker_list in lists:
+        rows = []
+        for item in marker_list.get("items") or []:
+            start = item.get("start_time")
+            time_text = item.get("time_text") or format_duration(start)
+            time_html = (link(f"{YOUTUBE}/watch?v={video_id}&t={int(start)}s", time_text)
+                         if video_id and start is not None else esc(time_text))
+            rows.append(f'<li><span class="time">{time_html}</span>'
+                        f'<span class="label">{esc(item.get("title") or "")}</span></li>')
+        list_id = re.sub(r"[^a-z0-9-]+", "-", (marker_list.get("id") or "markers").lower())
+        sections.append(f'<section class="markers" id="{esc(list_id)}">'
+                        f'<h2>{esc(marker_list.get("title") or "Chapters")}</h2>'
+                        f'<ol>{"".join(rows)}</ol></section>')
+    return "\n".join(sections)
+
+
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
-                archived: dt.date) -> str:
+                archived: dt.date, show_snapshot: bool = True) -> str:
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -515,7 +632,6 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 + f'<div class="subs">{esc(subs_text)}</div></div></div>')
 
     body.append('<div class="facts">'
-                + fact("Downloaded", archived.strftime(DATE_FORMAT))
                 + fact("Duration", format_duration(duration))
                 + fact("Published", published_date(info))
                 + fact("Views", format_int(info.get("view_count")))
@@ -523,6 +639,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 + fact("Comments", format_int(info.get("comment_count")
                                               if info.get("comment_count") is not None
                                               else (len(comments) or None)))
+                + (fact("Snapshot", archived.strftime(DATE_FORMAT), extra=True)
+                   if show_snapshot else "")
                 + "</div>")
 
     description = info.get("description") or ""
@@ -530,6 +648,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         body.append(f'<section class="description">{linkify(description, video_id, duration)}</section>')
     else:
         body.append('<section class="description empty">No description.</section>')
+
+    markers = marker_lists_of(info)
+    if markers:
+        body.append(render_marker_lists(markers, video_id))
 
     if "comments" in info:
         roots, children = build_comment_tree(comments)
@@ -617,7 +739,12 @@ def archive(source: str, args: argparse.Namespace) -> Path:
         avatar_uris = fetch_avatars({c.get("author_thumbnail")
                                      for c in info.get("comments") or []})
 
-    page = render_page(info, thumbnail, avatar_uris, dt.date.today())
+    try:
+        archived = dt.date.fromisoformat(info.get(ARCHIVED_KEY) or "")
+    except ValueError:
+        archived = dt.date.today()  # older JSON files without the date
+    page = render_page(info, thumbnail, avatar_uris, archived,
+                       show_snapshot=not args.no_snapshot)
     target.write_text(page, encoding="utf-8")
     size_kb = target.stat().st_size / 1024
     log(f"Saved page: {target} ({size_kb:,.0f} KB, "
@@ -641,6 +768,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="limit the number of downloaded comments (replies included)")
     parser.add_argument("--no-avatars", action="store_true",
                         help="do not embed avatars (letter placeholders instead)")
+    parser.add_argument("--no-snapshot", action="store_true",
+                        help="leave out the grey 'Snapshot' date tile "
+                             "(the date stays in the footer)")
     parser.add_argument("--cookies-from-browser", metavar="BROWSER",
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in")

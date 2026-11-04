@@ -13,9 +13,12 @@ The video and subtitles are **not** downloaded; they are expected to be download
 | Thumbnail | Best available resolution, embedded in the file. |
 | Title | Links to the original video. |
 | Channel | Name (link), verified mark, subscriber count in YouTube's short form (`1.23M subscribers`). The channel avatar appears only if the uploader commented under the video (it is not part of the video metadata); otherwise a letter placeholder. |
-| Facts | `Downloaded` (date of archiving), `Duration`, `Published`, `Views`, `Likes`, `Comments` (the count YouTube reports). Dates are `DD.MM.YYYY`. |
+| Facts | `Duration`, `Published`, `Views`, `Likes`, `Comments` (the count YouTube reports), and at the end, in grey, `Snapshot`: the date the data was fetched. It is added by the program, not by YouTube, hence the grey colour; `--no-snapshot` leaves it out (the date is still in the footer and in the comments note). Dates are `DD.MM.YYYY`. |
 | Description | Full text (what YouTube hides behind *Show more*), with clickable URLs, timestamps (link to the video at that second), `#hashtags` and `@handles`. |
+| Timestamp lists | YouTube's *Walkthroughs* (AI-generated questions with timestamps), *Chapters* and similar lists, under the name YouTube gives them. On YouTube they are horizontally scrolling cards; here each is a plain vertical list: timestamp (link to the video at that second) followed by the title. Shown only when the video has them. |
 | Comments | All comments, top level oldest first; each thread with all replies already expanded, also oldest first, indented with a vertical line. Author, relative time as YouTube showed it on the download day (tooltip: estimated date), text with clickable links, likes, *Pinned* and *heart by creator* marks, creator highlighted. Avatars are embedded and not clickable. |
+
+At the bottom: a footer with the source URL and the snapshot date.
 
 Not included: the top bar, the video player, the transcript, *Video details* (it repeats the data above), recommendations.
 
@@ -47,7 +50,9 @@ Not included: the top bar, the video player, the transcript, *Video details* (it
 - `ignore_no_formats_error: True` — the video is not downloaded, so missing formats (e.g. when no JavaScript runtime is installed for YouTube's player challenges) must not abort the run;
 - `extractor_args = {"youtube": {"comment_sort": ["new"], "max_comments": [N or "all", "all", "all", "all"]}}`.
 
-Used fields: `id`, `title`, `webpage_url`, `uploader`, `uploader_url`, `channel_is_verified`, `channel_follower_count`, `view_count`, `like_count`, `comment_count`, `duration`, `release_timestamp` / `timestamp` / `upload_date`, `thumbnail`, `thumbnails`, `description`, `comments`.
+Then, in the same `YoutubeDL` instance (same cookies and consent), the watch page is fetched once more with `ydl.urlopen()` for the timestamp lists (see below). The program adds two keys of its own to the info dict, both kept by `--save-json`: `yt2html_archived` (ISO date of fetching) and `yt2html_marker_lists`.
+
+Used fields: `id`, `title`, `webpage_url`, `uploader`, `uploader_url`, `channel_is_verified`, `channel_follower_count`, `view_count`, `like_count`, `comment_count`, `duration`, `release_timestamp` / `timestamp` / `upload_date`, `thumbnail`, `thumbnails`, `description`, `chapters` (fallback only), `comments`.
 
 Each comment: `id`, `parent` (`"root"` or the parent's id), `text`, `author`, `author_url`, `author_thumbnail`, `author_is_uploader`, `author_is_verified`, `like_count`, `is_pinned`, `is_favorited`, `timestamp`, `_time_text`.
 
@@ -58,6 +63,13 @@ Each comment: `id`, `parent` (`"root"` or the parent's id), `text`, `author`, `a
 - Replies come in YouTube's thread order, which is oldest first.
 - YouTube gives only relative times (`2 years ago`), so `timestamp` is a coarse estimate. `chronological()` does a **stable** sort by it: the exact order from YouTube is kept within equal estimates, and only items whose estimate clearly disagrees (the pinned comment) move. Missing timestamps inherit the previous item's value.
 - Comments whose parent is missing are shown at the top level. Deeper nesting (if YouTube ever returns it) is rendered recursively.
+
+### Timestamp lists (Walkthroughs, Chapters)
+
+- On the watch page they are engagement panels in `ytInitialData`: `engagementPanels[].engagementPanelSectionListRenderer` whose `content` is a `macroMarkersListRenderer` (e.g. `panelIdentifier` `engagement-panel-macro-markers-problem-walkthroughs`, title `Walkthroughs`; description chapters and auto chapters use the same renderer). Each item is a `macroMarkersListItemRenderer` with `title`, `timeDescription` (`2:12`) and `onTap.watchEndpoint.startTimeSeconds`.
+- yt-dlp reads the same panels, but keeps only the first list (or the player-bar chapters instead) as `chapters` and drops its name. Therefore `fetch_marker_lists()` downloads `/watch?v=ID&hl=en` and `parse_marker_lists()` reads **all** such panels with their titles: the JSON after `ytInitialData =` is parsed with `json.JSONDecoder().raw_decode()`, which stops exactly at the end of the object.
+- Result: `[{id, title, items: [{start_time, time_text, title}]}]` in `info["yt2html_marker_lists"]`. If the extra request fails, the value is `None` and the page falls back to yt-dlp's `chapters` under the title `Chapters`; an empty list means the video has none.
+- Rendered after the description as `<section class="markers">` with an `<ol>`, one row per item.
 
 ### Images
 
@@ -70,6 +82,10 @@ Each comment: `id`, `parent` (`"root"` or the parent's id), `text`, `author`, `a
 ### Text to HTML
 
 `linkify()` escapes everything and recognises, in one regex pass: URLs (`http(s)://...`, `www....`; trailing punctuation and unbalanced `)`/`]` are cut off), timestamps `M:SS` / `H:MM:SS` (only valid values not longer than the video), `#hashtags` (not purely numeric), `@handles` (not inside e-mail addresses). Newlines are kept via `white-space: pre-wrap`.
+
+### Snapshot date
+
+`render_page()` receives the date from `info["yt2html_archived"]` (today for older JSON files without it), so a page rebuilt with `--from-json` keeps the date of the original fetch. The `Snapshot` tile uses the class `fact extra` (grey value); `show_snapshot=False` (`--no-snapshot`) omits it. The footer and the comments note always show the date.
 
 ### File names
 
@@ -100,9 +116,10 @@ All commands in PowerShell, in the project folder.
 | Without comments | `uv run yt2html.py "URL" --no-comments` |
 | Only the first N comments (quick test) | `uv run yt2html.py "URL" --max-comments 200` |
 | Without avatars (smaller file) | `uv run yt2html.py "URL" --no-avatars` |
+| Without the grey Snapshot date tile | `uv run yt2html.py "URL" --no-snapshot` |
 | When YouTube asks to sign in / confirm you are not a bot | `uv run yt2html.py "URL" --cookies-from-browser firefox` |
 | Also keep the raw metadata | `uv run yt2html.py "URL" --save-json` |
-| Rebuild a page from saved metadata | `uv run yt2html.py --from-json "output\Title [id].info.json"` |
+| Rebuild a page from saved metadata (keeps the original snapshot date) | `uv run yt2html.py --from-json "output\Title [id].info.json"` |
 | Help | `uv run yt2html.py --help` |
 
 Always put the URL in quotes: in PowerShell `&` in a URL would otherwise be treated as an operator.
@@ -116,6 +133,7 @@ By default pages are saved in the `output` folder inside the project, named like
 - The number of downloaded comments is usually a bit lower than YouTube's count (deleted, held for review or hidden comments); the page shows both.
 - Subscriber counts are rounded by YouTube itself (`1.23M`); views and likes are exact.
 - Comment times are as YouTube showed them on the download day (`3 years ago`). Hover over one to see the estimated date.
+- *Walkthroughs* and other timestamp lists appear only for videos that have them on YouTube. If yt2html prints `Could not read timestamp lists`, the page uses yt-dlp's chapters instead (under the title `Chapters`), and *Walkthroughs* may be missing or appear under that title.
 - The `Published` date is shown in your computer's time zone, as YouTube shows it.
 - Typical page size: a few hundred KB up to a few MB for thousands of comments.
 
