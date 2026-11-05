@@ -22,6 +22,7 @@ import html
 import json
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 import zlib
@@ -50,6 +51,14 @@ AVATAR_SIZE = 80                    # requested pixel size (displayed at 40/24 p
 IMAGE_WORKERS = 8                   # parallel image downloads
 IMAGE_TIMEOUT = 20                  # seconds per image request
 IMAGE_RETRIES = 3
+
+# YouTube answers "HTTP 429 Too Many Requests" to auto-translated captions
+# requested less than about 60 s after the video data was fetched (only
+# translations; original captions are not affected). So the translation is
+# requested no sooner than this many seconds after fetching started, and on a
+# 429 it is retried after a further pause.
+TRANSLATION_WAIT = 65
+TRANSLATION_RETRY_WAITS = (60, 120)
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -85,6 +94,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
     }
     if args.cookies_from_browser:
         opts["cookiesfrombrowser"] = (args.cookies_from_browser,)
+    started = time.monotonic()
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
         info[ARCHIVED_KEY] = dt.date.today().isoformat()
@@ -93,7 +103,9 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info)
             if args.transcript != "none":
-                info[TRANSCRIPT_KEY] = fetch_transcript(ydl, info)
+                info[TRANSCRIPT_KEY] = fetch_transcript(
+                    ydl, info, args.transcript_lang if args.transcript == "bilingual" else None,
+                    not_before=started + TRANSLATION_WAIT)
         return info
 
 
@@ -120,6 +132,9 @@ LICENSE_KEY = "yt2html_license"
 # The caption track YouTube's transcript panel opens with: {language, kind}.
 CAPTION_KEY = "yt2html_default_caption_track"
 
+# Languages YouTube can translate captions into: {code: name}.
+TRANSLATIONS_KEY = "yt2html_translation_languages"
+
 # The transcript: {language, name, kind, cues: [{start, text}]}, None if the
 # video has none. Absent when --no-transcript was used. All display modes
 # (text / timestamps / both) are built from the same cues.
@@ -143,12 +158,14 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
         info[MARKERS_KEY] = info[EXTRAS_KEY] = info[YT_COUNT_KEY] = info[CAPTION_KEY] = None
-        info[LICENSE_KEY] = None
+        info[LICENSE_KEY] = info[TRANSLATIONS_KEY] = None
         return
     try:
-        info[CAPTION_KEY] = default_caption_track(embedded_json(webpage, "ytInitialPlayerResponse"))
+        player_response = embedded_json(webpage, "ytInitialPlayerResponse")
+        info[CAPTION_KEY] = default_caption_track(player_response)
+        info[TRANSLATIONS_KEY] = translation_languages(player_response)
     except Exception:
-        info[CAPTION_KEY] = None
+        info[CAPTION_KEY] = info[TRANSLATIONS_KEY] = None
     info[MARKERS_KEY] = parse_marker_lists(data, info.get("description") or "",
                                            info.get("duration"))
     info[EXTRAS_KEY] = parse_description_extras(data)
@@ -267,6 +284,13 @@ def embedded_json(webpage: str, name: str) -> dict:
 def initial_data_of(webpage: str) -> dict:
     """The ytInitialData object embedded in a watch page."""
     return embedded_json(webpage, "ytInitialData")
+
+
+def translation_languages(player_response: dict) -> dict[str, str]:
+    """{code: name} of the languages YouTube's auto-translate offers."""
+    tracklist = (player_response.get("captions") or {}).get("playerCaptionsTracklistRenderer") or {}
+    return {lang["languageCode"]: text_of(lang.get("languageName")) or lang["languageCode"]
+            for lang in tracklist.get("translationLanguages") or [] if lang.get("languageCode")}
 
 
 def default_caption_track(player_response: dict) -> dict | None:
@@ -714,36 +738,117 @@ def parse_json3_captions(data: dict) -> list[dict]:
     return cues
 
 
-def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict) -> dict | None:
-    """Download the transcript as caption cues.
+class TranscriptError(Exception):
+    """The requested transcript (translation) cannot be made; nothing is saved."""
+
+
+def download_cues(ydl: yt_dlp.YoutubeDL, url: str) -> list[dict]:
+    with ydl.urlopen(url) as response:
+        raw = response.read().decode("utf-8", errors="replace")
+    return parse_json3_captions(json.loads(raw)) if raw.strip() else []
+
+
+def with_query(url: str, **params: str) -> str:
+    """The URL with query parameters set (replacing existing ones)."""
+    parts = urllib.parse.urlsplit(url)
+    query = dict(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
+    query.update(params)
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+
+
+def wait(seconds: float, reason: str) -> None:
+    if seconds > 0:
+        log(f"  Waiting {seconds:.0f} s ({reason})...")
+        time.sleep(seconds)
+
+
+def is_too_many_requests(error: Exception) -> bool:
+    return getattr(error, "status", None) == 429 or "429" in str(error)
+
+
+def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
+                      url: str, target: str, not_before: float = 0.0) -> dict:
+    """YouTube's auto-translation of the transcript track into `target`.
+
+    It is the same track with `tlang=<target>`, so the translated captions
+    keep the original timing. YouTube refuses such requests (HTTP 429) for
+    about a minute after the video data was fetched, so this waits until
+    `not_before` (a time.monotonic() value) and retries after 429.
+    Raises TranscriptError if the translation cannot be had.
+    """
+    languages = info.get(TRANSLATIONS_KEY)
+    if base_language(target) == base_language(transcript["language"]):
+        raise TranscriptError(f"'{target}' is the language of the transcript itself "
+                              f"({transcript['name']}); choose another language.")
+    if languages is not None and target not in languages:
+        available = ", ".join(sorted(languages)) or "none"
+        raise TranscriptError(f"YouTube offers no translation of this transcript into "
+                              f"'{target}'. Available: {available}.")
+    name = (languages or {}).get(target, target)
+    log(f"Downloading transcript translation ({name}, auto-translated)...")
+    wait(not_before - time.monotonic(), "YouTube refuses translations requested too soon")
+    for attempt, pause in enumerate((0, *TRANSLATION_RETRY_WAITS)):
+        wait(pause, f"HTTP 429 from YouTube, retry {attempt} of {len(TRANSLATION_RETRY_WAITS)}")
+        try:
+            cues = download_cues(ydl, with_query(url, tlang=target))
+            break
+        except Exception as error:
+            if is_too_many_requests(error) and attempt < len(TRANSLATION_RETRY_WAITS):
+                continue
+            hint = (" YouTube keeps refusing the translation; try again later, or with "
+                    "--cookies-from-browser firefox after opening the video with "
+                    "auto-translated subtitles in that browser."
+                    if is_too_many_requests(error) else "")
+            raise TranscriptError(f"could not download the translation into '{target}' "
+                                  f"({error}).{hint}")
+    if not cues:
+        raise TranscriptError(f"YouTube returned no translation into '{target}'.")
+    return {"language": target, "name": name, "cues": cues}
+
+
+def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
+                     translate_to: str | None = None, not_before: float = 0.0) -> dict | None:
+    """Download the transcript as caption cues (and its translation if asked).
 
     YouTube's own transcript panel (get_transcript API) requires a token that
     only a real browser can produce, so the same text is taken from the
     caption track the panel shows, through the URLs yt-dlp has extracted.
+    With `translate_to`, any failure raises TranscriptError instead of
+    leaving the transcript out.
     """
     track = choose_caption_track(info)
     if not track:
+        if translate_to:
+            raise TranscriptError("the video has no transcript to translate.")
         log("No transcript available.")
         return None
     kind, lang, formats = track
     fmt = next((f for f in formats if f.get("ext") == "json3" and f.get("url")), None)
     name = re.sub(r"\s*\((Original|auto-generated)\)$", "", (formats[0].get("name") or lang))
     if not fmt:
+        if translate_to:
+            raise TranscriptError(f"no usable captions for {name} to translate.")
         log(f"No transcript available (no json3 captions for {name}).")
         return None
     label = f"{name}, auto-generated" if kind == "auto" else name
     log(f"Downloading transcript ({label})...")
     try:
-        with ydl.urlopen(fmt["url"]) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-        cues = parse_json3_captions(json.loads(raw)) if raw.strip() else []
+        cues = download_cues(ydl, fmt["url"])
     except Exception as error:
+        if translate_to:
+            raise TranscriptError(f"could not download the transcript ({error}).")
         log(f"  Could not download the transcript ({error}).")
         return None
     if not cues:
+        if translate_to:
+            raise TranscriptError("YouTube returned an empty transcript.")
         log("  YouTube returned an empty transcript.")
         return None
-    return {"language": lang, "name": name, "kind": kind, "cues": cues}
+    transcript = {"language": lang, "name": name, "kind": kind, "cues": cues}
+    if translate_to:
+        transcript["translation"] = fetch_translation(ydl, info, transcript,
+                                                      fmt["url"], translate_to, not_before)
+    return transcript
 
 
 def fetch_image(url: str) -> str | None:
@@ -1087,6 +1192,16 @@ h1.title a{color:var(--text)}
 .transcript .cue{display:flex;gap:12px;padding:1px 0}
 .transcript .cue .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:500}
 .transcript .cue .text{overflow-wrap:anywhere}
+.transcript .bi-row{display:grid;grid-template-columns:56px 1fr 1fr;column-gap:12px;
+  padding:2px 0}
+.transcript .bi-row .time{font-variant-numeric:tabular-nums;font-weight:500}
+.transcript .bi-row .text{overflow-wrap:anywhere}
+.transcript .bi-row .text + .text{border-left:1px solid var(--line);padding-left:12px}
+.transcript .bi-head{color:var(--muted);font-size:12px;line-height:18px;padding-bottom:4px}
+@media (max-width:600px){
+  .transcript .bi-row{grid-template-columns:48px 1fr}
+  .transcript .bi-row .text + .text{grid-column:2;border-left:0;padding-left:0;color:var(--muted)}
+}
 .description{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px;
   white-space:pre-wrap;overflow-wrap:anywhere}
 .description.empty{color:var(--muted)}
@@ -1311,6 +1426,8 @@ def render_transcripts(transcript: dict, chapters: list[dict], video_id: str,
     """
     if mode == "timestamps":
         return [render_transcript(transcript, chapters, video_id, True)]
+    if mode == "bilingual":
+        return [render_bilingual_transcript(transcript, chapters, video_id)]
     if mode == "both":
         return [render_transcript(transcript, chapters, video_id, False),
                 render_transcript(transcript, chapters, video_id, True,
@@ -1318,14 +1435,8 @@ def render_transcripts(transcript: dict, chapters: list[dict], video_id: str,
     return [render_transcript(transcript, chapters, video_id, False)]
 
 
-def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
-                      timestamps: bool, note_suffix: str = "") -> str:
-    """Transcript, split under chapter headings when the video has chapters.
-
-    Without timestamps each part is one continuous text (cues joined with
-    spaces, no added paragraphs); with timestamps every cue is its own line.
-    """
-    cues = transcript.get("cues") or []
+def group_by_chapters(cues: list[dict], chapters: list[dict]) -> list[dict]:
+    """[{title or None, cues}]: cues under the last chapter starting before them."""
     starts = [c.get("start_time") or 0 for c in chapters]
     groups = [{"title": None, "cues": []}] + [{"title": c.get("title") or "", "cues": []}
                                               for c in chapters]
@@ -1335,29 +1446,86 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
             if cue["start"] >= start:
                 index = i + 1
         groups[index]["cues"].append(cue)
+    return [g for g in groups if g["cues"]]
 
+
+def time_link(video_id: str, start: float) -> str:
+    seconds = int(start)
+    if not video_id:
+        return esc(format_duration(seconds))
+    return link(f"{YOUTUBE}/watch?v={video_id}&t={seconds}s", format_duration(seconds))
+
+
+def transcript_note(transcript: dict) -> str:
+    note = transcript.get("name") or transcript.get("language") or ""
+    if transcript.get("kind") == "auto":
+        note = f"{note}, auto-generated" if note else "auto-generated"
+    return note
+
+
+def align_translation(cues: list[dict], translated: list[dict]) -> list[str]:
+    """Translated text for each original cue, matched by start time.
+
+    The translation keeps the original timing, so normally each translated
+    cue starts with an original one; a translated cue goes to the last
+    original cue that starts at or before it.
+    """
+    texts = [[] for _ in cues]
+    starts = [c["start"] for c in cues]
+    for cue in translated:
+        index = 0
+        for i, start in enumerate(starts):
+            if start <= cue["start"] + 0.001:
+                index = i
+            else:
+                break
+        texts[index].append(cue["text"])
+    return [" ".join(t) for t in texts]
+
+
+def render_bilingual_transcript(transcript: dict, chapters: list[dict], video_id: str) -> str:
+    """Timestamped transcript with the translation in a second column."""
+    translation = transcript.get("translation") or {}
+    cues = transcript.get("cues") or []
+    translated = dict(zip(map(id, cues), align_translation(cues, translation.get("cues") or [])))
+    original_label = transcript_note(transcript)
+    target_label = f'{translation.get("name") or translation.get("language")}, auto-translated'
+    parts = [f'<div class="bi-row bi-head"><span class="time"></span>'
+             f'<span class="text">{esc(original_label)}</span>'
+             f'<span class="text">{esc(target_label)}</span></div>']
+    for group in group_by_chapters(cues, chapters):
+        if group["title"] is not None:
+            parts.append(f'<h3>{esc(group["title"])}</h3>')
+        for cue in group["cues"]:
+            parts.append(f'<div class="bi-row"><span class="time">{time_link(video_id, cue["start"])}</span>'
+                         f'<span class="text">{esc(cue["text"])}</span>'
+                         f'<span class="text">{esc(translated[id(cue)])}</span></div>')
+    # The languages are named in the column headings, not again in the heading.
+    return (f'<section class="transcript bilingual"><h2>Transcript</h2>'
+            f'{"".join(parts)}</section>')
+
+
+def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
+                      timestamps: bool, note_suffix: str = "") -> str:
+    """Transcript, split under chapter headings when the video has chapters.
+
+    Without timestamps each part is one continuous text (cues joined with
+    spaces, no added paragraphs); with timestamps every cue is its own line.
+    """
     parts = []
-    for group in groups:
-        if not group["cues"]:
-            continue
+    for group in group_by_chapters(transcript.get("cues") or [], chapters):
         if group["title"] is not None:
             parts.append(f"<h3>{esc(group['title'])}</h3>")
         if timestamps:
             rows = []
             for cue in group["cues"]:
-                seconds = int(cue["start"])
-                time_html = (link(f"{YOUTUBE}/watch?v={video_id}&t={seconds}s",
-                                  format_duration(seconds))
-                             if video_id else esc(format_duration(seconds)))
-                rows.append(f'<div class="cue"><span class="time">{time_html}</span>'
+                rows.append(f'<div class="cue"><span class="time">{time_link(video_id, cue["start"])}</span>'
                             f'<span class="text">{esc(cue["text"])}</span></div>')
             parts.append(f'<div class="cues">{"".join(rows)}</div>')
         else:
             parts.append(f"<p>{esc(' '.join(c['text'] for c in group['cues']))}</p>")
 
-    note = transcript.get("name") or transcript.get("language") or ""
-    if transcript.get("kind") == "auto":
-        note = f"{note}, auto-generated" if note else "auto-generated"
+    note = transcript_note(transcript)
     if note_suffix:
         note = f"{note}, {note_suffix}" if note else note_suffix
     note_html = f' <span class="source">{esc(note)}</span>' if note else ""
@@ -1513,6 +1681,12 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     if info.get("_type") in ("playlist", "multi_video"):
         raise ValueError("this is a playlist or channel URL, not a single video")
 
+    if args.transcript == "bilingual":
+        translation = ((info.get(TRANSCRIPT_KEY) or {}).get("translation") or {})
+        if translation.get("language") != args.transcript_lang:
+            raise TranscriptError(f"no transcript translation into '{args.transcript_lang}' "
+                                  f"in the data; nothing was saved.")
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     target = output_path(info, output_dir)
@@ -1548,6 +1722,16 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     return target
 
 
+class BilingualAction(argparse.Action):
+    """--transcript-bilingual LANG: sets the mode and the target language."""
+
+    def __call__(self, parser, namespace, value, option_string=None):
+        if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", value):
+            parser.error(f"{option_string}: '{value}' is not a language code (e.g. pl, en, pt-BR)")
+        namespace.transcript = "bilingual"
+        namespace.transcript_lang = value
+
+
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yt2html",
@@ -1580,7 +1764,11 @@ def parse_args(argv=None) -> argparse.Namespace:
                         const="none",
                         help="no transcript (not downloaded; with --from-json "
                              "a saved one is left out)")
-    parser.set_defaults(transcript="text")
+    choice.add_argument("--transcript-bilingual", metavar="LANG", action=BilingualAction,
+                        help="like --transcript-timestamps, with YouTube's translation "
+                             "into LANG (e.g. pl, en, de) in a second column; "
+                             "stops with an error if that translation is not available")
+    parser.set_defaults(transcript="text", transcript_lang=None)
     parser.add_argument("--no-snapshot", action="store_true",
                         help="leave out the grey 'Snapshot' date tile "
                              "(the date stays in the footer)")
