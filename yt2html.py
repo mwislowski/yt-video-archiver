@@ -92,7 +92,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
             info[LIMIT_KEY] = args.max_comments
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info)
-            if not args.no_transcript:
+            if args.transcript != "none":
                 info[TRANSCRIPT_KEY] = fetch_transcript(ydl, info)
         return info
 
@@ -121,7 +121,8 @@ LICENSE_KEY = "yt2html_license"
 CAPTION_KEY = "yt2html_default_caption_track"
 
 # The transcript: {language, name, kind, cues: [{start, text}]}, None if the
-# video has none. Absent when --no-transcript was used.
+# video has none. Absent when --no-transcript was used. All display modes
+# (text / timestamps / both) are built from the same cues.
 TRANSCRIPT_KEY = "yt2html_transcript"
 
 
@@ -1301,8 +1302,24 @@ def render_marker_lists(lists: list[dict], video_id: str) -> str:
     return "\n".join(sections)
 
 
+def render_transcripts(transcript: dict, chapters: list[dict], video_id: str,
+                       mode: str) -> list[str]:
+    """Transcript section(s) for a mode: "text", "timestamps" or "both".
+
+    "both" gives two sections, continuous text first, then with timestamps;
+    the second one is told apart by the grey note.
+    """
+    if mode == "timestamps":
+        return [render_transcript(transcript, chapters, video_id, True)]
+    if mode == "both":
+        return [render_transcript(transcript, chapters, video_id, False),
+                render_transcript(transcript, chapters, video_id, True,
+                                  note_suffix="with timestamps")]
+    return [render_transcript(transcript, chapters, video_id, False)]
+
+
 def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
-                      timestamps: bool) -> str:
+                      timestamps: bool, note_suffix: str = "") -> str:
     """Transcript, split under chapter headings when the video has chapters.
 
     Without timestamps each part is one continuous text (cues joined with
@@ -1341,14 +1358,17 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
     note = transcript.get("name") or transcript.get("language") or ""
     if transcript.get("kind") == "auto":
         note = f"{note}, auto-generated" if note else "auto-generated"
+    if note_suffix:
+        note = f"{note}, {note_suffix}" if note else note_suffix
     note_html = f' <span class="source">{esc(note)}</span>' if note else ""
-    return (f'<section class="transcript"><h2>Transcript{note_html}</h2>'
+    css = "transcript with-timestamps" if timestamps else "transcript"
+    return (f'<section class="{css}"><h2>Transcript{note_html}</h2>'
             f'{"".join(parts)}</section>')
 
 
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 archived: dt.date, show_snapshot: bool = True,
-                transcript_timestamps: bool = False,
+                transcript_mode: str = "text",
                 extra_images: dict[str, str] | None = None) -> str:
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
@@ -1411,9 +1431,9 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         body.append(render_description_extras(after, video_id, duration, extra_images))
 
     transcript = info.get(TRANSCRIPT_KEY)
-    if transcript:
+    if transcript and transcript_mode != "none":  # "none" also hides a stored one
         chapters = next((m.get("items") or [] for m in markers if m.get("id") == "chapters"), [])
-        body.append(render_transcript(transcript, chapters, video_id, transcript_timestamps))
+        body.extend(render_transcripts(transcript, chapters, video_id, transcript_mode))
 
     license_info = license_of(info)
     if license_info:
@@ -1519,7 +1539,7 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     extra_images = fetch_images(extra_image_urls(info), "images (people, podcast)")
     page = render_page(info, thumbnail, avatar_uris, archived,
                        show_snapshot=not args.no_snapshot,
-                       transcript_timestamps=args.transcript_timestamps,
+                       transcript_mode=args.transcript,
                        extra_images=extra_images)
     target.write_text(page, encoding="utf-8")
     size_kb = target.stat().st_size / 1024
@@ -1544,11 +1564,23 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="limit the number of downloaded comments (replies included)")
     parser.add_argument("--no-avatars", action="store_true",
                         help="do not embed avatars (letter placeholders instead)")
-    parser.add_argument("--no-transcript", action="store_true",
-                        help="do not download the transcript")
-    parser.add_argument("--transcript-timestamps", action="store_true",
-                        help="keep the timestamps in the transcript (one line per caption) "
-                             "instead of continuous text")
+    transcript = parser.add_argument_group(
+        "transcript", "choose one; split by chapters when the video has them")
+    choice = transcript.add_mutually_exclusive_group()
+    choice.add_argument("--transcript-text", dest="transcript", action="store_const",
+                        const="text",
+                        help="continuous text without timestamps (default)")
+    choice.add_argument("--transcript-timestamps", dest="transcript", action="store_const",
+                        const="timestamps",
+                        help="one line per caption, each with its timestamp")
+    choice.add_argument("--transcript-both", dest="transcript", action="store_const",
+                        const="both",
+                        help="both versions: continuous text first, then with timestamps")
+    choice.add_argument("--no-transcript", dest="transcript", action="store_const",
+                        const="none",
+                        help="no transcript (not downloaded; with --from-json "
+                             "a saved one is left out)")
+    parser.set_defaults(transcript="text")
     parser.add_argument("--no-snapshot", action="store_true",
                         help="leave out the grey 'Snapshot' date tile "
                              "(the date stays in the footer)")
