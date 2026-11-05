@@ -102,9 +102,9 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
             info[LIMIT_KEY] = args.max_comments
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info)
-            if args.transcript != "none":
+            if args.transcript:
                 info[TRANSCRIPT_KEY] = fetch_transcript(
-                    ydl, info, args.transcript_lang if args.transcript == "bilingual" else None,
+                    ydl, info, bilingual_languages(args.transcript),
                     not_before=started + TRANSLATION_WAIT)
         return info
 
@@ -136,8 +136,8 @@ CAPTION_KEY = "yt2html_default_caption_track"
 TRANSLATIONS_KEY = "yt2html_translation_languages"
 
 # The transcript: {language, name, kind, cues: [{start, text}]}, None if the
-# video has none. Absent when --no-transcript was used. All display modes
-# (text / timestamps / both) are built from the same cues.
+# video has none. Absent with --transcript none. All versions are built from
+# the same cues; translations: {"translations": {lang: {language, name, cues}}}.
 TRANSCRIPT_KEY = "yt2html_transcript"
 
 
@@ -806,15 +806,30 @@ def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
     return {"language": target, "name": name, "cues": cues}
 
 
+def bilingual_languages(spec: list[tuple[str, str | None]]) -> list[str]:
+    """Target languages of the bilingual versions in a --transcript spec."""
+    return [language for version, language in spec if version == "bilingual"]
+
+
+def translations_of(transcript: dict) -> dict[str, dict]:
+    """{language: translation}; also reads the single "translation" of older files."""
+    translations = dict(transcript.get("translations") or {})
+    old = transcript.get("translation")
+    if old and old.get("language") not in translations:
+        translations[old["language"]] = old
+    return translations
+
+
 def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
-                     translate_to: str | None = None, not_before: float = 0.0) -> dict | None:
-    """Download the transcript as caption cues (and its translation if asked).
+                     translate_to: list[str] | None = None,
+                     not_before: float = 0.0) -> dict | None:
+    """Download the transcript as caption cues (and its translations if asked).
 
     YouTube's own transcript panel (get_transcript API) requires a token that
     only a real browser can produce, so the same text is taken from the
     caption track the panel shows, through the URLs yt-dlp has extracted.
-    With `translate_to`, any failure raises TranscriptError instead of
-    leaving the transcript out.
+    With `translate_to` (a list of language codes), any failure raises
+    TranscriptError instead of leaving the transcript out.
     """
     track = choose_caption_track(info)
     if not track:
@@ -846,8 +861,9 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
         return None
     transcript = {"language": lang, "name": name, "kind": kind, "cues": cues}
     if translate_to:
-        transcript["translation"] = fetch_translation(ydl, info, transcript,
-                                                      fmt["url"], translate_to, not_before)
+        transcript["translations"] = {
+            target: fetch_translation(ydl, info, transcript, fmt["url"], target, not_before)
+            for target in translate_to}
     return transcript
 
 
@@ -1418,21 +1434,25 @@ def render_marker_lists(lists: list[dict], video_id: str) -> str:
 
 
 def render_transcripts(transcript: dict, chapters: list[dict], video_id: str,
-                       mode: str) -> list[str]:
-    """Transcript section(s) for a mode: "text", "timestamps" or "both".
+                       spec: list[tuple[str, str | None]]) -> list[str]:
+    """One transcript section per version, in the order of the spec.
 
-    "both" gives two sections, continuous text first, then with timestamps;
-    the second one is told apart by the grey note.
+    When more than one plain/timestamped version is shown, the timestamped one
+    gets "with timestamps" in its grey note so the two can be told apart.
     """
-    if mode == "timestamps":
-        return [render_transcript(transcript, chapters, video_id, True)]
-    if mode == "bilingual":
-        return [render_bilingual_transcript(transcript, chapters, video_id)]
-    if mode == "both":
-        return [render_transcript(transcript, chapters, video_id, False),
-                render_transcript(transcript, chapters, video_id, True,
-                                  note_suffix="with timestamps")]
-    return [render_transcript(transcript, chapters, video_id, False)]
+    several = sum(version != "bilingual" for version, _ in spec) > 1
+    translations = translations_of(transcript)
+    sections = []
+    for version, language in spec:
+        if version == "plain":
+            sections.append(render_transcript(transcript, chapters, video_id, False))
+        elif version == "timestamps":
+            sections.append(render_transcript(transcript, chapters, video_id, True,
+                                              note_suffix="with timestamps" if several else ""))
+        elif version == "bilingual":
+            sections.append(render_bilingual_transcript(transcript, translations[language],
+                                                        chapters, video_id))
+    return sections
 
 
 def group_by_chapters(cues: list[dict], chapters: list[dict]) -> list[dict]:
@@ -1483,9 +1503,9 @@ def align_translation(cues: list[dict], translated: list[dict]) -> list[str]:
     return [" ".join(t) for t in texts]
 
 
-def render_bilingual_transcript(transcript: dict, chapters: list[dict], video_id: str) -> str:
+def render_bilingual_transcript(transcript: dict, translation: dict,
+                                chapters: list[dict], video_id: str) -> str:
     """Timestamped transcript with the translation in a second column."""
-    translation = transcript.get("translation") or {}
     cues = transcript.get("cues") or []
     translated = dict(zip(map(id, cues), align_translation(cues, translation.get("cues") or [])))
     original_label = transcript_note(transcript)
@@ -1536,7 +1556,7 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
 
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 archived: dt.date, show_snapshot: bool = True,
-                transcript_mode: str = "text",
+                transcript_spec: list | None = None,
                 extra_images: dict[str, str] | None = None) -> str:
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
@@ -1599,9 +1619,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         body.append(render_description_extras(after, video_id, duration, extra_images))
 
     transcript = info.get(TRANSCRIPT_KEY)
-    if transcript and transcript_mode != "none":  # "none" also hides a stored one
+    spec = [("plain", None)] if transcript_spec is None else transcript_spec
+    if transcript and spec:  # "none" (an empty spec) also hides a stored one
         chapters = next((m.get("items") or [] for m in markers if m.get("id") == "chapters"), [])
-        body.extend(render_transcripts(transcript, chapters, video_id, transcript_mode))
+        body.extend(render_transcripts(transcript, chapters, video_id, spec))
 
     license_info = license_of(info)
     if license_info:
@@ -1681,10 +1702,10 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     if info.get("_type") in ("playlist", "multi_video"):
         raise ValueError("this is a playlist or channel URL, not a single video")
 
-    if args.transcript == "bilingual":
-        translation = ((info.get(TRANSCRIPT_KEY) or {}).get("translation") or {})
-        if translation.get("language") != args.transcript_lang:
-            raise TranscriptError(f"no transcript translation into '{args.transcript_lang}' "
+    available = translations_of(info.get(TRANSCRIPT_KEY) or {})
+    for language in bilingual_languages(args.transcript):
+        if language not in available:
+            raise TranscriptError(f"no transcript translation into '{language}' "
                                   f"in the data; nothing was saved.")
 
     output_dir = Path(args.output_dir)
@@ -1713,7 +1734,7 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     extra_images = fetch_images(extra_image_urls(info), "images (people, podcast)")
     page = render_page(info, thumbnail, avatar_uris, archived,
                        show_snapshot=not args.no_snapshot,
-                       transcript_mode=args.transcript,
+                       transcript_spec=args.transcript,
                        extra_images=extra_images)
     target.write_text(page, encoding="utf-8")
     size_kb = target.stat().st_size / 1024
@@ -1722,14 +1743,45 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     return target
 
 
-class BilingualAction(argparse.Action):
-    """--transcript-bilingual LANG: sets the mode and the target language."""
+LANGUAGE_CODE = re.compile(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?")
+TRANSCRIPT_VERSIONS = ("plain", "timestamps", "bilingual")
 
-    def __call__(self, parser, namespace, value, option_string=None):
-        if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", value):
-            parser.error(f"{option_string}: '{value}' is not a language code (e.g. pl, en, pt-BR)")
-        namespace.transcript = "bilingual"
-        namespace.transcript_lang = value
+
+def transcript_spec(value: str) -> list[tuple[str, str | None]]:
+    """Parse --transcript: "plain,timestamps,bilingual:pl" or "none".
+
+    Returns the versions in the given order as (version, language) pairs;
+    [] means no transcript. Raises ArgumentTypeError for unknown versions,
+    a bilingual version without a valid language code, a language on any
+    other version, repeated versions and "none" combined with anything.
+    """
+    items = [item.strip() for item in value.split(",")]
+    if any(not item for item in items):
+        raise argparse.ArgumentTypeError(f"empty item in '{value}' (check the commas)")
+    if "none" in items:
+        if len(items) > 1:
+            raise argparse.ArgumentTypeError("'none' cannot be combined with other versions")
+        return []
+    spec = []
+    for item in items:
+        version, _, language = item.partition(":")
+        if version not in TRANSCRIPT_VERSIONS:
+            raise argparse.ArgumentTypeError(
+                f"unknown version '{version}' (use plain, timestamps, bilingual:LANG or none)")
+        if version == "bilingual":
+            if not language:
+                raise argparse.ArgumentTypeError(
+                    "'bilingual' needs a language code, e.g. bilingual:pl")
+            if not LANGUAGE_CODE.fullmatch(language):
+                raise argparse.ArgumentTypeError(
+                    f"'{language}' is not a language code (e.g. pl, en, pt-BR)")
+        elif language or ":" in item:
+            raise argparse.ArgumentTypeError(f"'{version}' takes no language ('{item}')")
+        entry = (version, language or None)
+        if entry in spec:
+            raise argparse.ArgumentTypeError(f"'{item}' is given more than once")
+        spec.append(entry)
+    return spec
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -1748,27 +1800,13 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="limit the number of downloaded comments (replies included)")
     parser.add_argument("--no-avatars", action="store_true",
                         help="do not embed avatars (letter placeholders instead)")
-    transcript = parser.add_argument_group(
-        "transcript", "choose one; split by chapters when the video has them")
-    choice = transcript.add_mutually_exclusive_group()
-    choice.add_argument("--transcript-text", dest="transcript", action="store_const",
-                        const="text",
-                        help="continuous text without timestamps (default)")
-    choice.add_argument("--transcript-timestamps", dest="transcript", action="store_const",
-                        const="timestamps",
-                        help="one line per caption, each with its timestamp")
-    choice.add_argument("--transcript-both", dest="transcript", action="store_const",
-                        const="both",
-                        help="both versions: continuous text first, then with timestamps")
-    choice.add_argument("--no-transcript", dest="transcript", action="store_const",
-                        const="none",
-                        help="no transcript (not downloaded; with --from-json "
-                             "a saved one is left out)")
-    choice.add_argument("--transcript-bilingual", metavar="LANG", action=BilingualAction,
-                        help="like --transcript-timestamps, with YouTube's translation "
-                             "into LANG (e.g. pl, en, de) in a second column; "
-                             "stops with an error if that translation is not available")
-    parser.set_defaults(transcript="text", transcript_lang=None)
+    parser.add_argument(
+        "--transcript", type=transcript_spec, default=[("plain", None)], metavar="VERSIONS",
+        help="transcript versions, comma-separated, shown in this order: "
+             "plain (continuous text, the default), timestamps (one line per caption), "
+             "bilingual:LANG (timestamps with YouTube's translation into LANG in a "
+             "second column, e.g. bilingual:pl; stops with an error if not available), "
+             "or none. Example: --transcript plain,bilingual:pl")
     parser.add_argument("--no-snapshot", action="store_true",
                         help="leave out the grey 'Snapshot' date tile "
                              "(the date stays in the footer)")
