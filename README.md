@@ -13,7 +13,7 @@ The video and subtitles are **not** downloaded; they are expected to be download
 | Thumbnail | Best available resolution, embedded in the file. |
 | Title | Links to the original video. |
 | Channel | Name (link), verified mark, subscriber count in YouTube's short form (`1.23M subscribers`). The channel avatar appears only if the uploader commented under the video (it is not part of the video metadata); otherwise a letter placeholder. |
-| Facts | `Duration`, `Published`, `Views`, `Likes`, `Comments` (the count YouTube reports), and at the end, in grey, `Snapshot`: the date the data was fetched. It is added by the program, not by YouTube, hence the grey colour; `--no-snapshot` leaves it out (the date is still in the footer and in the comments note). Dates are `DD.MM.YYYY`. |
+| Facts | `Duration`, `Published`, `Views`, `Likes`, `Comments` (the count YouTube shows, e.g. `116`, or `1.2K` when YouTube shortens it), and at the end, in grey, `Snapshot`: the date the data was fetched. It is added by the program, not by YouTube, hence the grey colour; `--no-snapshot` leaves it out (the date is still in the footer and in the comments note). Dates are `DD.MM.YYYY`. |
 | Description | Full text (what YouTube hides behind *Show more*), with clickable URLs, timestamps (link to the video at that second), `#hashtags` and `@handles`. |
 | AI-generated video summary | YouTube's summary of the video (on YouTube collapsed under *Summary* below the description), shown expanded: the heading and the text, nothing else. Only when YouTube offers one. |
 | Chapters | The chapters YouTube marks on the progress bar, with a grey note on their origin: `from description` (the author's list in the description) or `auto-generated` (created by YouTube). The note appears only when the program can confirm the origin (see B); otherwise the heading is just `Chapters`. |
@@ -52,7 +52,9 @@ Not included: the top bar, the video player, the transcript, *Video details* (it
 - `ignore_no_formats_error: True` — the video is not downloaded, so missing formats (e.g. when no JavaScript runtime is installed for YouTube's player challenges) must not abort the run;
 - `extractor_args = {"youtube": {"comment_sort": ["new"], "max_comments": [N or "all", "all", "all", "all"]}}`.
 
-Then, in the same `YoutubeDL` instance (same cookies and consent), the watch page is fetched once more with `ydl.urlopen()` for the timestamp lists and the description extras (see below). The program adds three keys of its own to the info dict, all kept by `--save-json`: `yt2html_archived` (ISO date of fetching), `yt2html_marker_lists` and `yt2html_description_extras`.
+Then, in the same `YoutubeDL` instance (same cookies and consent), the watch page is fetched once more with `ydl.urlopen()` for the timestamp lists and the description extras (see below). The program adds three keys of its own to the info dict, all kept by `--save-json`: `yt2html_archived` (ISO date of fetching), `yt2html_marker_lists`, `yt2html_description_extras`, `yt2html_youtube_comment_count` (the comment count text from the comments panel header, `engagementPanels[]` with `panelIdentifier` `engagement-panel-comments-section` → `header.engagementPanelTitleHeaderRenderer.contextualInfo`) and `yt2html_max_comments` (the `--max-comments` value, `null` for no limit).
+
+Why the program reads the comment count itself: when yt-dlp downloads comments, it **replaces** `comment_count` with the number of comments it downloaded (and sets it to `null` after `Ctrl+C`). So with `--max-comments 50` yt-dlp's `comment_count` is 50. `youtube_comment_count()` therefore uses the page's count; without it, yt-dlp's `comment_count` is used only when it can be trusted (comments not downloaded, or downloaded completely without a limit).
 
 Used fields: `id`, `title`, `webpage_url`, `uploader`, `uploader_url`, `channel_is_verified`, `channel_follower_count`, `view_count`, `like_count`, `comment_count`, `duration`, `release_timestamp` / `timestamp` / `upload_date`, `thumbnail`, `thumbnails`, `description`, `chapters` (fallback only), `comments`.
 
@@ -157,6 +159,7 @@ By default pages are saved in the `output` folder inside the project, named like
 
 - Comments take most of the time: YouTube serves about 20 per request, so a video with 10,000 comments takes a few minutes. yt-dlp shows progress (`Downloading comment API JSON page 12 (240/~10000)`).
 - `Ctrl+C` while comments are downloading stops the download and still builds the page from the comments fetched so far.
+- The page does not mention `--max-comments`: a limited download shows only as fewer downloaded comments than YouTube shows. `No comments.` appears only when the video really has none, never because of the limit (not even for `--max-comments 0`).
 - The number of downloaded comments is usually a bit lower than YouTube's count (deleted, held for review or hidden comments); the page shows both.
 - Subscriber counts are rounded by YouTube itself (`1.23M`); views and likes are exact.
 - Comment times are as YouTube showed them on the download day (`3 years ago`). Hover over one to see the estimated date.

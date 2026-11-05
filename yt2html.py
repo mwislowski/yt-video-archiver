@@ -86,6 +86,8 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
         info[ARCHIVED_KEY] = dt.date.today().isoformat()
+        if not args.no_comments:
+            info[LIMIT_KEY] = args.max_comments
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info)
         return info
@@ -100,6 +102,13 @@ MARKERS_KEY = "yt2html_marker_lists"
 
 # Key for extra description elements (e.g. the AI-generated video summary).
 EXTRAS_KEY = "yt2html_description_extras"
+
+# Comment count as YouTube shows it ("116", "1.2K"). yt-dlp replaces its own
+# `comment_count` with the number of downloaded comments when it fetches them.
+YT_COUNT_KEY = "yt2html_youtube_comment_count"
+
+# The --max-comments value used when fetching (None = no limit).
+LIMIT_KEY = "yt2html_max_comments"
 
 
 def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
@@ -118,11 +127,47 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
         data = initial_data_of(webpage)
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
-        info[MARKERS_KEY] = info[EXTRAS_KEY] = None
+        info[MARKERS_KEY] = info[EXTRAS_KEY] = info[YT_COUNT_KEY] = None
         return
     info[MARKERS_KEY] = parse_marker_lists(data, info.get("description") or "",
                                            info.get("duration"))
     info[EXTRAS_KEY] = parse_description_extras(data)
+    info[YT_COUNT_KEY] = parse_comment_count(data)
+
+
+def parse_comment_count(data: dict) -> str | None:
+    """Comment count text from the comments panel header ("116", "1.2K")."""
+    for panel in data.get("engagementPanels") or []:
+        renderer = panel.get("engagementPanelSectionListRenderer") or {}
+        if renderer.get("panelIdentifier") in ("engagement-panel-comments-section",
+                                               "comment-item-section"):
+            header = (renderer.get("header") or {}).get("engagementPanelTitleHeaderRenderer") or {}
+            text = text_of(header.get("contextualInfo")).strip()
+            if text:
+                return text
+    return None
+
+
+def youtube_comment_count(info: dict) -> tuple[str | None, int | None]:
+    """(text for the Comments tile, number) of the count YouTube shows.
+
+    Exact counts are formatted like the other numbers; short forms such as
+    "1.2K" are shown as they are, since the exact number is unknown.
+    """
+    text = info.get(YT_COUNT_KEY)
+    if text:
+        digits = text.replace(",", "").replace("\u00a0", "").replace(" ", "")
+        if digits.isdigit():
+            return format_int(int(digits)), int(digits)
+        return text, yt_dlp.utils.parse_count(text)
+    # Without the page data: yt-dlp's count is YouTube's when comments were
+    # not downloaded; otherwise it is the downloaded number, which equals the
+    # available comments only for a complete download without a limit.
+    count = info.get("comment_count")
+    complete = LIMIT_KEY in info and info[LIMIT_KEY] is None
+    if count is not None and ("comments" not in info or complete):
+        return format_int(count), count
+    return None, None
 
 
 def text_of(node) -> str:
@@ -850,9 +895,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 + fact("Published", published_date(info))
                 + fact("Views", format_int(info.get("view_count")))
                 + fact("Likes", format_int(info.get("like_count")))
-                + fact("Comments", format_int(info.get("comment_count")
-                                              if info.get("comment_count") is not None
-                                              else (len(comments) or None)))
+                + fact("Comments", youtube_comment_count(info)[0] or "—")
                 + (fact("Snapshot", archived.strftime(DATE_FORMAT), extra=True)
                    if show_snapshot else "")
                 + "</div>")
@@ -875,9 +918,13 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         roots, children = build_comment_tree(comments)
         replies = len(comments) - len(roots)
         body.append('<section class="comments">')
-        expected = info.get("comment_count")
-        shown = (f" (YouTube shows {format_int(expected)})"
+        count_text, expected = youtube_comment_count(info)
+        shown = (f" (YouTube shows {count_text})"
                  if expected is not None and expected != len(comments) else "")
+        # A download cut short by --max-comments must not claim "No comments."
+        limit = info.get(LIMIT_KEY)
+        limited = (limit is not None and len(comments) >= limit
+                   and (expected is None or expected > len(comments)))
         body.append("<h2>Comments</h2>")
         body.append(f'<div class="note">{format_int(len(comments))} downloaded{shown}: '
                     f'{format_int(len(roots))} threads, {format_int(replies)} replies · '
@@ -885,7 +932,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                     f'{archived.strftime(DATE_FORMAT)}</div>')
         if info.get("comments") is None:
             body.append('<div class="note">Comments are turned off or unavailable.</div>')
-        elif not comments:
+        elif not comments and not limited:
             body.append('<div class="note">No comments.</div>')
         for c in roots:
             body.append(render_comment(c, children, avatars, video_id, duration, uploader))
