@@ -2,8 +2,9 @@
 
 The page contains the video's metadata (thumbnail, title, channel, counts,
 dates, full description, AI-generated video summary), YouTube's timestamp
-lists (Chapters, Walkthroughs), the transcript and all comments with their
-reply threads, sorted oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
+lists (Chapters, Walkthroughs), People mentioned, the podcast the video
+belongs to, the transcript and all comments with their reply threads, sorted
+oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
 result is one file that works offline, like a page saved with SingleFile.
 The video itself is not downloaded.
 
@@ -429,11 +430,26 @@ def structured_description_items(data: dict) -> list[dict]:
 def parse_description_extras(data: dict) -> list[dict]:
     """Extra elements YouTube shows below the description text.
 
-    Currently: the AI-generated video summary (expandableMetadataRenderer with
-    videoSummaryContentViewModel). Each extra: {type, title, paragraphs}.
+    In YouTube's order. Types:
+      video_summary   AI-generated video summary: {title, paragraphs}
+      people          "People mentioned": {title, subtitle, info, people:
+                      [{name, description, image}]}
+      playlists       "Explore the podcast" (or course): {title, items:
+                      [{title, url, byline, count, image}]}
+    `info` is attributed text: {text, links: [{start, length, url}]}.
     """
     extras = []
     for item in structured_description_items(data):
+        if "videoAttributesSectionViewModel" in item:
+            people = parse_people_section(item["videoAttributesSectionViewModel"])
+            if people:
+                extras.append(people)
+            continue
+        if "videoDescriptionCourseSectionRenderer" in item:
+            playlists = parse_playlist_section(item["videoDescriptionCourseSectionRenderer"])
+            if playlists:
+                extras.append(playlists)
+            continue
         metadata = item.get("expandableMetadataRenderer")
         if metadata:
             summary = (metadata.get("expandedContent") or {}).get("videoSummaryContentViewModel")
@@ -449,6 +465,96 @@ def parse_description_extras(data: dict) -> list[dict]:
                                    "title": title or "AI-generated video summary",
                                    "paragraphs": paragraphs})
     return extras
+
+
+def best_image_url(sources: list[dict], wanted: int = 240) -> str | None:
+    """The smallest image at least `wanted` px wide, else the largest one."""
+    sources = [s for s in sources or [] if s.get("url")]
+    if not sources:
+        return None
+    sized = sorted(sources, key=lambda s: s.get("width") or 0)
+    return next((s["url"] for s in sized if (s.get("width") or 0) >= wanted), sized[-1]["url"])
+
+
+def attributed_text(node: dict) -> dict:
+    """{text, links} from a YouTube attributed text ({content, commandRuns}).
+
+    Only runs that open a web address become links; runs that trigger
+    YouTube's own scripts (e.g. "send feedback") stay plain text.
+    """
+    links = []
+    for run in node.get("commandRuns") or []:
+        command = ((run.get("onTap") or {}).get("innertubeCommand") or {})
+        url = (command.get("urlEndpoint") or {}).get("url")
+        if url and run.get("startIndex") is not None and run.get("length"):
+            if url.startswith("//"):
+                url = "https:" + url
+            links.append({"start": run["startIndex"], "length": run["length"], "url": url})
+    return {"text": node.get("content") or "", "links": links}
+
+
+def parse_people_section(section: dict) -> dict | None:
+    """The "People mentioned" section (videoAttributesSectionViewModel)."""
+    people = []
+    for attribute in section.get("videoAttributeViewModels") or []:
+        model = attribute.get("videoAttributeViewModel") or {}
+        name = model.get("title")
+        if isinstance(name, dict):
+            name = text_of(name)
+        if not name:
+            continue
+        description = model.get("subtitle")
+        if isinstance(description, dict):
+            description = text_of(description)
+        people.append({"name": name, "description": description or "",
+                       "image": best_image_url((model.get("image") or {}).get("sources"))})
+    if not people:
+        return None
+    # The text of the (i) dialog next to the heading.
+    dialog = (((((((section.get("headerInfoButton") or {}).get("buttonViewModel") or {})
+                  .get("onTap") or {}).get("innertubeCommand") or {})
+                .get("showDialogCommand") or {}).get("panelLoadingStrategy") or {})
+              .get("inlineContent") or {}).get("dialogViewModel") or {}
+    paragraphs = ((dialog.get("content") or {}).get("basicContentViewModel") or {}).get("paragraphs") or []
+    info = attributed_text(paragraphs[0].get("text") or {}) if paragraphs else None
+    return {"type": "people", "title": section.get("headerTitle") or "People mentioned",
+            "subtitle": section.get("headerSubtitle") or "", "info": info, "people": people}
+
+
+def parse_playlist_section(section: dict) -> dict | None:
+    """The "Explore the podcast" section (videoDescriptionCourseSectionRenderer).
+
+    The large "Podcasts" button below it (topicLink) is left out.
+    """
+    items = []
+    for lockup in section.get("mediaLockups") or []:
+        model = lockup.get("structuredDescriptionPlaylistLockupRenderer")
+        if not model:
+            continue
+        browse_id = (((model.get("navigationEndpoint") or {}).get("browseEndpoint") or {})
+                     .get("browseId") or "")
+        playlist_id = browse_id[2:] if browse_id.startswith("VL") else browse_id
+        items.append({
+            "title": text_of(model.get("title")),
+            "url": f"{YOUTUBE}/playlist?list={playlist_id}" if playlist_id else None,
+            "byline": text_of(model.get("shortBylineText")),
+            "count": text_of(model.get("videoCountShortText")),
+            "image": best_image_url((model.get("thumbnail") or {}).get("thumbnails")),
+        })
+    if not items:
+        return None
+    return {"type": "playlists", "title": text_of(section.get("sectionTitle")) or "Explore the podcast",
+            "items": items}
+
+
+def extra_image_urls(info: dict) -> set[str]:
+    """Images used by the description extras (people photos, podcast covers)."""
+    urls = set()
+    for extra in info.get(EXTRAS_KEY) or []:
+        for entry in (extra.get("people") or []) + (extra.get("items") or []):
+            if entry.get("image"):
+                urls.add(entry["image"])
+    return urls
 
 
 def marker_lists_of(info: dict) -> list[dict]:
@@ -635,6 +741,19 @@ def fetch_thumbnail(info: dict) -> str | None:
             if data_uri:
                 return data_uri
     return None
+
+
+def fetch_images(urls: set[str], what: str) -> dict[str, str]:
+    """Download images in parallel as they are; returns {url: data_uri}."""
+    urls = sorted(u for u in urls if u)
+    if not urls:
+        return {}
+    log(f"Downloading {len(urls)} {what}...")
+    with ThreadPoolExecutor(max_workers=IMAGE_WORKERS) as pool:
+        images = {u: d for u, d in zip(urls, pool.map(fetch_image, urls)) if d}
+    if len(images) < len(urls):
+        log(f"  {len(urls) - len(images)} could not be downloaded (placeholders used).")
+    return images
 
 
 def fetch_avatars(urls: set[str]) -> dict[str, str]:
@@ -875,6 +994,23 @@ h1.title a{color:var(--text)}
 .desc-extra h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
 .desc-extra p{margin:0 0 8px;white-space:pre-wrap;overflow-wrap:anywhere}
 .desc-extra p:last-child{margin-bottom:0}
+.desc-extra .subtitle{color:var(--muted);font-size:12px;line-height:18px;margin-top:-6px}
+.desc-extra .info{color:var(--muted);font-size:12px;line-height:18px;margin-top:2px}
+.people-list{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}
+.person{width:150px}
+.person .photo{display:block;width:150px;height:150px;object-fit:cover;border-radius:12px;
+  background:var(--chip)}
+.person .name{font-weight:500;margin-top:6px;overflow-wrap:anywhere}
+.person .about{color:var(--muted);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.img-placeholder{display:flex !important;align-items:center;justify-content:center;
+  color:var(--muted);font-size:40px;font-weight:500;user-select:none}
+.playlist{display:flex;gap:16px;align-items:flex-start;margin-top:4px}
+.playlist + .playlist{margin-top:12px}
+.playlist .cover{display:flex;width:120px;height:120px;flex:none;object-fit:cover;
+  border-radius:8px;background:var(--chip)}
+.playlist .name{font-size:14px;line-height:20px;font-weight:700;overflow-wrap:anywhere}
+.playlist .name a{color:var(--text)}
+.playlist .meta{color:var(--muted);font-size:12px;line-height:18px}
 .markers{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
 .markers h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
 .markers h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
@@ -1002,10 +1138,81 @@ def fact(label: str, value: str, extra: bool = False) -> str:
 SOURCE_NOTES = {"description": "from description", "auto": "auto-generated"}
 
 
-def render_description_extras(extras: list[dict], video_id: str, duration) -> str:
-    """Extra description elements (e.g. the AI-generated video summary)."""
+def render_attributed(info: dict) -> str:
+    """Attributed text as HTML, with its web links clickable."""
+    text = info.get("text") or ""
+    # YouTube counts positions in UTF-16 code units, like JavaScript.
+    units = text.encode("utf-16-le")
+    piece = lambda a, b: units[2 * a:2 * b].decode("utf-16-le", errors="replace")
+    out, pos = [], 0
+    for item in sorted(info.get("links") or [], key=lambda x: x["start"]):
+        start, end = item["start"], item["start"] + item["length"]
+        if start < pos:
+            continue
+        out.append(esc(piece(pos, start)))
+        out.append(link(item["url"], piece(start, end)))
+        pos = end
+    out.append(esc(piece(pos, len(units) // 2)))
+    return "".join(out)
+
+
+def image_or_placeholder(url: str | None, images: dict[str, str], label: str, cls: str) -> str:
+    """An embedded image, or a grey box with the first letter of `label`."""
+    data_uri = images.get(url or "")
+    if data_uri:
+        return f'<img class="{cls}" src="{data_uri}" alt="">'
+    return f'<div class="{cls} img-placeholder" aria-hidden="true">{esc(initial_of(label))}</div>'
+
+
+def render_people(extra: dict, images: dict[str, str]) -> str:
+    cards = []
+    for person in extra.get("people") or []:
+        # Not "description": that class styles the video description box.
+        description = (f'<div class="about">{esc(person["description"])}</div>'
+                       if person.get("description") else "")
+        cards.append(f'<div class="person">'
+                     f'{image_or_placeholder(person.get("image"), images, person["name"], "photo")}'
+                     f'<div class="name">{esc(person["name"])}</div>{description}</div>')
+    subtitle = f'<div class="subtitle">{esc(extra["subtitle"])}</div>' if extra.get("subtitle") else ""
+    info = f'<div class="info">{render_attributed(extra["info"])}</div>' if extra.get("info") else ""
+    return (f'<section class="desc-extra people"><h2>{esc(extra.get("title") or "")}</h2>'
+            f'{subtitle}{info}<div class="people-list">{"".join(cards)}</div></section>')
+
+
+def render_playlists(extra: dict, images: dict[str, str]) -> str:
+    rows = []
+    for item in extra.get("items") or []:
+        cover = image_or_placeholder(item.get("image"), images, item.get("title") or "", "cover")
+        title = esc(item.get("title") or "")
+        if item.get("url"):
+            cover = link_html(item["url"], cover)
+            title = link_html(item["url"], title)
+        lines = "".join(f'<div class="meta">{esc(item[key])}</div>'
+                        for key in ("byline", "count") if item.get(key))
+        rows.append(f'<div class="playlist">{cover}<div class="details">'
+                    f'<div class="name">{title}</div>{lines}</div></div>')
+    return (f'<section class="desc-extra playlists"><h2>{esc(extra.get("title") or "")}</h2>'
+            f'{"".join(rows)}</section>')
+
+
+def link_html(href: str, inner_html: str) -> str:
+    """Like link(), but around HTML that is already escaped."""
+    return (f'<a href="{esc(href)}" target="_blank" '
+            f'rel="noopener noreferrer">{inner_html}</a>')
+
+
+def render_description_extras(extras: list[dict], video_id: str, duration,
+                              images: dict[str, str] | None = None) -> str:
+    """Extra description elements: AI summary, People mentioned, podcast."""
+    images = images or {}
     sections = []
     for extra in extras:
+        if extra.get("type") == "people":
+            sections.append(render_people(extra, images))
+            continue
+        if extra.get("type") == "playlists":
+            sections.append(render_playlists(extra, images))
+            continue
         paragraphs = "".join(f"<p>{linkify(p, video_id, duration)}</p>"
                              for p in extra.get("paragraphs") or [])
         css_type = re.sub(r"[^a-z0-9-]+", "-", (extra.get("type") or "extra").lower())
@@ -1082,7 +1289,8 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
 
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 archived: dt.date, show_snapshot: bool = True,
-                transcript_timestamps: bool = False) -> str:
+                transcript_timestamps: bool = False,
+                extra_images: dict[str, str] | None = None) -> str:
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -1129,13 +1337,19 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     else:
         body.append('<section class="description empty">No description.</section>')
 
+    # YouTube's order: summary, chapters, people mentioned, podcast, transcript.
     extras = info.get(EXTRAS_KEY) or []
-    if extras:
-        body.append(render_description_extras(extras, video_id, duration))
+    before = [e for e in extras if e.get("type") == "video_summary"]
+    after = [e for e in extras if e.get("type") != "video_summary"]
+    if before:
+        body.append(render_description_extras(before, video_id, duration, extra_images))
 
     markers = marker_lists_of(info)
     if markers:
         body.append(render_marker_lists(markers, video_id))
+
+    if after:
+        body.append(render_description_extras(after, video_id, duration, extra_images))
 
     transcript = info.get(TRANSCRIPT_KEY)
     if transcript:
@@ -1236,9 +1450,11 @@ def archive(source: str, args: argparse.Namespace) -> Path:
         archived = dt.date.fromisoformat(info.get(ARCHIVED_KEY) or "")
     except ValueError:
         archived = dt.date.today()  # older JSON files without the date
+    extra_images = fetch_images(extra_image_urls(info), "images (people, podcast)")
     page = render_page(info, thumbnail, avatar_uris, archived,
                        show_snapshot=not args.no_snapshot,
-                       transcript_timestamps=args.transcript_timestamps)
+                       transcript_timestamps=args.transcript_timestamps,
+                       extra_images=extra_images)
     target.write_text(page, encoding="utf-8")
     size_kb = target.stat().st_size / 1024
     log(f"Saved page: {target} ({size_kb:,.0f} KB, "
