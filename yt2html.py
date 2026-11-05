@@ -2,8 +2,8 @@
 
 The page contains the video's metadata (thumbnail, title, channel, counts,
 dates, full description, AI-generated video summary), YouTube's timestamp
-lists (Chapters, Walkthroughs) and all comments with their reply threads,
-sorted oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
+lists (Chapters, Walkthroughs), the transcript and all comments with their
+reply threads, sorted oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
 result is one file that works offline, like a page saved with SingleFile.
 The video itself is not downloaded.
 
@@ -90,6 +90,8 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
             info[LIMIT_KEY] = args.max_comments
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info)
+            if not args.no_transcript:
+                info[TRANSCRIPT_KEY] = fetch_transcript(ydl, info)
         return info
 
 
@@ -110,6 +112,13 @@ YT_COUNT_KEY = "yt2html_youtube_comment_count"
 # The --max-comments value used when fetching (None = no limit).
 LIMIT_KEY = "yt2html_max_comments"
 
+# The caption track YouTube's transcript panel opens with: {language, kind}.
+CAPTION_KEY = "yt2html_default_caption_track"
+
+# The transcript: {language, name, kind, cues: [{start, text}]}, None if the
+# video has none. Absent when --no-transcript was used.
+TRANSCRIPT_KEY = "yt2html_transcript"
+
 
 def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
     """Add what yt-dlp does not return: timestamp lists and description extras.
@@ -127,8 +136,12 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
         data = initial_data_of(webpage)
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
-        info[MARKERS_KEY] = info[EXTRAS_KEY] = info[YT_COUNT_KEY] = None
+        info[MARKERS_KEY] = info[EXTRAS_KEY] = info[YT_COUNT_KEY] = info[CAPTION_KEY] = None
         return
+    try:
+        info[CAPTION_KEY] = default_caption_track(embedded_json(webpage, "ytInitialPlayerResponse"))
+    except Exception:
+        info[CAPTION_KEY] = None
     info[MARKERS_KEY] = parse_marker_lists(data, info.get("description") or "",
                                            info.get("duration"))
     info[EXTRAS_KEY] = parse_description_extras(data)
@@ -181,14 +194,57 @@ def text_of(node) -> str:
     return "".join(str(run.get("text", "")) for run in node.get("runs") or [])
 
 
-def initial_data_of(webpage: str) -> dict:
-    """The ytInitialData object embedded in a watch page."""
-    match = re.search(r"""(?:window\s*\[\s*["']ytInitialData["']\s*\]|\bytInitialData)\s*=\s*""",
-                      webpage)
+def embedded_json(webpage: str, name: str) -> dict:
+    """A JSON object assigned to a variable in a watch page (e.g. ytInitialData)."""
+    match = re.search(rf"""(?:window\s*\[\s*["']{name}["']\s*\]|\b{name})\s*=\s*""", webpage)
     if not match:
-        raise ValueError("ytInitialData not found")
+        raise ValueError(f"{name} not found")
     data, _ = json.JSONDecoder().raw_decode(webpage, match.end())
     return data
+
+
+def initial_data_of(webpage: str) -> dict:
+    """The ytInitialData object embedded in a watch page."""
+    return embedded_json(webpage, "ytInitialData")
+
+
+def default_caption_track(player_response: dict) -> dict | None:
+    """Language and kind of the caption track the transcript panel opens with.
+
+    The player lists one audio track per language (auto-dubbed videos have
+    many); `defaultAudioTrackIndex` points to the original audio, and its
+    `defaultCaptionTrackIndex`, when present, to the caption track YouTube
+    picks for it. Without that index, the original audio language is used.
+    Returns {language, kind: "asr" | "manual" | None} or None.
+    """
+    tracklist = (player_response.get("captions") or {}).get("playerCaptionsTracklistRenderer") or {}
+    captions = tracklist.get("captionTracks") or []
+    audio_tracks = tracklist.get("audioTracks") or []
+    if not captions:
+        return None
+    index = tracklist.get("defaultAudioTrackIndex") or 0
+    audio = audio_tracks[index] if 0 <= index < len(audio_tracks) else {}
+    caption_index = audio.get("defaultCaptionTrackIndex")
+    if isinstance(caption_index, int) and 0 <= caption_index < len(captions):
+        track = captions[caption_index]
+        if track.get("languageCode"):
+            return {"language": track["languageCode"],
+                    "kind": "asr" if track.get("kind") == "asr" else "manual"}
+    # Original audio language: the audio stream marked "original", else the
+    # audio track the player starts with.
+    language = None
+    for fmt in (player_response.get("streamingData") or {}).get("adaptiveFormats") or []:
+        audio_track = fmt.get("audioTrack") or {}
+        if "original" in (audio_track.get("displayName") or "").lower():
+            language = (audio_track.get("id") or "").split(".")[0]
+            break
+    language = language or (audio.get("audioTrackId") or "").split(".")[0]
+    if not language:
+        indices = audio.get("captionTrackIndices") or [0]
+        track = captions[indices[0]] if 0 <= indices[0] < len(captions) else captions[0]
+        return {"language": track.get("languageCode"),
+                "kind": "asr" if track.get("kind") == "asr" else "manual"}
+    return {"language": language, "kind": None}
 
 
 def read_panels(data: dict) -> list[dict]:
@@ -410,6 +466,118 @@ def marker_lists_of(info: dict) -> list[dict]:
               "title": c.get("title") or ""} for c in chapters]
     return ([{"id": "chapters", "title": "Chapters", "source": None, "items": items}]
             if items else [])
+
+
+def base_language(code: str | None) -> str:
+    """'en-US' -> 'en'; also strips yt-dlp's '-orig' suffix."""
+    return (code or "").removesuffix("-orig").split("-")[0].lower()
+
+
+def original_audio_language(info: dict) -> str | None:
+    """Original audio language as yt-dlp knows it (formats marked "original")."""
+    for fmt in info.get("formats") or []:
+        if fmt.get("language_preference") == 10 and fmt.get("language"):
+            return fmt["language"]
+    return info.get("language")
+
+
+def choose_caption_track(info: dict) -> tuple[str, str, list[dict]] | None:
+    """Pick the track YouTube's transcript panel shows by default.
+
+    Preferred: the track the watch page names as default for the original
+    audio (see default_caption_track). Otherwise: author subtitles in the
+    original audio language, then automatic captions of that language, then
+    any author subtitles. Without page data or yt-dlp's audio languages, a
+    single "-orig" track gives the language. Auto-dubbed videos have automatic captions for every
+    dubbed language, each marked "-orig" by yt-dlp, so the language must come
+    from the original audio, not from the "-orig" mark.
+    Returns (kind, language code, formats) or None.
+    """
+    manual = {lang: fmts for lang, fmts in (info.get("subtitles") or {}).items()
+              if lang != "live_chat" and fmts}
+    auto = {lang: fmts for lang, fmts in (info.get("automatic_captions") or {}).items() if fmts}
+
+    def find_manual(language):
+        exact = [lang for lang in manual if lang.lower() == language.lower()]
+        same = [lang for lang in manual if base_language(lang) == base_language(language)]
+        lang = (exact or same or [None])[0]
+        return ("manual", lang, manual[lang]) if lang else None
+
+    def find_auto(language):
+        for lang in (f"{language}-orig", f"{base_language(language)}-orig",
+                     language, base_language(language)):
+            if auto.get(lang):
+                return ("auto", lang.removesuffix("-orig"), auto[lang])
+        return None
+
+    default = info.get(CAPTION_KEY) or {}
+    origs = [lang for lang in auto if lang.endswith("-orig")]
+    language = (default.get("language") or original_audio_language(info)
+                or (origs[0].removesuffix("-orig") if len(origs) == 1 else None))
+    if language:
+        if default.get("kind") == "asr":
+            order = (find_auto, find_manual)
+        else:
+            order = (find_manual, find_auto)
+        for find in order:
+            found = find(language)
+            if found:
+                return found
+    # Last resort (original language unknown): any author subtitles.
+    if manual:
+        lang = next(iter(manual))
+        return "manual", lang, manual[lang]
+    return None
+
+
+def parse_json3_captions(data: dict) -> list[dict]:
+    """Caption cues from YouTube's json3 format: [{start (s), text}].
+
+    Line breaks inside a cue become spaces; events that hold only a line
+    break (used by automatic captions) are skipped.
+    """
+    cues = []
+    for event in data.get("events") or []:
+        segs = event.get("segs")
+        if not segs:
+            continue
+        text = " ".join("".join(seg.get("utf8", "") for seg in segs).split())
+        if text:
+            cues.append({"start": round((event.get("tStartMs") or 0) / 1000, 3),
+                         "text": text})
+    return cues
+
+
+def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict) -> dict | None:
+    """Download the transcript as caption cues.
+
+    YouTube's own transcript panel (get_transcript API) requires a token that
+    only a real browser can produce, so the same text is taken from the
+    caption track the panel shows, through the URLs yt-dlp has extracted.
+    """
+    track = choose_caption_track(info)
+    if not track:
+        log("No transcript available.")
+        return None
+    kind, lang, formats = track
+    fmt = next((f for f in formats if f.get("ext") == "json3" and f.get("url")), None)
+    name = re.sub(r"\s*\((Original|auto-generated)\)$", "", (formats[0].get("name") or lang))
+    if not fmt:
+        log(f"No transcript available (no json3 captions for {name}).")
+        return None
+    label = f"{name}, auto-generated" if kind == "auto" else name
+    log(f"Downloading transcript ({label})...")
+    try:
+        with ydl.urlopen(fmt["url"]) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        cues = parse_json3_captions(json.loads(raw)) if raw.strip() else []
+    except Exception as error:
+        log(f"  Could not download the transcript ({error}).")
+        return None
+    if not cues:
+        log("  YouTube returned an empty transcript.")
+        return None
+    return {"language": lang, "name": name, "kind": kind, "cues": cues}
 
 
 def fetch_image(url: str) -> str | None:
@@ -714,6 +882,15 @@ h1.title a{color:var(--text)}
 .markers li{display:flex;gap:12px;padding:3px 0}
 .markers .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:500}
 .markers .label{overflow-wrap:anywhere}
+.transcript{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
+.transcript h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
+.transcript h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
+.transcript h3{font-size:14px;line-height:20px;font-weight:700;margin:16px 0 4px}
+.transcript h2 + h3{margin-top:4px}
+.transcript p{margin:0;overflow-wrap:anywhere}
+.transcript .cue{display:flex;gap:12px;padding:1px 0}
+.transcript .cue .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:500}
+.transcript .cue .text{overflow-wrap:anywhere}
 .description{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px;
   white-space:pre-wrap;overflow-wrap:anywhere}
 .description.empty{color:var(--muted)}
@@ -858,8 +1035,54 @@ def render_marker_lists(lists: list[dict], video_id: str) -> str:
     return "\n".join(sections)
 
 
+def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
+                      timestamps: bool) -> str:
+    """Transcript, split under chapter headings when the video has chapters.
+
+    Without timestamps each part is one continuous text (cues joined with
+    spaces, no added paragraphs); with timestamps every cue is its own line.
+    """
+    cues = transcript.get("cues") or []
+    starts = [c.get("start_time") or 0 for c in chapters]
+    groups = [{"title": None, "cues": []}] + [{"title": c.get("title") or "", "cues": []}
+                                              for c in chapters]
+    for cue in cues:
+        index = 0
+        for i, start in enumerate(starts):
+            if cue["start"] >= start:
+                index = i + 1
+        groups[index]["cues"].append(cue)
+
+    parts = []
+    for group in groups:
+        if not group["cues"]:
+            continue
+        if group["title"] is not None:
+            parts.append(f"<h3>{esc(group['title'])}</h3>")
+        if timestamps:
+            rows = []
+            for cue in group["cues"]:
+                seconds = int(cue["start"])
+                time_html = (link(f"{YOUTUBE}/watch?v={video_id}&t={seconds}s",
+                                  format_duration(seconds))
+                             if video_id else esc(format_duration(seconds)))
+                rows.append(f'<div class="cue"><span class="time">{time_html}</span>'
+                            f'<span class="text">{esc(cue["text"])}</span></div>')
+            parts.append(f'<div class="cues">{"".join(rows)}</div>')
+        else:
+            parts.append(f"<p>{esc(' '.join(c['text'] for c in group['cues']))}</p>")
+
+    note = transcript.get("name") or transcript.get("language") or ""
+    if transcript.get("kind") == "auto":
+        note = f"{note}, auto-generated" if note else "auto-generated"
+    note_html = f' <span class="source">{esc(note)}</span>' if note else ""
+    return (f'<section class="transcript"><h2>Transcript{note_html}</h2>'
+            f'{"".join(parts)}</section>')
+
+
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
-                archived: dt.date, show_snapshot: bool = True) -> str:
+                archived: dt.date, show_snapshot: bool = True,
+                transcript_timestamps: bool = False) -> str:
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -913,6 +1136,11 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     markers = marker_lists_of(info)
     if markers:
         body.append(render_marker_lists(markers, video_id))
+
+    transcript = info.get(TRANSCRIPT_KEY)
+    if transcript:
+        chapters = next((m.get("items") or [] for m in markers if m.get("id") == "chapters"), [])
+        body.append(render_transcript(transcript, chapters, video_id, transcript_timestamps))
 
     if "comments" in info:
         roots, children = build_comment_tree(comments)
@@ -1009,7 +1237,8 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     except ValueError:
         archived = dt.date.today()  # older JSON files without the date
     page = render_page(info, thumbnail, avatar_uris, archived,
-                       show_snapshot=not args.no_snapshot)
+                       show_snapshot=not args.no_snapshot,
+                       transcript_timestamps=args.transcript_timestamps)
     target.write_text(page, encoding="utf-8")
     size_kb = target.stat().st_size / 1024
     log(f"Saved page: {target} ({size_kb:,.0f} KB, "
@@ -1033,6 +1262,11 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="limit the number of downloaded comments (replies included)")
     parser.add_argument("--no-avatars", action="store_true",
                         help="do not embed avatars (letter placeholders instead)")
+    parser.add_argument("--no-transcript", action="store_true",
+                        help="do not download the transcript")
+    parser.add_argument("--transcript-timestamps", action="store_true",
+                        help="keep the timestamps in the transcript (one line per caption) "
+                             "instead of continuous text")
     parser.add_argument("--no-snapshot", action="store_true",
                         help="leave out the grey 'Snapshot' date tile "
                              "(the date stays in the footer)")
