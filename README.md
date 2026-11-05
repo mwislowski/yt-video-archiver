@@ -248,3 +248,13 @@ Then commit the updated `uv.lock`.
 ### Files that are not committed
 
 `.gitignore` excludes `.venv`, `output/`, `*.html` and `*.info.json`. The repository contains only code and configuration, never archived pages.
+
+---
+
+## License and use
+
+The code of this project is released under the [MIT License](LICENSE): you may use, copy, modify and share it freely, provided the copyright and license notice are kept; it comes without any warranty.
+
+This license covers only the program, not what it saves. The archived pages contain material of the video's authors and of the commenters (texts, thumbnails, avatars, photos), which remains theirs. The program is meant for personal archiving, e.g. keeping your own offline copy next to a downloaded video. Do not publish or distribute archived pages without the rights to their content, and respect YouTube's Terms of Service.
+
+The program relies on [yt-dlp](https://github.com/yt-dlp/yt-dlp) (released into the public domain under the Unlicense) and on data that YouTube does not officially document; it may stop working at any time when YouTube changes its pages.

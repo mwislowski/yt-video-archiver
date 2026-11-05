@@ -3,6 +3,8 @@ name = "yt-video-archiver"
 version = "0.1.0"
 description = "Save a YouTube video page (metadata, description, all comments) as a single offline HTML file"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Mateusz Wisłowski", email = "mateusz.wislowski@gmail.com" }
 ]
