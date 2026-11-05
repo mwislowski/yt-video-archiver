@@ -3,8 +3,8 @@
 The page contains the video's metadata (thumbnail, title, channel, counts,
 dates, full description, AI-generated video summary), YouTube's timestamp
 lists (Chapters, Walkthroughs), People mentioned, the podcast the video
-belongs to, the transcript and all comments with their reply threads, sorted
-oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
+belongs to, the transcript, the license (if not the standard one) and all
+comments with their reply threads, sorted oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
 result is one file that works offline, like a page saved with SingleFile.
 The video itself is not downloaded.
 
@@ -22,6 +22,7 @@ import html
 import json
 import re
 import sys
+import urllib.parse
 import urllib.request
 import zlib
 from collections import defaultdict
@@ -113,6 +114,9 @@ YT_COUNT_KEY = "yt2html_youtube_comment_count"
 # The --max-comments value used when fetching (None = no limit).
 LIMIT_KEY = "yt2html_max_comments"
 
+# The "License" row of the video details: {title, runs: [{text, url}]}.
+LICENSE_KEY = "yt2html_license"
+
 # The caption track YouTube's transcript panel opens with: {language, kind}.
 CAPTION_KEY = "yt2html_default_caption_track"
 
@@ -138,6 +142,7 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
         info[MARKERS_KEY] = info[EXTRAS_KEY] = info[YT_COUNT_KEY] = info[CAPTION_KEY] = None
+        info[LICENSE_KEY] = None
         return
     try:
         info[CAPTION_KEY] = default_caption_track(embedded_json(webpage, "ytInitialPlayerResponse"))
@@ -147,6 +152,60 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
                                            info.get("duration"))
     info[EXTRAS_KEY] = parse_description_extras(data)
     info[YT_COUNT_KEY] = parse_comment_count(data)
+    info[LICENSE_KEY] = parse_license(data)
+
+
+def unwrap_redirect(url: str) -> str:
+    """YouTube's /redirect?q=<target> links -> the target address."""
+    if "youtube.com/redirect" in url or url.startswith("/redirect"):
+        target = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("q")
+        if target:
+            return target[0]
+    return urllib.parse.urljoin(YOUTUBE, url)
+
+
+def parse_license(data: dict) -> dict | None:
+    """The "License" row (e.g. Creative Commons) from the video's metadata rows.
+
+    It is in videoSecondaryInfoRenderer.metadataRowContainer, not in the
+    expanded description's "Video details", and only on videos whose author
+    chose a license other than the standard YouTube one.
+    """
+    contents = ((((data.get("contents") or {}).get("twoColumnWatchNextResults") or {})
+                 .get("results") or {}).get("results") or {}).get("contents") or []
+    for content in contents:
+        secondary = content.get("videoSecondaryInfoRenderer")
+        if not secondary:
+            continue
+        rows = (((secondary.get("metadataRowContainer") or {})
+                 .get("metadataRowContainerRenderer") or {}).get("rows") or [])
+        for row in rows:
+            renderer = row.get("metadataRowRenderer") or {}
+            title = text_of(renderer.get("title")).strip()
+            if title.lower() != "license":
+                continue
+            runs = []
+            for part in renderer.get("contents") or []:
+                if runs:
+                    runs.append({"text": ", ", "url": None})
+                for run in part.get("runs") or [{"text": text_of(part)}]:
+                    url = (((run.get("navigationEndpoint") or {}).get("urlEndpoint") or {})
+                           .get("url"))
+                    runs.append({"text": run.get("text") or "",
+                                 "url": unwrap_redirect(url) if url else None})
+            if any(r["text"].strip() for r in runs):
+                return {"title": title, "runs": runs}
+    return None
+
+
+def license_of(info: dict) -> dict | None:
+    """License to show; falls back to yt-dlp's plain-text `license`."""
+    page_read = LICENSE_KEY in info and info.get(EXTRAS_KEY) is not None
+    if page_read:
+        return info[LICENSE_KEY]
+    # Watch page not read (or an older JSON file): yt-dlp's text, no link.
+    text = info.get("license")
+    return {"title": "License", "runs": [{"text": text, "url": None}]} if text else None
 
 
 def parse_comment_count(data: dict) -> str | None:
@@ -1355,6 +1414,13 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     if transcript:
         chapters = next((m.get("items") or [] for m in markers if m.get("id") == "chapters"), [])
         body.append(render_transcript(transcript, chapters, video_id, transcript_timestamps))
+
+    license_info = license_of(info)
+    if license_info:
+        text = "".join(link(r["url"], r["text"]) if r.get("url") else esc(r["text"])
+                       for r in license_info["runs"])
+        body.append(f'<section class="desc-extra license">'
+                    f'<h2>{esc(license_info.get("title") or "License")}</h2><p>{text}</p></section>')
 
     if "comments" in info:
         roots, children = build_comment_tree(comments)

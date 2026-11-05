@@ -21,6 +21,7 @@ The video and subtitles are **not** downloaded; they are expected to be download
 | People mentioned | YouTube's automatic list of well-known people mentioned in the video (matched from the transcript against Google's Knowledge Graph), after the timestamp lists: heading, number of people, YouTube's explanatory note (normally behind the ⓘ button; its *Learn more* link stays clickable), then a photo of each person with the name and YouTube's short description below it, always shown in full. Photos are embedded and not clickable. Only when YouTube shows the section. |
 | Explore the podcast | The podcast (playlist marked as a podcast by the channel) the video belongs to, under YouTube's heading (e.g. `Explore the podcast`; YouTube uses the same element for courses): square cover and title, both linking to the playlist, the line below the title and the number of episodes. YouTube's large *Podcasts* button is left out. |
 | Transcript | The text YouTube shows after *Show transcript*, already open, after the timestamp lists. With chapters it is split under the chapter titles; each part (or the whole text without chapters) is one continuous text: captions joined with spaces, no added paragraphs, no timestamps. With `--transcript-timestamps` every caption is its own line starting with its timestamp (a link to the video at that second). A grey note gives the language and, for automatic captions, `auto-generated`. |
+| License | Only on videos whose author chose a license other than the standard YouTube one (e.g. *Creative Commons Attribution license (reuse allowed)*), after the transcript: heading `License` and the text as YouTube shows it, with its link kept clickable. The rest of YouTube's *Video details* is not repeated. |
 | Comments | All comments, top level oldest first; each thread with all replies already expanded, also oldest first, indented with a vertical line. Author, relative time as YouTube showed it on the download day (tooltip: estimated date), text with clickable links, likes, *Pinned* and *heart by creator* marks, creator highlighted. Avatars are embedded and not clickable. |
 
 At the bottom: a footer with the source URL and the snapshot date.
@@ -90,6 +91,13 @@ Images of the extras are collected by `extra_image_urls()` and embedded by `fetc
 CSS class names must not clash with existing ones: `description` (the description box) and `extra` (the grey Snapshot tile) are taken; hence `desc-extra`, `.about`, `.img-placeholder`.
 
 Seen on reference video `9uSXOr-AdAU` (People mentioned + Explore the podcast) and `Z8lf5oWKfj0` (Explore the podcast). According to YouTube Help, *People mentioned* is generated automatically and being extended to more videos; *Explore the podcast* appears for videos in a playlist marked as a podcast in YouTube Studio.
+
+### License
+
+- On YouTube the license is a row of the video's metadata (`videoSecondaryInfoRenderer.metadataRowContainer.metadataRowContainerRenderer.rows[].metadataRowRenderer` with `title` `License`), not part of the expanded description's *Video details* list. It exists only for non-standard licenses. Reference video `KZtvWKpXPro`: `Creative Commons Attribution license (reuse allowed)` → `https://www.youtube.com/t/creative_commons`.
+- `parse_license()` keeps the text runs and their web links (`navigationEndpoint.urlEndpoint.url`; YouTube `/redirect?q=` links are unwrapped by `unwrap_redirect()`). Stored in `info["yt2html_license"]` as `{title, runs: [{text, url}]}`, `None` when the video has none.
+- `license_of()`: if the watch page could not be read (or for an older JSON file), yt-dlp's plain-text `license` field is used instead, without the link.
+- Rendered after the transcript, before the comments, as `<section class="desc-extra license">`.
 
 ### Chapters and other timestamp lists
 
