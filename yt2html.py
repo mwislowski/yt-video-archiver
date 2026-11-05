@@ -1146,7 +1146,8 @@ def build_comment_tree(comments: list[dict]) -> tuple[list[dict], dict[str, list
 CSS = """
 :root{
   --bg:#0f0f0f; --text:#f1f1f1; --muted:#aaaaaa; --panel:#272727;
-  --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a;
+  --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
 html{background:var(--bg)}
@@ -1156,7 +1157,7 @@ a{color:var(--link);text-decoration:none}
 a:hover{text-decoration:underline}
 .page{max-width:1280px;margin:0 auto;padding:24px}
 .thumbnail{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;
-  border-radius:12px;background:#000}
+  border-radius:12px;background:var(--media-bg)}
 .thumbnail.missing{display:flex;align-items:center;justify-content:center;color:var(--muted)}
 h1.title{font-size:20px;line-height:28px;font-weight:700;margin:12px 0 0;
   overflow-wrap:anywhere}
@@ -1251,6 +1252,30 @@ h1.title a{color:var(--text)}
   .replies .replies{margin-left:12px}
 }
 """
+
+
+# Light colours, as on YouTube's light theme; the dark ones are in CSS above.
+LIGHT_VARIABLES = """
+  --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
+  --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
+  color-scheme:light;
+"""
+
+THEMES = ("dark", "light", "auto")
+COLOR_SCHEMES = {"dark": "dark", "light": "light", "auto": "dark light"}
+
+
+def theme_css(theme: str) -> str:
+    """CSS that switches the dark base colours to the chosen theme.
+
+    "auto" follows the device setting (prefers-color-scheme), like YouTube's
+    "Use device theme"; the page then changes along with the system.
+    """
+    if theme == "light":
+        return f":root{{{LIGHT_VARIABLES}}}"
+    if theme == "auto":
+        return f"@media (prefers-color-scheme: light){{:root{{{LIGHT_VARIABLES}}}}}"
+    return ""
 
 
 class AvatarStyles:
@@ -1557,7 +1582,8 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 archived: dt.date, show_snapshot: bool = True,
                 transcript_spec: list | None = None,
-                extra_images: dict[str, str] | None = None) -> str:
+                extra_images: dict[str, str] | None = None,
+                theme: str = "auto") -> str:
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -1670,7 +1696,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         f'<meta name="archived" content="{archived.isoformat()}">',
         f"<title>{esc(title)}</title>",
         # The body is already rendered here, so every avatar class is known.
-        f"<style>{CSS}\n{avatars.css()}\n</style>",
+        f'<meta name="color-scheme" content="{COLOR_SCHEMES.get(theme, "dark")}">',
+        f"<style>{CSS}\n{theme_css(theme)}\n{avatars.css()}\n</style>",
         "</head>",
         "<body>",
         *body,
@@ -1734,6 +1761,7 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     extra_images = fetch_images(extra_image_urls(info), "images (people, podcast)")
     page = render_page(info, thumbnail, avatar_uris, archived,
                        show_snapshot=not args.no_snapshot,
+                       theme=args.theme,
                        transcript_spec=args.transcript,
                        extra_images=extra_images)
     target.write_text(page, encoding="utf-8")
@@ -1807,6 +1835,10 @@ def parse_args(argv=None) -> argparse.Namespace:
              "bilingual:LANG (timestamps with YouTube's translation into LANG in a "
              "second column, e.g. bilingual:pl; stops with an error if not available), "
              "or none. Example: --transcript plain,bilingual:pl")
+    parser.add_argument("--theme", choices=THEMES, default="auto",
+                        help="colour theme of the page: auto (default; follows the light/dark "
+                             "setting of the device it is opened on, like YouTube's "
+                             "'Use device theme'), dark or light")
     parser.add_argument("--no-snapshot", action="store_true",
                         help="leave out the grey 'Snapshot' date tile "
                              "(the date stays in the footer)")

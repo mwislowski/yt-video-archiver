@@ -1,6 +1,6 @@
 # yt-video-archiver
 
-`yt2html.py` saves a YouTube video page as **one self-contained HTML file** for offline use, in the spirit of the SingleFile browser extension. Given a video URL, it fetches the video's metadata and all comments with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and builds a dark, YouTube-like page. No AI, no browser, no API key: only Python, yt-dlp and an internet connection.
+`yt2html.py` saves a YouTube video page as **one self-contained HTML file** for offline use, in the spirit of the SingleFile browser extension. Given a video URL, it fetches the video's metadata and all comments with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and builds a YouTube-like page that shows in light or dark colours according to the setting of the device it is opened on (or always dark or always light, on request). No AI, no browser, no API key: only Python, yt-dlp and an internet connection.
 
 The video and subtitles are **not** downloaded; they are expected to be downloaded separately (e.g. with yt-dlp). The page gets the same base name as yt-dlp's default video file name, so both can sit side by side.
 
@@ -151,6 +151,12 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 `linkify()` escapes everything and recognises, in one regex pass: URLs (`http(s)://...`, `www....`; trailing punctuation and unbalanced `)`/`]` are cut off), timestamps `M:SS` / `H:MM:SS` (only valid values not longer than the video), `#hashtags` (not purely numeric), `@handles` (not inside e-mail addresses). Newlines are kept via `white-space: pre-wrap`.
 
+### Theme
+
+- All colours are CSS variables on `:root` (`--bg`, `--text`, `--muted`, `--panel`, `--line`, `--link`, `--chip`, `--media-bg`); the dark values are in `CSS`, the light ones (YouTube's light theme) in `LIGHT_VARIABLES`. New styles must use these variables, not fixed colours, or they break one of the themes. Exceptions that work on both: the red heart, the white letter on the coloured avatar circles.
+- `theme_css()` adds, after `CSS`: nothing for `dark`; `:root{light variables}` for `light`; the same inside `@media (prefers-color-scheme: light)` for `auto`, so the page follows the device setting and changes with it, without JavaScript. `color-scheme` (CSS property and `<meta name="color-scheme">`) makes the browser draw scrollbars and the like in the matching colours.
+- `--theme {auto,dark,light}`, default `auto`: the page itself follows the light/dark setting of whatever device or browser opens it, each time it is opened (in most browsers "device" means the system setting unless the browser's own appearance setting overrides it). Works with `--from-json` too (the theme is not stored in the data).
+
 ### Snapshot date
 
 `render_page()` receives the date from `info["yt2html_archived"]` (today for older JSON files without it), so a page rebuilt with `--from-json` keeps the date of the original fetch. The `Snapshot` tile uses the class `fact extra` (grey value); `show_snapshot=False` (`--no-snapshot`) omits it. The footer and the comments note always show the date.
@@ -185,6 +191,9 @@ All commands in PowerShell, in the project folder.
 | Only the first N comments (quick test) | `uv run yt2html.py "URL" --max-comments 200` |
 | Without avatars (smaller file) | `uv run yt2html.py "URL" --no-avatars` |
 | Without the grey Snapshot date tile | `uv run yt2html.py "URL" --no-snapshot` |
+| Page always dark | `uv run yt2html.py "URL" --theme dark` |
+| Page always light | `uv run yt2html.py "URL" --theme light` |
+| Page following the light/dark setting of the device it is opened on (default, may be omitted) | `uv run yt2html.py "URL" --theme auto` |
 | Transcript as continuous text (default, may be omitted) | `uv run yt2html.py "URL" --transcript plain` |
 | Transcript with timestamps (one line per caption) | `uv run yt2html.py "URL" --transcript timestamps` |
 | Continuous text first, then with timestamps | `uv run yt2html.py "URL" --transcript plain,timestamps` |
