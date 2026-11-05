@@ -8,9 +8,10 @@ comments with their reply threads, sorted oldest first. Images (thumbnail, avata
 result is one file that works offline, like a page saved with SingleFile.
 The video itself is not downloaded.
 
-Usage:
-    uv run yt2html.py URL [URL ...] [options]
-    uv run yt2html.py --help
+Usage (installed as a command, or with "uv run yt2html.py" in the project):
+    yt2html URL [URL ...] [options]
+    yt2html --help
+    yt2html --version
 """
 
 from __future__ import annotations
@@ -32,12 +33,16 @@ from pathlib import Path
 
 import yt_dlp
 
+# The program version; pyproject.toml reads it from here (single source).
+__version__ = "0.2.0"
+
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
 
-# Default folder for generated pages (relative to the current directory).
-DEFAULT_OUTPUT_DIR = "output"
+# Default folder for generated pages: the current folder, i.e. wherever the
+# command is run (for example the folder with the downloaded videos).
+DEFAULT_OUTPUT_DIR = "."
 
 # File name template (yt-dlp syntax). The default matches yt-dlp's own default
 # "%(title)s [%(id)s].%(ext)s", so the page sits next to the downloaded video
@@ -1818,10 +1823,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         description="Save a YouTube video page (metadata, description, all comments) "
                     "as a single offline HTML file.",
     )
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__} (yt-dlp {yt_dlp.version.__version__})")
     parser.add_argument("sources", nargs="+", metavar="URL",
                         help="video URL(s); with --from-json: path(s) to .info.json files")
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
-                        help=f"folder for the generated pages (default: {DEFAULT_OUTPUT_DIR})")
+                        help="folder for the generated pages (default: the current folder)")
     parser.add_argument("--no-comments", action="store_true",
                         help="do not download comments")
     parser.add_argument("--max-comments", type=int, metavar="N",

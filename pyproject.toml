@@ -1,7 +1,7 @@
 [project]
 name = "yt-video-archiver"
-version = "0.1.0"
-description = "Save a YouTube video page (metadata, description, all comments) as a single offline HTML file"
+dynamic = ["version"]
+description = "Save a YouTube video page (metadata, description, transcript, all comments) as a single offline HTML file"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -12,3 +12,21 @@ requires-python = ">=3.12"
 dependencies = [
     "yt-dlp[default]>=2026.10.26",
 ]
+
+[project.urls]
+Repository = "https://github.com/mwislowski/yt-video-archiver"
+
+# The command created by "uv tool install": yt2html -> yt2html.main()
+[project.scripts]
+yt2html = "yt2html:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# The version is __version__ in yt2html.py.
+[tool.hatch.version]
+path = "yt2html.py"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["yt2html.py"]

@@ -36,9 +36,17 @@ Not included: the top bar, the video player, the transcript, *Video details* (it
 
 | File | Role |
 |---|---|
-| `yt2html.py` | The whole program: fetching (yt-dlp), image embedding, comment tree, HTML rendering, CLI. |
-| `pyproject.toml`, `uv.lock` | Project and dependency (`yt-dlp[default]`) definition for `uv`. |
+| `yt2html.py` | The whole program: fetching (yt-dlp), image embedding, comment tree, HTML rendering, CLI. Holds the version (`__version__`). |
+| `pyproject.toml`, `uv.lock` | Project, dependency (`yt-dlp[default]`) and packaging definition for `uv`: build backend hatchling, the `yt2html` command, version read from `yt2html.py`. |
 | `.python-version` | Python version used by `uv`. |
+| `LICENSE` | MIT License. |
+
+### Version, packaging, releases
+
+- **One source of the version:** `__version__` in `yt2html.py`. `pyproject.toml` has `dynamic = ["version"]` and `[tool.hatch.version] path = "yt2html.py"`, so the package version and `yt2html --version` always agree. `--version` prints it together with the yt-dlp version (most problems come from an outdated yt-dlp).
+- **Versioning:** the second number for new features or visible changes (0.2.0, 0.3.0), the third for fixes (0.2.1). 0.1.0: first release; 0.2.0: `--version`, installation as a command, pages saved in the current folder by default.
+- **Command:** `[project.scripts] yt2html = "yt2html:main"`; the wheel contains only `yt2html.py` (`[tool.hatch.build.targets.wheel] only-include`). `main()` returns the exit code, which the generated command passes on.
+- **Release:** change `__version__`, update this list, commit, then `git tag -a vX.Y.Z -m "..."` and `git push origin vX.Y.Z`.
 
 ### Conventions
 
@@ -175,39 +183,60 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 ### Requirements
 
-- [uv](https://docs.astral.sh/uv/). `uv run` creates `.venv` and installs yt-dlp on first use.
+- [uv](https://docs.astral.sh/uv/) (it also installs a suitable Python by itself).
 - Optional, recommended by yt-dlp for YouTube: a JavaScript runtime, e.g. Deno (`winget install DenoLand.Deno`). Without it yt-dlp prints warnings about formats; for this program they are harmless, because the video is not downloaded.
 
-### Commands
+### Installation
 
-All commands in PowerShell, in the project folder.
+Install the program as the command `yt2html`, usable in any folder:
+
+```powershell
+uv tool install git+https://github.com/mwislowski/yt-video-archiver
+uv tool update-shell
+```
+
+`uv tool update-shell` adds uv's command folder to `PATH` (once; open a new terminal afterwards). uv keeps the program and its own copy of yt-dlp in a separate environment; it does not matter where you run the installation. Check with `yt2html --version`.
 
 | Task | Command |
 |---|---|
-| Archive one video | `uv run yt2html.py "https://www.youtube.com/watch?v=..."` |
-| Several videos at once | `uv run yt2html.py "URL1" "URL2" "URL3"` |
-| Save into another folder (e.g. next to the videos) | `uv run yt2html.py "URL" -o "D:\Videos\Channel"` |
-| Without comments | `uv run yt2html.py "URL" --no-comments` |
-| Only the first N comments (quick test) | `uv run yt2html.py "URL" --max-comments 200` |
-| Without avatars (smaller file) | `uv run yt2html.py "URL" --no-avatars` |
-| Without the grey Snapshot date tile | `uv run yt2html.py "URL" --no-snapshot` |
-| Page always dark | `uv run yt2html.py "URL" --theme dark` |
-| Page always light | `uv run yt2html.py "URL" --theme light` |
-| Page following the light/dark setting of the device it is opened on (default, may be omitted) | `uv run yt2html.py "URL" --theme auto` |
-| Transcript as continuous text (default, may be omitted) | `uv run yt2html.py "URL" --transcript plain` |
-| Transcript with timestamps (one line per caption) | `uv run yt2html.py "URL" --transcript timestamps` |
-| Continuous text first, then with timestamps | `uv run yt2html.py "URL" --transcript plain,timestamps` |
-| Timestamps with a Polish translation in a second column | `uv run yt2html.py "URL" --transcript bilingual:pl` |
-| Any combination, in the order given | `uv run yt2html.py "URL" --transcript plain,bilingual:pl,bilingual:de` |
-| Without the transcript | `uv run yt2html.py "URL" --transcript none` |
-| When YouTube asks to sign in / confirm you are not a bot | `uv run yt2html.py "URL" --cookies-from-browser firefox` |
-| Also keep the raw metadata | `uv run yt2html.py "URL" --save-json` |
-| Rebuild a page from saved metadata (keeps the original snapshot date) | `uv run yt2html.py --from-json "output\Title [id].info.json"` |
-| Help | `uv run yt2html.py --help` |
+| Update the program and yt-dlp | `uv tool upgrade yt-video-archiver` |
+| Remove the program | `uv tool uninstall yt-video-archiver` |
+
+**From a local copy of the repository** (for development): `uv tool install --editable C:\Projects\yt-video-archiver`. *Editable* means the command runs the files of that folder, so changes to `yt2html.py` work at once. After a change in `pyproject.toml` (dependencies, command), reinstall: `uv tool install --editable --reinstall C:\Projects\yt-video-archiver`.
+
+**Without installation:** in the project folder, `uv run yt2html.py ...` works the same way.
+
+### Commands
+
+The examples use the installed command `yt2html`. Without installation, use `uv run yt2html.py` in the project folder instead.
+
+| Task | Command |
+|---|---|
+| Archive one video | `yt2html "https://www.youtube.com/watch?v=..."` |
+| Several videos at once | `yt2html "URL1" "URL2" "URL3"` |
+| Save into another folder (e.g. next to the videos) | `yt2html "URL" -o "D:\Videos\Channel"` |
+| Without comments | `yt2html "URL" --no-comments` |
+| Only the first N comments (quick test) | `yt2html "URL" --max-comments 200` |
+| Without avatars (smaller file) | `yt2html "URL" --no-avatars` |
+| Without the grey Snapshot date tile | `yt2html "URL" --no-snapshot` |
+| Page always dark | `yt2html "URL" --theme dark` |
+| Page always light | `yt2html "URL" --theme light` |
+| Page following the light/dark setting of the device it is opened on (default, may be omitted) | `yt2html "URL" --theme auto` |
+| Transcript as continuous text (default, may be omitted) | `yt2html "URL" --transcript plain` |
+| Transcript with timestamps (one line per caption) | `yt2html "URL" --transcript timestamps` |
+| Continuous text first, then with timestamps | `yt2html "URL" --transcript plain,timestamps` |
+| Timestamps with a Polish translation in a second column | `yt2html "URL" --transcript bilingual:pl` |
+| Any combination, in the order given | `yt2html "URL" --transcript plain,bilingual:pl,bilingual:de` |
+| Without the transcript | `yt2html "URL" --transcript none` |
+| When YouTube asks to sign in / confirm you are not a bot | `yt2html "URL" --cookies-from-browser firefox` |
+| Also keep the raw metadata | `yt2html "URL" --save-json` |
+| Rebuild a page from saved metadata (keeps the original snapshot date) | `yt2html --from-json "Title [id].info.json"` |
+| Show the program and yt-dlp versions | `yt2html --version` |
+| Help | `yt2html --help` |
 
 Always put the URL in quotes: in PowerShell `&` in a URL would otherwise be treated as an operator.
 
-By default pages are saved in the `output` folder inside the project, named like yt-dlp names videos by default: `Title [video id].html`. An existing page with the same name is overwritten.
+By default pages are saved in the current folder, i.e. where the command is run (e.g. the folder with the downloaded videos), named like yt-dlp names videos by default: `Title [video id].html`. `-o FOLDER` saves them elsewhere. An existing page with the same name is overwritten.
 
 ### What to expect
 
@@ -231,12 +260,10 @@ By default pages are saved in the `output` folder inside the project, named like
 
 YouTube changes often and yt-dlp follows within days. When fetching starts failing, update yt-dlp first:
 
-```powershell
-uv lock --upgrade-package yt-dlp
-uv sync
-```
+- installed command: `uv tool upgrade yt-video-archiver`;
+- in the project (`uv run`): `uv lock --upgrade-package yt-dlp`, then `uv sync`, and commit the updated `uv.lock`.
 
-Then commit the updated `uv.lock`.
+`yt2html --version` shows which yt-dlp version is in use.
 
 ### Troubleshooting
 
@@ -247,7 +274,7 @@ Then commit the updated `uv.lock`.
 
 ### Files that are not committed
 
-`.gitignore` excludes `.venv`, `output/`, `*.html` and `*.info.json`. The repository contains only code and configuration, never archived pages.
+`.gitignore` excludes `.venv`, build output (`build/`, `dist/`), `*.html` and `*.info.json` (pages created when the command is run in the project folder) and the old `output/` folder. The repository contains only code and configuration, never archived pages.
 
 ---
 

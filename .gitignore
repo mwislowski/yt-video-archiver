@@ -9,7 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
-# Generated pages and metadata (never commit)
-output/
+# Generated pages and metadata (never commit). Pages are saved in the folder
+# the command is run in, so running it in the project folder puts them here.
 *.html
 *.info.json
+
+# Old default output folder (kept locally for tests)
+output/
