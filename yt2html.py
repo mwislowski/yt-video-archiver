@@ -1200,7 +1200,7 @@ h1.title{font-size:20px;line-height:28px;font-weight:700;margin:12px 0 0;
   overflow-wrap:anywhere}
 h1.title a{color:var(--text)}
 .channel{display:flex;align-items:center;gap:12px;margin-top:12px}
-.channel .name{font-size:16px;font-weight:500;line-height:22px}
+.channel .name{font-size:16px;font-weight:700;line-height:22px}
 .channel .name a{color:var(--text)}
 .channel .subs{color:var(--muted);font-size:12px;line-height:18px}
 .badge{color:var(--muted);font-size:12px;margin-left:4px}
@@ -1223,7 +1223,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .person{width:150px}
 .person .photo{display:flex;width:150px;height:150px;object-fit:cover;border-radius:12px;
   background:var(--chip)}
-.person .name{font-weight:500;margin-top:6px;overflow-wrap:anywhere}
+.person .name{font-weight:600;margin-top:6px;overflow-wrap:anywhere}
 .person .about{color:var(--muted);font-size:12px;line-height:18px;overflow-wrap:anywhere}
 .img-placeholder{align-items:center;justify-content:center;
   color:var(--muted);font-size:40px;font-weight:500;user-select:none}
@@ -1236,17 +1236,17 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .playlist .meta{color:var(--muted);font-size:12px;line-height:18px}
 .markers ol{list-style:none;margin:0;padding:0}
 .markers li{display:flex;gap:12px;padding:3px 0}
-.markers .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:500}
+.markers .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:600}
 .markers .label{overflow-wrap:anywhere}
 .transcript h3{font-size:14px;line-height:20px;font-weight:700;margin:16px 0 4px}
 .transcript h2 + h3{margin-top:4px}
 .transcript p{margin:0;overflow-wrap:anywhere}
 .transcript .cue{display:flex;gap:12px;padding:1px 0}
-.transcript .cue .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:500}
+.transcript .cue .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:600}
 .transcript .cue .text{overflow-wrap:anywhere}
 .transcript .bi-row{display:grid;grid-template-columns:56px 1fr 1fr;column-gap:12px;
   padding:2px 0}
-.transcript .bi-row .time{font-variant-numeric:tabular-nums;font-weight:500}
+.transcript .bi-row .time{font-variant-numeric:tabular-nums;font-weight:600}
 .transcript .bi-row .text{overflow-wrap:anywhere}
 .transcript .bi-row .text + .text{border-left:1px solid var(--line);padding-left:12px}
 .transcript .bi-head{color:var(--muted);font-size:12px;line-height:18px;padding-bottom:4px}
@@ -1258,7 +1258,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .comment{display:flex;gap:16px;margin-top:16px}
 .comment .body{min-width:0;flex:1}
 .comment .head{font-size:13px;line-height:18px}
-.comment .author{font-weight:500}
+.comment .author{font-weight:600}
 .comment .author a{color:var(--text)}
 .comment .author.owner{background:var(--chip);border-radius:12px;padding:1px 6px}
 .comment .time{color:var(--muted);margin-left:4px}

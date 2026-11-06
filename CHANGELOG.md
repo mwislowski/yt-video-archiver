@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+- The channel name next to its avatar is bold, as on YouTube.
+- Comment authors, names in People mentioned and timestamps in chapters and the transcript are semibold; before, they looked like plain text on Windows, whose Segoe UI has no medium weight.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added
