@@ -5,6 +5,7 @@ import pytest
 import yt2html
 
 PLAYLIST = "https://www.youtube.com/playlist?list=PL22egh3ok4cP0T7UZRmP6TMLErZYWMN-l"
+CHANNEL = "https://www.youtube.com/@channel"
 
 
 def url(n: int) -> str:
@@ -113,12 +114,12 @@ def test_no_url_and_no_batch_file(capsys):
 
 
 def test_bad_lines_fail_and_the_rest_is_archived(tmp_path, capsys, fake_fetch):
-    path = write_list(tmp_path, f"{url(1)}\n{PLAYLIST}\n{url(2)}\n")
+    path = write_list(tmp_path, f"{url(1)}\n{CHANNEL}\n{url(2)}\n")
     code = yt2html.main(["-a", path, "-o", str(tmp_path)])
     out = capsys.readouterr().out
     assert code == 1
-    assert fake_fetch == [url(1), url(2)]       # the playlist is not even fetched
-    assert f"FAILED: {PLAYLIST}: this is a playlist or channel URL" in out
+    assert fake_fetch == [url(1), url(2)]       # the channel is not even fetched
+    assert f"FAILED: {CHANNEL}: this is a channel URL" in out
     assert "Done: 2 saved, 0 skipped (page exists), 1 failed." in out
     assert len(list(tmp_path.glob("*.html"))) == 2
 
@@ -137,7 +138,7 @@ def test_running_the_same_list_again_archives_only_what_is_missing(tmp_path, cap
 
 
 def test_batch_file_is_not_changed(tmp_path, fake_fetch):
-    text = f"# my list\n{url(1)}\n{PLAYLIST}\n"
+    text = f"# my list\n{url(1)}\n{CHANNEL}\n"
     path = write_list(tmp_path, text)
     yt2html.main(["-a", path, "-o", str(tmp_path / "pages")])
     assert (tmp_path / "list.txt").read_text(encoding="utf-8") == text

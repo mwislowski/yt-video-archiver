@@ -81,7 +81,7 @@ Not included: the top bar, the video player, *Video details* (it repeats the dat
 `yt_dlp.YoutubeDL(...).extract_info(url, download=False)` with:
 
 - `skip_download`, `noplaylist`, `getcomments`;
-- `extract_flat: "in_playlist"`: `noplaylist` only turns watch URLs with `&list=` into the video; a real playlist or channel URL would otherwise be extracted video by video, comments included, before being rejected. Such URLs are first recognised without a request (`is_playlist_url()`: no video id and yt-dlp's `YoutubeTabIE` or `YoutubePlaylistIE` matches) and fail at once; anything that still turns out to be a playlist returns only its flat list and fails as well;
+- `extract_flat: "in_playlist"`: a safety net. `noplaylist` only turns watch URLs with `&list=` into the video; an unrecognised URL that leads to a playlist or channel would otherwise be extracted video by video, comments included. With it, yt-dlp returns only the flat list, and `archive()` fails with `this URL leads to a playlist or channel`. Playlist URLs never get here (see *Playlists*), channel URLs fail before any request (`is_channel_url()`);
 - `ignore_no_formats_error: True` — the video is not downloaded, so missing formats (e.g. when no JavaScript runtime is installed for YouTube's player challenges) must not abort the run;
 - `extractor_args = {"youtube": {"comment_sort": ["new"], "max_comments": [N or "all", "all", "all", "all"]}}`.
 
@@ -205,8 +205,18 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 - `read_batch_file()` reads the file as UTF-8 (`utf-8-sig`, so a byte order mark from a Windows editor does no harm), strips each line and drops blank lines and lines starting with `#`. A file that cannot be read, is not UTF-8 or lists nothing is an error.
 - `collect_sources()`, called from `parse_args()`, builds the final list: the URLs from the command line first, then each `-a` file in the order given. A video is kept once: two URLs are the same video if `video_id_from_url()` gives the same id (`youtu.be/ID`, `watch?v=ID`, a bare id); other lines (playlist URLs, `.info.json` paths with `--from-json`) must match exactly. It logs `Read N URLs from FILE (M duplicates ignored).` per file.
-- Errors in the files themselves end the program through `parser.error()` (exit code 2) before anything is fetched. A bad line (wrong URL, playlist) only fails that line in `main()`, like a bad URL on the command line.
+- Errors in the files themselves end the program through `parser.error()` (exit code 2) before anything is fetched. A playlist line is expanded like a playlist in the command (see *Playlists*); a bad line (wrong URL, channel) only fails that line in `main()`, like a bad URL on the command line.
 - The file is only read, never changed: what is done follows from the pages in the output folder, so running the same list again archives what is missing and retries what failed.
+
+## Playlists
+
+- `playlist_id_from_url()` recognises `/playlist?list=ID` (also `m.youtube.com`, a trailing `/`) and bare playlist ids (yt-dlp's `YoutubePlaylistIE.suitable()`), without a request; watch URLs with `&list=` stay videos. `is_channel_url()`: anything else that yt-dlp's `YoutubeTabIE` handles (`@handle`, `/channel/`, `/c/`, their tabs); these fail with a hint to use a playlist.
+- `fetch_playlist()`: `extract_info(url, download=False, process=False)` with `extract_flat: "in_playlist"` (and the cookies): only the list, no video is extracted; `process=False` avoids yt-dlp's `Downloading item N of M` line per entry. A `url` / `url_transparent` result is followed (up to 3 times); anything but `_type: playlist` is an error. The entries are read inside the `YoutubeDL` block, because yt-dlp fetches further pages (about 100 videos each) lazily.
+- `entry_video_id()`: the entry's `id` if it is a video id, else the id in its `url`; nested playlists and channels give `None` and are left out. Private and deleted videos are entries too: they fail when fetched (`FAILED: URL`) and are retried on every run.
+- `main()` expands each playlist where it stands among the sources into watch URLs and archives them one by one, exactly like separate URLs (skipping, failures, summary). `seen` holds the video ids handled in this run: a video twice in a playlist, in two playlists or also given separately is archived once (`Playlist "TITLE": N videos (M duplicates ignored).`, or `Ignored duplicate: URL` for a separate URL after the playlist). A playlist that cannot be read counts as one failure. The summary counts videos and is printed whenever a playlist was given.
+- Nothing about the run is stored: the next run reads the list again (new episodes are found), skips the videos with a page and tries the rest again.
+
+**Ctrl+C.** yt-dlp catches `Ctrl+C` while it downloads comments: it ends only the comments, keeps those fetched so far and sets `comment_count` to `None` (`comments_interrupted()`; with comments disabled there is no list). `archive()` still makes the page and then raises `CommentsInterrupted` (a `KeyboardInterrupt`), so a run with several videos does not go on with the next one. `main()` catches any `KeyboardInterrupt` between and during videos, prints the summary without a traceback and returns 130. The page made from interrupted comments counts as finished on later runs (`--overwrite` remakes it).
 
 ## Testing
 
@@ -216,7 +226,7 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 uv run pytest
 ```
 
-The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `155 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `179 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
 
 **What is covered (offline):**
 
@@ -228,7 +238,8 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 | `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables |
 | `test_transcript.py` | choosing the caption track (incl. auto-dubbed videos), json3 captions, translations (alignment, HTTP 429 retries, errors), `--transcript` parsing and rendering |
 | `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
-| `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes, playlist and channel URLs rejected without fetching |
+| `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes, channel URLs rejected without fetching |
+| `test_playlist.py` | playlist and channel URLs, expanding in order, duplicates (in a playlist, across playlists, separate URLs), skipping and rerunning, failed videos and playlists, `Ctrl+C` stopping the run, empty playlists, playlists in batch files, `fetch_playlist()` reading only the list |
 | `test_batch.py` | `-a` files: comments, blank lines, byte order mark, order, duplicates in other URL forms, unusable files stop before fetching, bad lines fail alone, rerunning a list, the file is not changed, `--from-json` paths |
 
 The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.

@@ -22,24 +22,28 @@ def test_video_id_from_url(url, expected):
     assert yt2html.video_id_from_url(url) == expected
 
 
-@pytest.mark.parametrize("url, expected", [
-    ("https://www.youtube.com/playlist?list=PL22egh3ok4cP0T7UZRmP6TMLErZYWMN-l", True),
-    ("PL22egh3ok4cP0T7UZRmP6TMLErZYWMN-l", True),
-    ("https://www.youtube.com/@channel", True),
-    ("https://www.youtube.com/channel/UCxyz/videos", True),
-    ("https://www.youtube.com/watch?v=Z8lf5oWKfj0&list=PLx", False),  # a video
-    ("https://youtu.be/Z8lf5oWKfj0", False),
-    ("Z8lf5oWKfj0", False),
-    ("https://example.test/x", False),
+@pytest.mark.parametrize("url, playlist, channel", [
+    ("https://www.youtube.com/playlist?list=PL22egh3ok4cP0T7UZRmP6TMLErZYWMN-l",
+     "PL22egh3ok4cP0T7UZRmP6TMLErZYWMN-l", False),
+    ("https://m.youtube.com/playlist/?list=PLx1234567890abc&si=x", "PLx1234567890abc", False),
+    ("PL22egh3ok4cP0T7UZRmP6TMLErZYWMN-l", "PL22egh3ok4cP0T7UZRmP6TMLErZYWMN-l", False),
+    ("https://www.youtube.com/@channel", None, True),
+    ("https://www.youtube.com/@channel/playlists", None, True),
+    ("https://www.youtube.com/channel/UCxyz/videos", None, True),
+    ("https://www.youtube.com/watch?v=Z8lf5oWKfj0&list=PLx", None, False),  # a video
+    ("https://youtu.be/Z8lf5oWKfj0", None, False),
+    ("Z8lf5oWKfj0", None, False),
+    ("https://example.test/playlist?list=PLx", None, False),
 ])
-def test_is_playlist_url(url, expected):
-    assert yt2html.is_playlist_url(url) is expected
+def test_playlist_and_channel_urls(url, playlist, channel):
+    assert yt2html.playlist_id_from_url(url) == playlist
+    assert yt2html.is_channel_url(url) is channel
 
 
-def test_playlist_url_fails_without_any_request(capsys, tmp_path, fake_fetch):
+def test_channel_url_fails_without_any_request(capsys, tmp_path, fake_fetch):
     code = yt2html.main(["https://www.youtube.com/@channel", "-o", str(tmp_path)])
     assert code == 1 and fake_fetch == []
-    assert "this is a playlist or channel URL" in capsys.readouterr().out
+    assert "this is a channel URL" in capsys.readouterr().out
 
 
 def test_unrecognised_playlist_is_not_extracted(monkeypatch, tmp_path, capsys):
@@ -69,7 +73,7 @@ def test_unrecognised_playlist_is_not_extracted(monkeypatch, tmp_path, capsys):
     code = yt2html.main(["https://example.test/unusual-link", "-o", str(tmp_path)])
     assert code == 1
     assert used["extract_flat"] == "in_playlist" and used["noplaylist"] is True
-    assert "this is a playlist or channel URL" in capsys.readouterr().out
+    assert "leads to a playlist or channel, not a single video" in capsys.readouterr().out
     assert not list(tmp_path.iterdir())
 
 

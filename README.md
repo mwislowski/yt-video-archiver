@@ -47,6 +47,7 @@ The page is saved in the current folder (e.g. the folder with your downloaded vi
 | Task | Command |
 |---|---|
 | Several videos at once | `yt2html "URL1" "URL2" "URL3"` |
+| All videos of a playlist (see below) | `yt2html "https://www.youtube.com/playlist?list=..."` |
 | Videos listed in a text file (see below) | `yt2html -a list.txt` |
 | Save into another folder | `yt2html "URL" -o "D:\Videos\Channel"` |
 | Make a page again although the video already has one (e.g. for newer comments) | `yt2html "URL" --overwrite` |
@@ -84,13 +85,16 @@ https://www.youtube.com/watch?v=Z8lf5oWKfj0
 https://youtu.be/qyqCTMirNWg
 ```
 
-`-a` can be given several times and combined with URLs in the command; a video listed more than once (also in another URL form) is archived once. The file must be saved as UTF-8 (Notepad's default). The program only reads it, never changes it. Playlist URLs are not supported, in the file or in the command.
+`-a` can be given several times and combined with URLs in the command; a video listed more than once (also in another URL form) is archived once. The file must be saved as UTF-8 (Notepad's default). The program only reads it, never changes it.
+
+**Playlists:** a playlist URL (`https://www.youtube.com/playlist?list=...`), in the command or in a list file, archives all videos of the playlist in its order, e.g. all episodes of a podcast. A link to a video opened from a playlist (`watch?v=...&list=...`) archives only that video. Channel URLs (`@name`) are not supported: open the channel's playlist and use its URL.
+
 
 **Videos that already have a page are skipped**, so running the same command again only archives what is missing, and an interrupted run continues where it stopped. A page is recognised by the video id in square brackets at the end of its name, e.g. `[Z8lf5oWKfj0].html`: you may rename pages freely (`042 My title [Z8lf5oWKfj0].html`) as long as that part stays. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--from-json` always replaces the page.
 
 ## Good to know
 
-- Comments take most of the time: YouTube serves about 20 per request, so 10,000 comments take a few minutes. `Ctrl+C` stops downloading them and still makes the page from the comments fetched so far.
+- Comments take most of the time: YouTube serves about 20 per request, so 10,000 comments take a few minutes. `Ctrl+C` stops downloading them and still makes the page from the comments fetched so far; such a page counts as finished on the next run (use `--overwrite` for that video to get all comments). With several videos or a playlist the run stops there; run the same command again to continue with the videos that have no page yet.
 - The number of downloaded comments is usually a bit lower than YouTube's count (deleted or hidden comments); the page shows both. A limited download (`--max-comments`) shows as fewer downloaded comments; `No comments.` appears only when the video really has none.
 - Comment times are as YouTube showed them on the download day (`3 years ago`); hover over one to see the estimated date. Subscriber counts are rounded by YouTube (`1.23M`); views and likes are exact.
 - The transcript is the one YouTube's *Show transcript* opens: the captions of the video's original language, also for auto-dubbed videos. The AI summary is in the language of the video.
@@ -106,7 +110,8 @@ https://youtu.be/qyqCTMirNWg
 - **`No transcript: ...` although YouTube shows *Show transcript*:** look for a yt-dlp warning about subtitles and a missing PO token; updating yt-dlp usually helps.
 - **`Could not read them ...; using yt-dlp chapters instead`:** the page is made, but without the AI summary, People mentioned and similar sections, and with chapters under a plain `Chapters` heading. Usually temporary; run again with `--overwrite`.
 - **`Chapter source unclear: ...`:** the chapters are on the page, only without the grey origin note. Please report the video: YouTube has probably changed something.
-- **`FAILED: ... this is a playlist or channel URL`:** pass the URL of a single video.
+- **`FAILED: ... this is a channel URL`:** pass the URL of a video or of a playlist.
+- **`FAILED: https://www.youtube.com/watch?v=...` in a playlist:** usually a private or deleted video (yt-dlp's `ERROR` line above says why). Each run tries it again; it does not stop the other videos.
 - **Some avatars are letters:** those images could not be downloaded (or the author has none).
 
 ## Development

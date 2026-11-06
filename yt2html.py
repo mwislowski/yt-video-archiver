@@ -1766,16 +1766,85 @@ def video_id_from_url(url: str) -> str | None:
     return None
 
 
-def is_playlist_url(url: str) -> bool:
-    """True for a YouTube playlist or channel URL (or a bare playlist id),
-    recognised without any request. A watch URL with &list= is a video."""
-    from yt_dlp.extractor.youtube import YoutubePlaylistIE, YoutubeTabIE
+def playlist_id_from_url(url: str) -> str | None:
+    """The id of a YouTube playlist URL (/playlist?list=...) or of a bare
+    playlist id, without any request. None for anything else; a watch URL
+    with &list= is a video, as in yt-dlp."""
+    from yt_dlp.extractor.youtube import YoutubePlaylistIE
     if video_id_from_url(url):
+        return None
+    try:
+        if "/" not in url and YoutubePlaylistIE.suitable(url):
+            return url
+    except Exception:
+        return None
+    parts = urllib.parse.urlsplit(url)
+    if "youtube" in parts.netloc and parts.path.rstrip("/") == "/playlist":
+        return urllib.parse.parse_qs(parts.query).get("list", [None])[0]
+    return None
+
+
+def is_channel_url(url: str) -> bool:
+    """True for a YouTube channel URL (@handle, /channel/..., /c/... and
+    their tabs), recognised without any request."""
+    from yt_dlp.extractor.youtube import YoutubeTabIE
+    if video_id_from_url(url) or playlist_id_from_url(url):
         return False
     try:
-        return YoutubeTabIE.suitable(url) or YoutubePlaylistIE.suitable(url)
+        return YoutubeTabIE.suitable(url)
     except Exception:
         return False
+
+
+def entry_video_id(entry: dict) -> str | None:
+    """The video id of one entry of a flat playlist, None if it is not a video
+    (e.g. a nested playlist or a channel)."""
+    video_id = entry.get("id") or ""
+    if VIDEO_ID.fullmatch(video_id):
+        return video_id
+    return video_id_from_url(entry.get("url") or "")
+
+
+def fetch_playlist(url: str, args: argparse.Namespace) -> tuple[str, list[dict]]:
+    """Title and flat entries of a playlist: only the list of its videos, in
+    playlist order, none of them extracted (one request per ~100 videos)."""
+    opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True}
+    if args.cookies_from_browser:
+        opts["cookiesfrombrowser"] = (args.cookies_from_browser,)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        # process=False: the entries are read as they are, without yt-dlp's
+        # "Downloading item N of M" line for each of them.
+        info = ydl.extract_info(url, download=False, process=False)
+        for _ in range(3):  # follow a redirect to the real playlist
+            if info.get("_type") not in ("url", "url_transparent"):
+                break
+            info = ydl.extract_info(info["url"], download=False, process=False,
+                                    ie_key=info.get("ie_key"))
+        if info.get("_type") != "playlist":
+            raise ValueError("this URL does not lead to a playlist")
+        entries = list(info.get("entries") or [])
+    return info.get("title") or info.get("id") or url, entries
+
+
+def playlist_videos(source: str, args: argparse.Namespace, seen: set[str]) -> list[str]:
+    """Watch URLs of the videos of a playlist, without those already in `seen`
+    (videos given earlier in this run or twice in the playlist); adds the
+    new ones to `seen`."""
+    log(f"Fetching playlist {source}")
+    title, entries = fetch_playlist(source, args)
+    urls, listed = [], 0
+    for entry in entries:
+        video_id = entry_video_id(entry)
+        if not video_id:
+            continue
+        listed += 1
+        if video_id not in seen:
+            seen.add(video_id)
+            urls.append(f"{YOUTUBE}/watch?v={video_id}")
+    duplicates = listed - len(urls)
+    note = f" ({plural(duplicates, 'duplicate')} ignored)" if duplicates else ""
+    log(f'Playlist "{title}": {plural(listed, "video")}{note}.')
+    return urls
 
 
 def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
@@ -1799,7 +1868,21 @@ def write_atomically(path: Path, text: str) -> None:
     os.replace(temporary, path)
 
 
-PLAYLIST_ERROR = "this is a playlist or channel URL, not a single video"
+class CommentsInterrupted(KeyboardInterrupt):
+    """Ctrl+C while yt-dlp downloaded the comments: yt-dlp stops only the
+    comments, the page is made from those fetched so far, then the run stops."""
+
+
+def comments_interrupted(info: dict) -> bool:
+    """yt-dlp keeps the comments fetched before Ctrl+C but sets
+    comment_count to None (it is also None when comments are disabled, but
+    then there is no comment list)."""
+    return isinstance(info.get("comments"), list) and info.get("comment_count") is None
+
+
+PLAYLIST_ERROR = "this URL leads to a playlist or channel, not a single video"
+CHANNEL_ERROR = ("this is a channel URL; only videos and playlists are supported "
+                 "(open the channel's playlist and use its URL)")
 
 
 def archive(source: str, args: argparse.Namespace) -> Path | None:
@@ -1821,8 +1904,8 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
             log(f"Skipped (page exists): {found}")
             return None
 
-    if not args.from_json and is_playlist_url(source):
-        raise ValueError(PLAYLIST_ERROR)
+    if not args.from_json and is_channel_url(source):
+        raise ValueError(CHANNEL_ERROR)
     if args.from_json:
         log(f"Reading {source}")
         info = json.loads(Path(source).read_text(encoding="utf-8"))
@@ -1877,6 +1960,10 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
         f"{len(info.get('comments') or [])} comments)")
+    if not args.from_json and comments_interrupted(info):
+        log("  Comments were interrupted (Ctrl+C): the page has those fetched so far "
+            "and counts as finished; use --overwrite for this video to get all of them.")
+        raise CommentsInterrupted
     return target
 
 
@@ -1921,6 +2008,11 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
     return spec
 
 
+def plural(n: int, word: str) -> str:
+    """'1 video', '2 videos'."""
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
 def read_batch_file(path: str) -> list[str]:
     """The sources listed in a --batch-file, one per line.
 
@@ -1951,9 +2043,6 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
     paths) must match exactly. Raises ValueError if there is nothing to do
     or a batch file cannot be used.
     """
-    def count(n: int, word: str) -> str:
-        return f"{n} {word}" + ("" if n == 1 else "s")
-
     what = "file" if args.from_json else "URL"
     seen = set()
 
@@ -1966,14 +2055,14 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
 
     sources = [source for source in args.sources if new(source)]
     if len(sources) < len(args.sources):
-        log(f"Ignored {count(len(args.sources) - len(sources), 'duplicate ' + what)} "
+        log(f"Ignored {plural(len(args.sources) - len(sources), 'duplicate ' + what)} "
             f"given on the command line.")
     for path in args.batch_file:
         listed = read_batch_file(path)
         added = [source for source in listed if new(source)]
         duplicates = len(listed) - len(added)
-        note = f" ({count(duplicates, 'duplicate')} ignored)" if duplicates else ""
-        log(f"Read {count(len(listed), what)} from {path}{note}.")
+        note = f" ({plural(duplicates, 'duplicate')} ignored)" if duplicates else ""
+        log(f"Read {plural(len(listed), what)} from {path}{note}.")
         sources += added
     if not sources:
         raise ValueError("give at least one URL or a batch file (-a FILE)")
@@ -1989,7 +2078,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__} (yt-dlp {yt_dlp.version.__version__})")
     parser.add_argument("sources", nargs="*", metavar="URL",
-                        help="video URL(s); with --from-json: path(s) to .info.json files")
+                        help="video or playlist URL(s) (a playlist archives all its videos); "
+                             "with --from-json: path(s) to .info.json files")
     parser.add_argument("-a", "--batch-file", action="append", default=[], metavar="FILE",
                         help="also read URLs (with --from-json: .info.json paths) from a "
                              "UTF-8 text file, one per line; blank lines and lines starting "
@@ -2039,22 +2129,55 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    saved = skipped = failed = 0
-    for source in args.sources:
+    counts = {"saved": 0, "skipped": 0, "failed": 0}
+
+    def attempt(source: str, action):
+        """Run one step; a failure is reported and counted, the run goes on."""
         try:
-            if archive(source, args):
-                saved += 1
-            else:
-                skipped += 1
+            return action()
         except yt_dlp.utils.DownloadError:
-            failed += 1  # yt-dlp has already printed the reason
-            log(f"FAILED: {source}")
+            log(f"FAILED: {source}")  # yt-dlp has already printed the reason
         except Exception as error:
-            failed += 1
             log(f"FAILED: {source}: {error}")
-    if len(args.sources) > 1:
-        log(f"Done: {saved} saved, {skipped} skipped (page exists), {failed} failed.")
-    return 1 if failed else 0
+        counts["failed"] += 1
+        return None
+
+    def archive_video(source: str):
+        try:
+            result = attempt(source, lambda: archive(source, args) or "skipped")
+        except CommentsInterrupted:
+            counts["saved"] += 1  # the page was made, then the run stops
+            raise
+        if result:
+            counts["skipped" if result == "skipped" else "saved"] += 1
+
+    seen = set()  # video ids handled in this run
+    playlists = 0
+    interrupted = False
+    try:
+        for source in args.sources:
+            if not args.from_json and playlist_id_from_url(source):
+                playlists += 1
+                for url in attempt(source, lambda: playlist_videos(source, args, seen)) or []:
+                    archive_video(url)
+                continue
+            video_id = None if args.from_json else video_id_from_url(source)
+            if video_id in seen:
+                log(f"Ignored duplicate: {source} (already in a playlist above)")
+                continue
+            if video_id:
+                seen.add(video_id)
+            archive_video(source)
+    except KeyboardInterrupt:
+        interrupted = True
+        log("Interrupted (Ctrl+C). Run the same command again to continue: "
+            "videos with a page are skipped.")
+    if sum(counts.values()) > 1 or playlists or interrupted:
+        log(f"Done: {counts['saved']} saved, {counts['skipped']} skipped (page exists), "
+            f"{counts['failed']} failed.")
+    if interrupted:
+        return 130  # the usual exit code after Ctrl+C
+    return 1 if counts["failed"] else 0
 
 
 if __name__ == "__main__":

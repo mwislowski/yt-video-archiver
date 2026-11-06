@@ -4,7 +4,12 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+- Playlists: a playlist URL (`/playlist?list=...`), in the command or in a list file, archives all its videos in playlist order. Videos with a page are skipped, a video in the playlist twice or also given separately is archived once, and a video that fails (e.g. private) does not stop the others.
+
 ### Changed
+- Channel URLs fail with a hint to use a playlist URL instead.
+- `Ctrl+C` stops a run with several videos: the page of the current video is still made from the comments fetched so far, then the summary is shown (before, only the comments of that video were stopped and the run went on with the next video).
 - The channel name next to its avatar is bold, as on YouTube.
 - Comment authors, names in People mentioned and timestamps in chapters and the transcript are semibold; before, they looked like plain text on Windows, whose Segoe UI has no medium weight.
 
