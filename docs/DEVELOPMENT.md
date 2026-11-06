@@ -1,0 +1,235 @@
+# Development notes
+
+How `yt2html` works, where it takes its data from, and how to test and release it. For using the program see [README.md](../README.md); for the history of versions see [CHANGELOG.md](../CHANGELOG.md).
+
+YouTube does not document the page data the program reads. The paths below were checked on real pages (reference videos in the sections and in `tests/test_online.py`); when YouTube changes something, this document says where to look.
+
+## Working on the project
+
+Requirements: [uv](https://docs.astral.sh/uv/) and git.
+
+```powershell
+git clone https://github.com/mwislowski/yt-video-archiver
+cd yt-video-archiver
+uv sync                                   # creates .venv with the project and pytest
+uv run yt2html.py --version               # run from the source folder
+uv run pytest                             # tests
+```
+
+To use the source folder as the `yt2html` command everywhere, install it *editable* (changes to `yt2html.py` work at once):
+
+```powershell
+uv tool install --editable PATH\TO\yt-video-archiver
+```
+
+After a change in `pyproject.toml` (dependencies, command) add `--reinstall`. To update yt-dlp in the project: `uv lock --upgrade-package yt-dlp`, then `uv sync`, and commit the updated `uv.lock`.
+
+`.gitignore` excludes `.venv`, the test cache (`.pytest_cache/`), build output (`build/`, `dist/`), and `*.html`, `*.html.part` and `*.info.json` (pages created when the command is run in the project folder). The repository contains only code, configuration and documentation, never archived pages. Private notes can go into a file excluded by `.gitignore` (e.g. `NOTES.local.md`), keeping in mind that it then has no copy on GitHub.
+
+## Files
+
+| File | Role |
+|---|---|
+| `yt2html.py` | The whole program: fetching (yt-dlp), image embedding, comment tree, HTML rendering, CLI. Holds the version (`__version__`). |
+| `pyproject.toml`, `uv.lock` | Project, dependency (`yt-dlp[default]`) and packaging definition for `uv`: build backend hatchling, the `yt2html` command, version read from `yt2html.py`. |
+| `.python-version` | Python version used by `uv`. |
+| `LICENSE` | MIT License. |
+| `README.md`, `CHANGELOG.md`, `docs/DEVELOPMENT.md` | User guide, history of versions, this document. |
+| `tests/` | Automated tests (pytest): `conftest.py` with synthetic YouTube data and fakes, one file per area, `test_online.py` for checks against real YouTube pages. |
+
+## Version, packaging, releases
+
+- **One source of the version:** `__version__` in `yt2html.py`. `pyproject.toml` has `dynamic = ["version"]` and `[tool.hatch.version] path = "yt2html.py"`, so the package version and `yt2html --version` always agree. `--version` prints it together with the yt-dlp version (most problems come from an outdated yt-dlp).
+- **Versioning:** the second number for new features or visible changes (0.2.0, 0.3.0), the third for fixes (0.2.1). What changed in each version is in [CHANGELOG.md](../CHANGELOG.md).
+- **Command:** `[project.scripts] yt2html = "yt2html:main"`; the wheel contains only `yt2html.py` (`[tool.hatch.build.targets.wheel] only-include`). `main()` returns the exit code, which the generated command passes on.
+- **Release:** run the tests (also `--online`), change `__version__`, move the *Unreleased* entries in `CHANGELOG.md` under the new version with its date (and update the compare links at the bottom), commit, then `git tag -a vX.Y.Z -m "..."`, `git push` and `git push origin vX.Y.Z`. The changelog entries can serve as the GitHub release notes.
+
+## Conventions
+
+- **English everywhere in code:** identifiers, comments, CLI options, program messages, fixed page labels and invisible HTML (classes, ids, meta tags). Only the archived content itself is in its original language.
+- **Configuration in constants at the top of `yt2html.py`** (`DEFAULT_OUTPUT_DIR`, `OUTPUT_TEMPLATE`, `DATE_FORMAT`, `THOUSANDS_SEPARATOR`, `AVATAR_SIZE`, `IMAGE_WORKERS`, ...); per-run choices are CLI options.
+- **One output file, no JavaScript.** Static HTML + CSS; every image is a `data:` URI. The page must work when opened from disk with no network.
+- Program messages are prefixed with `[yt2html]`; yt-dlp prints its own `[youtube]` progress lines.
+- A failure for one URL does not stop the others; the exit code is 1 if anything failed.
+
+## The page, part by part
+
+What a user sees, with the rules behind each part; the sections further down explain where the data comes from.
+
+| Part | Content |
+|---|---|
+| Thumbnail | Best available resolution, embedded in the file. |
+| Title | Links to the original video. |
+| Channel | Name (link), verified mark, subscriber count in YouTube's short form (`1.23M subscribers`). The channel avatar appears only if the uploader commented under the video (it is not part of the video metadata); otherwise a letter placeholder. |
+| Facts | `Duration`, `Published`, `Views`, `Likes`, `Comments` (the count YouTube shows, e.g. `116`, or `1.2K` when YouTube shortens it), and at the end, in grey, `Snapshot`: the date the data was fetched. It is added by the program, not by YouTube, hence the grey colour; `--no-snapshot` leaves it out (the date is still in the footer and in the comments note). Dates are `DD.MM.YYYY`. |
+| Description | Full text (what YouTube hides behind *Show more*), with clickable URLs, timestamps (link to the video at that second), `#hashtags` and `@handles`. |
+| AI-generated video summary | YouTube's summary of the video (on YouTube collapsed under *Summary* below the description), shown expanded: the heading and the text, nothing else. Only when YouTube offers one. |
+| Chapters | The chapters YouTube marks on the progress bar, with a grey note on their origin: `from description` (the author's list in the description) or `auto-generated` (created by YouTube). The note appears only when the program can confirm the origin (see *Chapters and other timestamp lists*); otherwise the heading is just `Chapters`. |
+| Other timestamp lists | E.g. *Walkthroughs* (questions with timestamps, apparently generated by YouTube; not documented by YouTube), under the name YouTube gives them, without an origin note. On YouTube these lists (and chapters) are horizontally scrolling cards; here each is a plain vertical list after the description: timestamp (link to the video at that second), then the title. |
+| People mentioned | YouTube's automatic list of well-known people mentioned in the video (matched from the transcript against Google's Knowledge Graph), after the timestamp lists: heading, number of people, YouTube's explanatory note (normally behind the ⓘ button; its *Learn more* link stays clickable), then a photo of each person with the name and YouTube's short description below it, always shown in full. Photos are embedded and not clickable. Only when YouTube shows the section. |
+| Explore the podcast | The podcast (playlist marked as a podcast by the channel) the video belongs to, under YouTube's heading (e.g. `Explore the podcast`; YouTube uses the same element for courses): square cover and title, both linking to the playlist, the line below the title and the number of episodes. YouTube's large *Podcasts* button is left out. |
+| Transcript | The text YouTube shows after *Show transcript*, already open, after the timestamp lists. With chapters it is split under the chapter titles. Versions, chosen with `--transcript` and shown in the given order: **`plain`** (default): each part (or the whole text without chapters) is one continuous text, captions joined with spaces, no added paragraphs, no timestamps; **`timestamps`**: every caption is its own line starting with its timestamp (a link to the video at that second); **`bilingual:LANG`**: as `timestamps`, plus a second column with YouTube's automatic translation into `LANG` (e.g. `bilingual:pl`), with grey column headings naming both languages; if that translation is not available, the program stops with an error and saves nothing. A grey note gives the language and, for automatic captions, `auto-generated`; when both `plain` and `timestamps` are shown, the timestamped one adds `with timestamps`. |
+| License | Only on videos whose author chose a license other than the standard YouTube one (e.g. *Creative Commons Attribution license (reuse allowed)*), after the transcript: heading `License` and the text as YouTube shows it, with its link kept clickable. The rest of YouTube's *Video details* is not repeated. |
+| Comments | All comments, top level oldest first; each thread with all replies already expanded, also oldest first, indented with a vertical line. Author, relative time as YouTube showed it on the download day (tooltip: estimated date), text with clickable links, likes, *Pinned* and *heart by creator* marks, creator highlighted. Avatars are embedded and not clickable. |
+
+At the bottom: a footer with the source URL and the snapshot date.
+
+Not included: the top bar, the video player, *Video details* (it repeats the data above), recommendations.
+
+## How the data is obtained
+
+`yt_dlp.YoutubeDL(...).extract_info(url, download=False)` with:
+
+- `skip_download`, `noplaylist`, `getcomments`;
+- `ignore_no_formats_error: True` — the video is not downloaded, so missing formats (e.g. when no JavaScript runtime is installed for YouTube's player challenges) must not abort the run;
+- `extractor_args = {"youtube": {"comment_sort": ["new"], "max_comments": [N or "all", "all", "all", "all"]}}`.
+
+Then, in the same `YoutubeDL` instance (same cookies and consent), the watch page is fetched once more with `ydl.urlopen()` for the timestamp lists and the description extras (see below). The program adds keys of its own to the info dict (constants `*_KEY` at the top of `yt2html.py`), all kept by `--save-json`, among them: `yt2html_archived` (ISO date of fetching), `yt2html_marker_lists`, `yt2html_description_extras`, `yt2html_youtube_comment_count` (the comment count text from the comments panel header, `engagementPanels[]` with `panelIdentifier` `engagement-panel-comments-section` → `header.engagementPanelTitleHeaderRenderer.contextualInfo`) and `yt2html_max_comments` (the `--max-comments` value, `null` for no limit).
+
+Why the program reads the comment count itself: when yt-dlp downloads comments, it **replaces** `comment_count` with the number of comments it downloaded (and sets it to `null` after `Ctrl+C`). So with `--max-comments 50` yt-dlp's `comment_count` is 50. `youtube_comment_count()` therefore uses the page's count; without it, yt-dlp's `comment_count` is used only when it can be trusted (comments not downloaded, or downloaded completely without a limit).
+
+Used fields: `id`, `title`, `webpage_url`, `uploader`, `uploader_url`, `channel_is_verified`, `channel_follower_count`, `view_count`, `like_count`, `comment_count`, `duration`, `release_timestamp` / `timestamp` / `upload_date`, `thumbnail`, `thumbnails`, `description`, `chapters` (fallback only), `comments`.
+
+Each comment: `id`, `parent` (`"root"` or the parent's id), `text`, `author`, `author_url`, `author_thumbnail`, `author_is_uploader`, `author_is_verified`, `like_count`, `is_pinned`, `is_favorited`, `timestamp`, `_time_text`.
+
+## Comment order
+
+- yt-dlp emits comments depth-first: a top-level comment, then its replies, then the next top-level comment.
+- With `comment_sort=new` the top level comes **newest first** in YouTube's exact order; the program reverses it. The pinned comment arrives first regardless of its age.
+- Replies come in YouTube's thread order, which is oldest first.
+- YouTube gives only relative times (`2 years ago`), so `timestamp` is a coarse estimate. `chronological()` does a **stable** sort by it: the exact order from YouTube is kept within equal estimates, and only items whose estimate clearly disagrees (the pinned comment) move. Missing timestamps inherit the previous item's value.
+- Comments whose parent is missing are shown at the top level. Deeper nesting (if YouTube ever returns it) is rendered recursively.
+
+## Description extras (AI-generated video summary, People mentioned, Explore the podcast)
+
+YouTube shows extra elements below the description text. They are the `items` of the engagement panel `engagement-panel-structured-description` (`content.structuredDescriptionContentRenderer.items`), in display order, e.g. (reference video `Z8lf5oWKfj0`): `expandableVideoDescriptionBodyRenderer` (the description itself), `expandableMetadataRenderer` (the summary), `howThisWasMadeSectionViewModel` (*How this was made*), `horizontalCardListRenderer` (the chapter cards), `videoDescriptionCourseSectionRenderer`, `videoDescriptionTranscriptSectionRenderer`, `videoDescriptionInfocardsSectionRenderer`.
+
+`parse_description_extras()` reads these items, keeping YouTube's order, into `info["yt2html_description_extras"]` (`None` if the extra request failed, `[]` if there are none):
+
+| `type` | Source item | Stored | Rendered |
+|---|---|---|---|
+| `video_summary` | `expandableMetadataRenderer` whose `expandedContent` is a `videoSummaryContentViewModel` | `title` (`header.expandedTitle`, `AI-generated video summary`), `paragraphs` (`paragraphs[].videoSummaryParagraphViewModel.text.content`). The collapsed teaser, the disclaimer subtitle and the feedback button are left out. | Before the chapters: `<section class="desc-extra video-summary">`, one `<p>` per paragraph (with `linkify()`). |
+| `people` | `videoAttributesSectionViewModel` (`parse_people_section()`) | `title` (`headerTitle`, `People mentioned`), `subtitle` (`headerSubtitle`, `2 people`), `info` (the text of the ⓘ dialog: `headerInfoButton…dialogViewModel.content.basicContentViewModel.paragraphs[0].text`), `people[]`: `name` (`videoAttributeViewModel.title`), `description` (`subtitle`), `image` (`image.sources`, the smallest ≥ 240 px). | After the chapters: `<section class="desc-extra people">`; cards `.person` 150 px wide with photo, name and the full description (`.about`, wrapped, never cut). |
+| `playlists` | `videoDescriptionCourseSectionRenderer` (`parse_playlist_section()`), items `mediaLockups[].structuredDescriptionPlaylistLockupRenderer` | `title` (`sectionTitle`, `Explore the podcast`), `items[]`: `title`, `url` (`navigationEndpoint.browseEndpoint.browseId` without the leading `VL` → `/playlist?list=…`), `byline` (`shortBylineText`), `count` (`videoCountShortText`, `557 episodes`), `image` (`thumbnail.thumbnails`, ≥ 240 px). `topicLink` (the *Podcasts* button) is left out. | After *People mentioned*: `<section class="desc-extra playlists">`, cover 120 px with the details aligned to its top; the podcast title is bold 14 px under the 16 px section heading (the same step as chapter headings in the transcript); cover and title link to the playlist. |
+
+Attributed text (`attributed_text()`, `render_attributed()`): YouTube text with `commandRuns`. Only runs that open a web address (`innertubeCommand.urlEndpoint.url`) become links; others, such as *send feedback* (`userFeedbackEndpoint`, which runs YouTube's own script), stay plain text. `startIndex`/`length` count UTF-16 code units (as in JavaScript), so the text is sliced in UTF-16.
+
+Images of the extras are collected by `extra_image_urls()` and embedded by `fetch_images()` (in parallel, unchanged size). A missing image becomes a grey box with the first letter (`.img-placeholder`).
+
+CSS class names must not clash with existing ones: `description` (the description box) and `extra` (the grey Snapshot tile) are taken; hence `desc-extra`, `.about`, `.img-placeholder`.
+
+Seen on reference video `9uSXOr-AdAU` (People mentioned + Explore the podcast) and `Z8lf5oWKfj0` (Explore the podcast). According to YouTube Help, *People mentioned* is generated automatically and being extended to more videos; *Explore the podcast* appears for videos in a playlist marked as a podcast in YouTube Studio.
+
+## License
+
+- On YouTube the license is a row of the video's metadata (`videoSecondaryInfoRenderer.metadataRowContainer.metadataRowContainerRenderer.rows[].metadataRowRenderer` with `title` `License`), not part of the expanded description's *Video details* list. It exists only for non-standard licenses. Reference video `KZtvWKpXPro`: `Creative Commons Attribution license (reuse allowed)` → `https://www.youtube.com/t/creative_commons`.
+- `parse_license()` keeps the text runs and their web links (`navigationEndpoint.urlEndpoint.url`; YouTube `/redirect?q=` links are unwrapped by `unwrap_redirect()`). Stored in `info["yt2html_license"]` as `{title, runs: [{text, url}]}`, `None` when the video has none.
+- `license_of()`: if the watch page could not be read (or for an older JSON file), yt-dlp's plain-text `license` field is used instead, without the link.
+- Rendered after the transcript, before the comments, as `<section class="desc-extra license">`.
+
+## Chapters and other timestamp lists
+
+Everything is read from `ytInitialData` of the watch page, downloaded once more by `add_watch_page_data()` (`/watch?v=ID&hl=en`), which also reads the description extras above; the JSON after `ytInitialData =` is parsed with `json.JSONDecoder().raw_decode()`, which stops exactly at the end of the object. yt-dlp is not used for this: it keeps only one list as `chapters`, without its name or origin, and when the progress bar has no chapters it takes the first panel, which can be *Walkthroughs*.
+
+Two places in `ytInitialData` hold timestamp lists:
+
+| Place | Path | What it says |
+|---|---|---|
+| Progress bar | `playerOverlays.playerOverlayRenderer.decoratedPlayerBarRenderer.decoratedPlayerBarRenderer.playerBar.multiMarkersPlayerBarRenderer.markersMap[]` | `key` = `DESCRIPTION_CHAPTERS` or `AUTO_CHAPTERS`; `value.chapters[].chapterRenderer` with `title` and `timeRangeStartMillis`. The older `chapteredPlayerBarRenderer.chapters` (no key) is read too. |
+| Engagement panels | `engagementPanels[].engagementPanelSectionListRenderer` with `content.macroMarkersListRenderer` | `panelIdentifier` and header title; items `macroMarkersListItemRenderer` with `title`, `timeDescription` and `onTap.watchEndpoint.startTimeSeconds`. Info rows (`macroMarkersInfoItemRenderer`, e.g. "These chapters are auto-generated") are skipped. |
+
+Panel identifiers seen so far (04.11.2026): `engagement-panel-macro-markers-description-chapters`, `engagement-panel-macro-markers-auto-chapters` (both titled `Chapters`) and `engagement-panel-macro-markers-problem-walkthroughs` (`Walkthroughs`; the progress bar has no markers for it). Reference videos: `Z8lf5oWKfj0` (description chapters), `qyqCTMirNWg` (auto chapters), `hz6-3-7GGyI` (Walkthroughs only).
+
+`parse_marker_lists()` builds the lists:
+
+- **Chapters** (panels whose id contains `chapters`, plus the progress bar): the progress bar defines the chapters and their times (a chapter panel is used only when the bar has none); the panel gives the heading. Shown first, as one list.
+- **Origin** (`decide_chapter_source()`): YouTube's own markings (progress-bar key and panel id) are combined with an independent check of the description (`description_chapter_starts()`: the run of consecutive timestamped lines beginning with the first `0:00` line, at least three, ascending, each chapter at least 10 s — YouTube's rules).
+  - YouTube says *description* and the description has a valid list with the same start times → `description`.
+  - YouTube says *auto* and the description has no valid list → `auto`.
+  - Anything else — markings that disagree with each other or with the description, or an unknown key/panel id → `uncertain`: neutral heading, warning `Chapter source unclear: ...` on screen, the reason kept in `source_problem`. The program never guesses an origin.
+- **Other panels** (e.g. Walkthroughs): as they are, `source: null`, in page order after the chapters.
+
+Stored in `info["yt2html_marker_lists"]` as `[{id, title, source, source_problem?, items: [{start_time, time_text, title}]}]`. `None` means the extra request failed: the page then falls back to yt-dlp's `chapters` under a neutral `Chapters` heading (it may even be a Walkthroughs list). An empty list means the video has none.
+
+Rendered after the description as `<section class="markers">` with an `<ol>`, one row per item; the origin note is `<span class="source">` (grey) in the heading, using the labels in `SOURCE_NOTES`.
+
+## Transcript
+
+- YouTube's own transcript panel loads its text from `/youtubei/v1/get_transcript` (parameters in `engagement-panel-searchable-transcript`). Checked on 05.11.2026: a request built outside the browser is refused (`400 Precondition check failed`); the browser sends extra integrity data that only YouTube's own JavaScript produces. So the program does not use it.
+- The panel shows the text of a caption track, so `fetch_transcript()` downloads that track instead, from the URLs yt-dlp has already extracted (`info["subtitles"]`, `info["automatic_captions"]`; yt-dlp also deals with tokens YouTube may require for captions). Format `json3`, read with `ydl.urlopen()`.
+- Track choice: the panel opens with the caption track of the **original audio**, which matters for auto-dubbed videos. They have one audio track per dubbed language and automatic captions for each of them, and yt-dlp marks every one of those with `-orig` (reference video `Z8lf5oWKfj0`: English original, 20 dubs; taking the first `-orig` track gave Arabic).
+  - `default_caption_track()` reads `ytInitialPlayerResponse` from the watch page: `captions.playerCaptionsTracklistRenderer.audioTracks[defaultAudioTrackIndex]` is the original audio; its `defaultCaptionTrackIndex` points into `captionTracks` (language and `kind: "asr"` for automatic captions). Without that index, the language of the audio stream whose `audioTrack.displayName` contains `original` (e.g. `English (US) original`, id `en-US.4`) is used, else the audio track's id, else its first caption track. Stored as `info["yt2html_default_caption_track"]` = `{language, kind: "asr" | "manual" | null}`.
+  - `choose_caption_track()` then picks from yt-dlp's tracks in that language: automatic captions first if the page says `asr`, otherwise author subtitles first (`en`, `en-US`, ...), then automatic captions (`<lang>-orig`, `<lang>`). Without page data the original language comes from yt-dlp's formats (`language_preference` 10 = original), then `info["language"]`, then a single `-orig` track; with none of these, any author subtitles. `live_chat` is ignored; translated tracks are never used.
+- `parse_json3_captions()`: one cue per json3 event with `segs`; the `utf8` pieces are joined, line breaks and repeated spaces become single spaces; events holding only a line break (automatic captions add them) are skipped. Cue start = `tStartMs` / 1000.
+- Stored in `info["yt2html_transcript"]` as `{language, name, kind: "manual" | "auto", cues: [{start, text}], translations?: {LANG: {language, name, cues}}}`; `None` if the video has no transcript or the download failed; absent with `--transcript none`. The cues are kept, so `--from-json` can rebuild the page with any versions (`--transcript none` there leaves a saved transcript out; a `bilingual:LANG` needs that translation in the file).
+- Bilingual (`bilingual:LANG`): `fetch_translation()` downloads the same caption track with `tlang=LANG` added (`with_query()`), i.e. YouTube's auto-translate, which keeps the original timing; several languages are downloaded one after another. The languages YouTube offers are read from the watch page (`ytInitialPlayerResponse` → `captions.playerCaptionsTracklistRenderer.translationLanguages`) into `info["yt2html_translation_languages"]` (`{code: name}`). YouTube answers `HTTP 429 Too Many Requests` to auto-translated captions requested less than about a minute after the video data was fetched; original captions and author subtitles are not affected (yt-dlp issue #13831, where a maintainer confirmed that waiting at least 60 s works). So translations are requested no sooner than `TRANSLATION_WAIT` (65 s) after fetching started (comments downloaded meanwhile count towards it), and a 429 is retried after `TRANSLATION_RETRY_WAITS` (60 s, then 120 s). Errors (`TranscriptError`, raised during fetching, so nothing is written, not even `--save-json`): no transcript, a language not offered (the message lists the available codes), a language equal to the transcript's own, an empty or failed download. `align_translation()` gives each original cue the translated cues starting at the same time (or before the next original cue); `render_bilingual_transcript()` draws rows as a 3-column CSS grid (time, original, translation; on narrow screens the translation goes under the original, in grey).
+- Option: `--transcript VERSIONS`, one comma-separated argument (so it cannot swallow the video URL, unlike space-separated values), parsed by `transcript_spec()` into an ordered list of `(version, language)` pairs: `plain`, `timestamps`, `bilingual:LANG`; `none` gives `[]`; default `[("plain", None)]`. Errors (argparse, before anything is fetched): empty item, unknown version, `bilingual` without a valid language code, a language after `plain`/`timestamps`, a repeated item, `none` combined with anything. `render_transcripts()` makes one section per item, in order (`render_transcript()`, class `transcript` or `transcript with-timestamps`; `render_bilingual_transcript()`, class `transcript bilingual`).
+- `render_transcript()` puts each cue under the last chapter that starts at or before it (chapters from the chapter list described above; `<h3>` per chapter, empty chapters skipped). Without timestamps one `<p>` per part; with timestamps `<div class="cue">` rows.
+- The cues are the caption lines, which is also how the panel divides the text; tiny differences to the panel are possible.
+
+## Images
+
+- `fetch_image()` downloads with `urllib` (browser User-Agent, timeout, retries) and returns a `data:` URI; the MIME type comes from the response header or is sniffed from the bytes.
+- Avatars are requested small: `=s88-...` in the URL is replaced by `=s{AVATAR_SIZE}`. They are downloaded in parallel (`ThreadPoolExecutor`).
+- Each avatar is embedded **once** as a CSS class (`.av12{background-image:url(data:...)}`) and referenced by every comment of that author. The `<style>` in `<head>` is generated after the body, when all classes are known.
+- A failed or missing avatar becomes a coloured circle with the first letter of the name (hue from a CRC32 of the name, so it is stable).
+- The thumbnail falls back through `thumbnails` from best to worst if `thumbnail` fails.
+
+## Text to HTML
+
+`linkify()` escapes everything and recognises, in one regex pass: URLs (`http(s)://...`, `www....`; trailing punctuation and unbalanced `)`/`]` are cut off), timestamps `M:SS` / `H:MM:SS` (only valid values not longer than the video), `#hashtags` (not purely numeric), `@handles` (not inside e-mail addresses). Newlines are kept via `white-space: pre-wrap`.
+
+## Theme
+
+- All colours are CSS variables on `:root` (`--bg`, `--text`, `--muted`, `--panel`, `--line`, `--link`, `--chip`, `--media-bg`); the dark values are in `CSS`, the light ones (YouTube's light theme) in `LIGHT_VARIABLES`. New styles must use these variables, not fixed colours, or they break one of the themes. Exceptions that work on both: the red heart, the white letter on the coloured avatar circles.
+- `theme_css()` adds, after `CSS`: nothing for `dark`; `:root{light variables}` for `light`; the same inside `@media (prefers-color-scheme: light)` for `auto`, so the page follows the device setting and changes with it, without JavaScript. `color-scheme` (CSS property and `<meta name="color-scheme">`) makes the browser draw scrollbars and the like in the matching colours.
+- `--theme {auto,dark,light}`, default `auto`: the page itself follows the light/dark setting of whatever device or browser opens it, each time it is opened (in most browsers "device" means the system setting unless the browser's own appearance setting overrides it). Works with `--from-json` too (the theme is not stored in the data).
+
+## Snapshot date
+
+`render_page()` receives the date from `info["yt2html_archived"]` (today for older JSON files without it), so a page rebuilt with `--from-json` keeps the date of the original fetch. The `Snapshot` tile uses the class `fact extra` (grey value); `show_snapshot=False` (`--no-snapshot`) omits it. The footer and the comments note always show the date.
+
+## File names
+
+`ydl.prepare_filename({**info, "ext": "html"}, outtmpl=OUTPUT_TEMPLATE)` — yt-dlp's own sanitizer, so characters forbidden on Windows are replaced exactly as in the video file name (e.g. `:` → `：`).
+
+## Existing pages, `--overwrite`
+
+- A video counts as archived when the output folder (not its subfolders) holds a file whose name ends with `[VIDEO_ID].html` (`existing_page()`); the rest of the name does not matter, so pages may be renamed.
+- The id is read from the URL without any request (`video_id_from_url()`: yt-dlp's `YoutubeIE.suitable()` / `extract_id()` for `watch?v=`, `youtu.be/`, `shorts/` and bare ids; the `v=` parameter for watch URLs with `&list=`, which yt-dlp gives to its playlist extractor). So a skipped video costs nothing. If the URL shows no id, the check is repeated after fetching, with `info["id"]`.
+- Default: skip (`Skipped (page exists): ...`), and `archive()` returns `None`; `main()` counts saved, skipped and failed. `--overwrite` makes the page again; `--from-json` always does (no requests, and re-rendering is its purpose). A replaced page keeps its existing (possibly renamed) file name.
+- Pages are written by `write_atomically()`: first `NAME.html.part`, then renamed (`os.replace`). An interrupted run leaves at most a `.part` file, which never counts as a finished page; a video that failed has no page and is tried again on the next run.
+
+## Testing
+
+**Run the tests after every change**, in the project folder:
+
+```powershell
+uv run pytest
+```
+
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `129 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+
+**What is covered (offline):**
+
+| File | Area |
+|---|---|
+| `test_formatting.py` | numbers (`1.23M`), durations, dates, file names, `linkify()` (URLs, timestamps, hashtags, handles, e-mails, HTML escaping) |
+| `test_comments.py` | comment order (oldest first, pinned, equal estimated times, nested replies), avatars embedded once, the comments note, `No comments.` rules |
+| `test_chapters.py` | description chapter check, chapter origin (description / auto / uncertain), Walkthroughs, fallback to yt-dlp chapters |
+| `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables |
+| `test_transcript.py` | choosing the caption track (incl. auto-dubbed videos), json3 captions, translations (alignment, HTTP 429 retries, errors), `--transcript` parsing and rendering |
+| `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
+| `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes |
+
+The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.
+
+**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast and the original-language transcript of an auto-dubbed video (`Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`):
+
+```powershell
+uv run pytest --online -m online
+```
+
+They take a minute or two. Run them now and then, and whenever real pages look wrong: a failure usually means YouTube changed its page data or yt-dlp needs an update. If a reference video disappears or changes, replace it in `test_online.py`.
+
+**When changing the program:** add a test for each new feature or fixed bug (usually a new builder in `conftest.py` with data copied from the real page, then a test of the parser and of the rendered page). `--from-json` with a file saved by `--save-json` remains handy for checking the look of a page in a browser.
