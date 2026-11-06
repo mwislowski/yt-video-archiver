@@ -44,23 +44,50 @@ yt2html "https://www.youtube.com/watch?v=..."
 
 The page is saved in the current folder (e.g. the folder with your downloaded videos); `-o FOLDER` saves it elsewhere. Always put the URL in quotes: in PowerShell `&` in a URL would otherwise be treated as an operator.
 
+Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa`) or the name of a page or index made by yt2html, with or without `.html`: `"My title [Z8lf5oWKfj0].html"` stands for that video, `"Python course [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa]"` for that playlist. Handy with `--overwrite` and `--index-only`. This also works in list files.
+
+**What to archive**
+
 | Task | Command |
 |---|---|
+| One video | `yt2html "URL"` |
 | Several videos at once | `yt2html "URL1" "URL2" "URL3"` |
 | All videos of a playlist (see below) | `yt2html "https://www.youtube.com/playlist?list=..."` |
 | Videos listed in a text file (see below) | `yt2html -a list.txt` |
 | Save into another folder | `yt2html "URL" -o "D:\Videos\Channel"` |
-| Make a page again although the video already has one (e.g. for newer comments) | `yt2html "URL" --overwrite` |
+| Make a page again although the video already has one (e.g. for newer comments); also works for a whole playlist or list | `yt2html "URL" --overwrite` |
+| When YouTube asks to sign in or to confirm you are not a bot | `yt2html "URL" --cookies-from-browser firefox` |
+
+**Index page** (see below)
+
+| Task | Command |
+|---|---|
+| Archive a playlist and make its index | `yt2html "PLAYLIST URL" --index` |
+| Archive a list file and make its index | `yt2html -a list.txt --index` |
+| Only rebuild the index, e.g. after renaming pages (no download) | `yt2html "Index name [PLAYLIST_ID].html" --index-only` / `yt2html -a list.txt --index-only` |
+| Make all pages of a playlist again, with the index | `yt2html "PLAYLIST URL" --overwrite --index` |
+
+**What the page contains and how it looks**
+
+| Task | Command |
+|---|---|
 | Without comments | `yt2html "URL" --no-comments` |
 | Only the first N comments (quick test) | `yt2html "URL" --max-comments 200` |
+| Transcript versions (see below) | `yt2html "URL" --transcript plain,timestamps` |
 | Without avatars (smaller file) | `yt2html "URL" --no-avatars` |
 | Without the grey Snapshot date tile | `yt2html "URL" --no-snapshot` |
 | Page always dark / always light (default: follows the device) | `yt2html "URL" --theme dark` / `--theme light` |
-| When YouTube asks to sign in or to confirm you are not a bot | `yt2html "URL" --cookies-from-browser firefox` |
+
+**Other**
+
+| Task | Command |
+|---|---|
 | Also keep the raw data | `yt2html "URL" --save-json` |
 | Rebuild a page from saved data (no download; keeps the snapshot date) | `yt2html --from-json "Title [id].info.json"` |
 | Versions of the program and yt-dlp | `yt2html --version` |
 | All options | `yt2html --help` |
+
+Options can be combined, e.g. `yt2html -a list.txt -o "D:\Videos" --max-comments 500 --index`.
 
 ### Transcript versions
 
@@ -89,8 +116,41 @@ https://youtu.be/qyqCTMirNWg
 
 **Playlists:** a playlist URL (`https://www.youtube.com/playlist?list=...`), in the command or in a list file, archives all videos of the playlist in its order, e.g. all episodes of a podcast. A link to a video opened from a playlist (`watch?v=...&list=...`) archives only that video. Channel URLs (`@name`) are not supported: open the channel's playlist and use its URL.
 
-
 **Videos that already have a page are skipped**, so running the same command again only archives what is missing, and an interrupted run continues where it stopped. A page is recognised by the video id in square brackets at the end of its name, e.g. `[Z8lf5oWKfj0].html`: you may rename pages freely (`042 My title [Z8lf5oWKfj0].html`) as long as that part stays. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--from-json` always replaces the page.
+
+### Index page
+
+With `--index`, a playlist URL and a list file each also get an **index page** in the output folder, in the same style and colours as the video pages:
+
+- a playlist: `Playlist title [playlist id].html`, e.g. `Python course [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html`;
+- a list file: its name with `.html`, e.g. `list.html` for `list.txt`. Playlists in the file appear as sections with their own heading.
+
+Single URLs given in the command get no index.
+
+For each video the index shows its position, its original title linking to its page, the date the page was made, a link to the video on YouTube, and below the title a small line about the comments:
+
+| Line | Meaning |
+|---|---|
+| `523 comments · complete (YouTube: 530)` | all comments were downloaded; YouTube's own count is usually a bit higher (deleted or hidden comments) |
+| `200 of 1 204 comments · limited` | the download was limited (`--max-comments`) |
+| `312 of 318 comments · interrupted` | the download was stopped with `Ctrl+C` |
+| `Comments not downloaded` | made with `--no-comments` |
+| `Comments turned off` | the author has turned comments off |
+
+Videos without a page have a grey title without a link, and instead of the date the reason (hover over *Failed* to see YouTube's message):
+
+| Reason | Meaning |
+|---|---|
+| `Unavailable` | YouTube marks the video as private or deleted |
+| `Failed` | the last attempt to archive it failed, e.g. `Sign in to confirm your age` (then try `--cookies-from-browser firefox`) |
+| `Not archived yet` | not tried yet, e.g. because the run was stopped with `Ctrl+C`, or its page was deleted |
+| `Not a video` | only in a list file: a line with a channel or an unknown URL |
+
+Good to know about the index:
+
+- **It always shows the current state of the folder.** It is made at the end of the run, also after `Ctrl+C` (then it lists the whole playlist, with the videos not reached yet in grey). If the program was stopped in any other way, the next run makes it again. Nothing about earlier runs is stored elsewhere: the index itself remembers the list and the reasons, and a reason stays until the video is tried again.
+- **Renaming is safe.** Pages are found by `[video id].html` at the end of their names, so after renaming them the index links to the new names and still shows the original titles. The index of a playlist is found by `[playlist id].html` and may be renamed the same way; the index of a list file must keep its name.
+- **`--index-only` downloads nothing.** It only rebuilds the index from the pages in the folder, e.g. after renaming or deleting pages. It uses the list kept in the earlier index; only if there is none yet, it reads the playlist's list from YouTube (one request, no video). New videos added to the playlist on YouTube appear only after a normal run with `--index`.
 
 ## Good to know
 

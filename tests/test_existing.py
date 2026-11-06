@@ -162,3 +162,41 @@ def test_interrupted_write_leaves_no_page(tmp_path, monkeypatch):
         yt2html.write_atomically(target, "<html>")
     assert not target.exists()
     assert yt2html.existing_page(tmp_path, "TESTVIDEO01") is None
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Title [Z8lf5oWKfj0].html", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
+    ("042 My: own name [Z8lf5oWKfj0]", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
+    (r"D:\Videos\Title [hz6-3-7GGyI].HTML", "https://www.youtube.com/watch?v=hz6-3-7GGyI"),
+    ("Python nauka [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa]",
+     "https://www.youtube.com/playlist?list=PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa"),
+    ("Python nauka [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html",
+     "https://www.youtube.com/playlist?list=PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa"),
+    ("Notes [draft].html", "Notes [draft].html"),                     # not an id
+    ("Title [Z8lf5oWKfj0].info.json", "Title [Z8lf5oWKfj0].info.json"),
+    ("https://example.test/x [Z8lf5oWKfj0]", "https://example.test/x [Z8lf5oWKfj0]"),
+    ("https://www.youtube.com/watch?v=Z8lf5oWKfj0", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
+])
+def test_source_from_page_name(text, expected):
+    assert yt2html.source_from_page_name(text) == expected
+
+
+def test_page_name_in_the_command_and_in_a_list_file(tmp_path):
+    batch = tmp_path / "list.txt"
+    batch.write_text("Other [TESTVIDEO02].html\n", encoding="utf-8")
+    args = yt2html.parse_args(["My page [TESTVIDEO01].html", "-a", str(batch)])
+    assert args.sources == ["https://www.youtube.com/watch?v=TESTVIDEO01",
+                            "https://www.youtube.com/watch?v=TESTVIDEO02"]
+
+
+def test_page_name_is_not_changed_with_from_json():
+    args = yt2html.parse_args(["--from-json", "Title [TESTVIDEO01].html"])
+    assert args.sources == ["Title [TESTVIDEO01].html"]
+
+
+def test_overwrite_a_page_given_by_its_name(capsys, tmp_path, fake_fetch):
+    page = tmp_path / "Renamed [TESTVIDEO01].html"
+    page.write_text("old")
+    assert yt2html.main([page.name, "-o", str(tmp_path), "--overwrite"]) == 0
+    assert fake_fetch == ["https://www.youtube.com/watch?v=TESTVIDEO01"]
+    assert page.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")

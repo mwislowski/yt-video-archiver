@@ -201,6 +201,10 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 - Default: skip (`Skipped (page exists): ...`), and `archive()` returns `None`; `main()` counts saved, skipped and failed. `--overwrite` makes the page again; `--from-json` always does (no requests, and re-rendering is its purpose). A replaced page keeps its existing (possibly renamed) file name.
 - Pages are written by `write_atomically()`: first `NAME.html.part`, then renamed (`os.replace`). An interrupted run leaves at most a `.part` file, which never counts as a finished page; a video that failed has no page and is tried again on the next run.
 
+## Sources given by page names
+
+`source_from_page_name()` turns a text ending with `[ID]` or `[ID].html` (any case, optionally with a folder; not a URL) into the watch URL for an 11-character video id or the playlist URL for a playlist id (`playlist_id_from_url()`); anything else stays as it is, e.g. `Title [ID].info.json`. `collect_sources()` applies it to the command line and to list files before removing duplicates, except with `--from-json`, whose sources are file paths.
+
 ## Batch files (`-a`)
 
 - `read_batch_file()` reads the file as UTF-8 (`utf-8-sig`, so a byte order mark from a Windows editor does no harm), strips each line and drops blank lines and lines starting with `#`. A file that cannot be read, is not UTF-8 or lists nothing is an error.
@@ -218,6 +222,22 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 **Ctrl+C.** yt-dlp catches `Ctrl+C` while it downloads comments: it ends only the comments, keeps those fetched so far and sets `comment_count` to `None` (`comments_interrupted()`; with comments disabled there is no list). `archive()` still makes the page and then raises `CommentsInterrupted` (a `KeyboardInterrupt`), so a run with several videos does not go on with the next one. `main()` catches any `KeyboardInterrupt` between and during videos, prints the summary without a traceback and returns 130. The page made from interrupted comments counts as finished on later runs (`--overwrite` remakes it).
 
+## Page metadata and the index (`--index`, `--index-only`)
+
+**Metadata.** Every video page has invisible `<meta name="yt2html:...">` tags in its `<head>`, before the large `<style>` (`page_metadata()`): `video-id`, `title` (the original title), `archived` (ISO date), `comments-status`, `comments-downloaded`, `comments-youtube` (the text of the Comments tile). `comment_status()`: `not-downloaded` (no `comments` key: `--no-comments`), `turned-off` (`comments` is `None`), `interrupted` (`comments_interrupted()`), `limited` (`--max-comments` reached while YouTube shows more), otherwise `complete`. A failed comment download fails the whole video, so it never produces a page. `read_page_metadata()` reads only the first 16 KB of a page.
+
+**Building an index.** `write_indexes()` runs at the end of `main()` (also after `Ctrl+C`; with `--index-only` instead of archiving) for each playlist URL given in the command and each `-a` file (`args.command_sources`, `args.batch_lines`, kept by `collect_sources()`). Nothing is taken from a log; an index is built from:
+
+- the list: a playlist's flat entries read in this run (`Run.playlists`, filled by `read_playlist()`), else the list kept in the earlier index; for a list file its lines (`list_file_sections()`: one section per playlist line, one per run of other lines; a video listed twice appears once);
+- the pages in the output folder, found by `existing_page()`, and their metadata (title, date, comments);
+- `Run.attempted` and `Run.failures` (video id → `failure_reason()`, e.g. `Sign in to confirm your age`).
+
+`entry_status()`: `archived` (a page exists), `not-a-video` (no video id), `unavailable` (playlist entry titled `[Private video]` / `[Deleted video]` or `availability: private`), `failed` (failed in this run), else the earlier index's `failed`/`unavailable` with its reason if the video was not tried in this run (`with_earlier_status()` merges them into freshly read lists), else `pending` (`Not archived yet`).
+
+**Keeping the list.** The index stores what `--index-only` needs as `data-*` attributes (no JavaScript): `<section data-section data-playlist-id data-title data-url data-fetched data-unread>` and `<tr data-id data-url data-title data-status data-reason>`. `read_index()` (an `html.parser.HTMLParser`) reads them back. With `--index-only` a playlist without an earlier index is read with `fetch_playlist()` (only the list); an unreadable playlist in a list file becomes a section marked `not read yet`.
+
+**Page.** `render_index()`: `<main class="page index">` (max. 960 px), title (playlist title linking to YouTube, or the list file's name), grey `N of M videos archived · Updated DATE`, one `<table class="index-table">` per section without visible lines: position (playlist rows by position in the playlist, other rows numbered across the list file), title (link `urllib.parse.quote(page.name)`, so `#`, spaces and Unicode work; grey without a page) with the comments line (`comments_summary()`), date or grey reason (`title` attribute with the failure message), YouTube link. Same CSS and themes as video pages. File names: playlist `output_path({"title", "id": PLAYLIST_ID})`, i.e. `Title [PLAYLIST_ID].html`, or the existing file ending with `[PLAYLIST_ID].html`; list file `STEM.html`. Written atomically.
+
 ## Testing
 
 **Run the tests after every change**, in the project folder:
@@ -226,7 +246,7 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 uv run pytest
 ```
 
-The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `179 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `227 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
 
 **What is covered (offline):**
 
@@ -240,6 +260,7 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 | `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
 | `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes, channel URLs rejected without fetching |
 | `test_playlist.py` | playlist and channel URLs, expanding in order, duplicates (in a playlist, across playlists, separate URLs), skipping and rerunning, failed videos and playlists, `Ctrl+C` stopping the run, empty playlists, playlists in batch files, `fetch_playlist()` reading only the list |
+| `test_index.py` | page metadata and comment status, comments line, playlist and list file indexes (renamed pages and index, original titles, reasons and their survival, `Ctrl+C`, numbering, unreadable playlists), `--index-only` without downloads, option errors |
 | `test_batch.py` | `-a` files: comments, blank lines, byte order mark, order, duplicates in other URL forms, unusable files stop before fetching, bad lines fail alone, rerunning a list, the file is not changed, `--from-json` paths |
 
 The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.
