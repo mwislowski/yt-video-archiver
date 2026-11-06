@@ -13,6 +13,7 @@ wheels/
 # Generated pages and metadata (never commit). Pages are saved in the folder
 # the command is run in, so running it in the project folder puts them here.
 *.html
+*.html.part
 *.info.json
 
 # Old default output folder (kept locally for tests)

@@ -45,7 +45,7 @@ Not included: the top bar, the video player, the transcript, *Video details* (it
 ### Version, packaging, releases
 
 - **One source of the version:** `__version__` in `yt2html.py`. `pyproject.toml` has `dynamic = ["version"]` and `[tool.hatch.version] path = "yt2html.py"`, so the package version and `yt2html --version` always agree. `--version` prints it together with the yt-dlp version (most problems come from an outdated yt-dlp).
-- **Versioning:** the second number for new features or visible changes (0.2.0, 0.3.0), the third for fixes (0.2.1). 0.1.0: first release; 0.2.0: `--version`, installation as a command, pages saved in the current folder by default.
+- **Versioning:** the second number for new features or visible changes (0.2.0, 0.3.0), the third for fixes (0.2.1). 0.1.0: first release; 0.2.0: `--version`, installation as a command, pages saved in the current folder by default. 0.3.0: videos that already have a page are skipped (`--overwrite` to make it again), pages written atomically.
 - **Command:** `[project.scripts] yt2html = "yt2html:main"`; the wheel contains only `yt2html.py` (`[tool.hatch.build.targets.wheel] only-include`). `main()` returns the exit code, which the generated command passes on.
 - **Release:** change `__version__`, update this list, commit, then `git tag -a vX.Y.Z -m "..."` and `git push origin vX.Y.Z`.
 
@@ -174,6 +174,13 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 `ydl.prepare_filename({**info, "ext": "html"}, outtmpl=OUTPUT_TEMPLATE)` — yt-dlp's own sanitizer, so characters forbidden on Windows are replaced exactly as in the video file name (e.g. `:` → `：`).
 
+### Existing pages, `--overwrite`
+
+- A video counts as archived when the output folder (not its subfolders) holds a file whose name ends with `[VIDEO_ID].html` (`existing_page()`); the rest of the name does not matter, so pages may be renamed.
+- The id is read from the URL without any request (`video_id_from_url()`: yt-dlp's `YoutubeIE.suitable()` / `extract_id()` for `watch?v=`, `youtu.be/`, `shorts/` and bare ids; the `v=` parameter for watch URLs with `&list=`, which yt-dlp gives to its playlist extractor). So a skipped video costs nothing. If the URL shows no id, the check is repeated after fetching, with `info["id"]`.
+- Default: skip (`Skipped (page exists): ...`), and `archive()` returns `None`; `main()` counts saved, skipped and failed. `--overwrite` makes the page again; `--from-json` always does (no requests, and re-rendering is its purpose). A replaced page keeps its existing (possibly renamed) file name.
+- Pages are written by `write_atomically()`: first `NAME.html.part`, then renamed (`os.replace`). An interrupted run leaves at most a `.part` file, which never counts as a finished page; a video that failed has no page and is tried again on the next run.
+
 ### Testing
 
 **Run the tests after every change**, in the project folder:
@@ -262,11 +269,14 @@ The examples use the installed command `yt2html`. Without installation, use `uv 
 | Also keep the raw metadata | `yt2html "URL" --save-json` |
 | Rebuild a page from saved metadata (keeps the original snapshot date) | `yt2html --from-json "Title [id].info.json"` |
 | Show the program and yt-dlp versions | `yt2html --version` |
+| Make a page again although the video already has one (e.g. for newer comments) | `yt2html "URL" --overwrite` |
 | Help | `yt2html --help` |
 
 Always put the URL in quotes: in PowerShell `&` in a URL would otherwise be treated as an operator.
 
-By default pages are saved in the current folder, i.e. where the command is run (e.g. the folder with the downloaded videos), named like yt-dlp names videos by default: `Title [video id].html`. `-o FOLDER` saves them elsewhere. An existing page with the same name is overwritten.
+By default pages are saved in the current folder, i.e. where the command is run (e.g. the folder with the downloaded videos), named like yt-dlp names videos by default: `Title [video id].html`. `-o FOLDER` saves them elsewhere.
+
+**Videos that already have a page are skipped**, so running the same command again only archives what is missing. A page is recognised by the video id in square brackets at the end of its name, e.g. `[Z8lf5oWKfj0].html`: you may rename pages freely (`042 My title [Z8lf5oWKfj0].html`) as long as that part stays. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--from-json` always replaces the page.
 
 ### What to expect
 

@@ -86,4 +86,4 @@ def test_failure_of_one_source_does_not_stop_others(capsys, info_file, tmp_path)
     code, out = run(capsys, "--from-json", str(tmp_path / "missing.json"), str(info_file),
                     "-o", str(tmp_path / "o"))
     assert code == 1
-    assert "FAILED" in out and "Done: 1 saved, 1 failed." in out
+    assert "FAILED" in out and "Done: 1 saved, 0 skipped (page exists), 1 failed." in out

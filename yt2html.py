@@ -26,6 +26,7 @@ import base64
 import datetime as dt
 import html
 import json
+import os
 import re
 import sys
 import time
@@ -39,7 +40,7 @@ from pathlib import Path
 import yt_dlp
 
 # The program version; pyproject.toml reads it from here (single source).
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -1737,12 +1738,71 @@ def output_path(info: dict, output_dir: Path) -> Path:
     return output_dir / Path(name).name
 
 
-def archive(source: str, args: argparse.Namespace) -> Path:
-    """Make the page for one URL (or one .info.json file); returns its path.
+VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 
-    Everything that can fail for a reason the user should know (playlist URL,
-    missing translation) is checked before anything is written.
+
+def video_id_from_url(url: str) -> str | None:
+    """The 11-character video id of a YouTube video URL, without any request.
+
+    Works for watch?v=, youtu.be/, shorts/ and bare ids; None if the URL is
+    not a single video (or not recognised), e.g. a playlist.
     """
+    from yt_dlp.extractor.youtube import YoutubeIE
+    try:
+        if YoutubeIE.suitable(url):
+            return YoutubeIE.extract_id(url)
+    except Exception:
+        pass
+    # yt-dlp leaves watch URLs with &list= to its playlist extractor; the
+    # video id is still the v= parameter.
+    parts = urllib.parse.urlsplit(url)
+    if "youtube" in parts.netloc:
+        video = urllib.parse.parse_qs(parts.query).get("v", [""])[0]
+        if VIDEO_ID.fullmatch(video):
+            return video
+    return None
+
+
+def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
+    """A page for this video in the output folder (not its subfolders).
+
+    A page is recognised by "[<video id>].html" at the end of its name, so it
+    may be renamed freely as long as that part stays.
+    """
+    if not video_id or not output_dir.is_dir():
+        return None
+    suffix = f"[{video_id}].html"
+    return next((p for p in sorted(output_dir.iterdir())
+                 if p.is_file() and p.name.endswith(suffix)), None)
+
+
+def write_atomically(path: Path, text: str) -> None:
+    """Write to a temporary file and rename it, so an interrupted run never
+    leaves a cut-off page that a later run would take as finished."""
+    temporary = path.with_name(path.name + ".part")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def archive(source: str, args: argparse.Namespace) -> Path | None:
+    """Make the page for one URL (or one .info.json file).
+
+    Returns the page's path, or None if the video already has a page in the
+    output folder and --overwrite was not given (with --from-json the page is
+    always made again). Everything that can fail for a reason the user should
+    know (playlist URL, missing translation) is checked before anything is
+    written.
+    """
+    output_dir = Path(args.output_dir)
+    skip_existing = not (args.overwrite or args.from_json)
+
+    if skip_existing:
+        # Checked before fetching, from the id in the URL: no request needed.
+        found = existing_page(output_dir, video_id_from_url(source))
+        if found:
+            log(f"Skipped (page exists): {found}")
+            return None
+
     if args.from_json:
         log(f"Reading {source}")
         info = json.loads(Path(source).read_text(encoding="utf-8"))
@@ -1759,9 +1819,15 @@ def archive(source: str, args: argparse.Namespace) -> Path:
             raise TranscriptError(f"no transcript translation into '{language}' "
                                   f"in the data; nothing was saved.")
 
-    output_dir = Path(args.output_dir)
+    # An existing page (possibly renamed by the user) keeps its name when it
+    # is made again; otherwise the name follows yt-dlp's video file name.
+    found = existing_page(output_dir, info.get("id"))
+    if found and skip_existing:
+        # The URL did not show the id (unusual form), the fetched data does.
+        log(f"Skipped (page exists): {found}")
+        return None
     output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_path(info, output_dir)
+    target = found or output_path(info, output_dir)
 
     if args.save_json and not args.from_json:
         json_path = target.with_suffix(".info.json")
@@ -1787,9 +1853,9 @@ def archive(source: str, args: argparse.Namespace) -> Path:
                        theme=args.theme,
                        transcript_spec=args.transcript,
                        extra_images=extra_images)
-    target.write_text(page, encoding="utf-8")
+    write_atomically(target, page)
     size_kb = target.stat().st_size / 1024
-    log(f"Saved page: {target} ({size_kb:,.0f} KB, "
+    log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
         f"{len(info.get('comments') or [])} comments)")
     return target
 
@@ -1872,17 +1938,25 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "when YouTube asks to sign in")
     parser.add_argument("--save-json", action="store_true",
                         help="also save the raw yt-dlp metadata next to the page")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="make the page again even if the video already has one in the "
+                             "output folder (recognised by '[VIDEO_ID].html' at the end of the "
+                             "file name; such videos are skipped by default)")
     parser.add_argument("--from-json", action="store_true",
-                        help="build pages from saved .info.json files instead of URLs")
+                        help="build pages from saved .info.json files instead of URLs "
+                             "(existing pages are always replaced)")
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    failed = 0
+    saved = skipped = failed = 0
     for source in args.sources:
         try:
-            archive(source, args)
+            if archive(source, args):
+                saved += 1
+            else:
+                skipped += 1
         except yt_dlp.utils.DownloadError:
             failed += 1  # yt-dlp has already printed the reason
             log(f"FAILED: {source}")
@@ -1890,7 +1964,7 @@ def main(argv=None) -> int:
             failed += 1
             log(f"FAILED: {source}: {error}")
     if len(args.sources) > 1:
-        log(f"Done: {len(args.sources) - failed} saved, {failed} failed.")
+        log(f"Done: {saved} saved, {skipped} skipped (page exists), {failed} failed.")
     return 1 if failed else 0
 
 
