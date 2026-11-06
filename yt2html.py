@@ -41,7 +41,7 @@ from pathlib import Path
 import yt_dlp
 
 # The program version; pyproject.toml reads it from here (single source).
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # --------------------------------------------------------------------------
 # Configuration

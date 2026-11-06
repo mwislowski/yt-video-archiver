@@ -4,12 +4,14 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
 ### Added
+- Playlists: a playlist URL (`/playlist?list=...`), in the command or in a list file, archives all its videos in playlist order. Videos with a page are skipped, a video in the playlist twice or also given separately is archived once, and a video that fails (e.g. private) does not stop the others.
 - `--index`: an index page for each playlist and list file: every video with its position, original title linking to its page (also after renaming pages), date, link to YouTube and a line about its comments (complete, limited or interrupted), and the reason for videos without a page (unavailable, failed, not archived yet). Made at the end of every run, also after `Ctrl+C`.
 - `--index-only` rebuilds the index pages from the pages in the folder without downloading anything.
 - A video or playlist can also be given by the name of its page or index, with or without `.html` (`"Title [VIDEO_ID].html"`, `"Title [PLAYLIST_ID]"`), in the command and in list files.
 - Video pages keep their id, original title, date and comment download status as invisible `<meta>` data, read by the index.
-- Playlists: a playlist URL (`/playlist?list=...`), in the command or in a list file, archives all its videos in playlist order. Videos with a page are skipped, a video in the playlist twice or also given separately is archived once, and a video that fails (e.g. private) does not stop the others.
 
 ### Changed
 - Channel URLs fail with a hint to use a playlist URL instead.
@@ -59,7 +61,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.1.0...v0.2.0
