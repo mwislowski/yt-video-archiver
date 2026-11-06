@@ -314,7 +314,7 @@ YouTube changes often and yt-dlp follows within days. When fetching starts faili
 
 ### Files that are not committed
 
-`.gitignore` excludes `.venv`, build output (`build/`, `dist/`), `*.html` and `*.info.json` (pages created when the command is run in the project folder) and the old `output/` folder. The repository contains only code and configuration, never archived pages.
+`.gitignore` excludes `.venv`, the test cache (`.pytest_cache/`), build output (`build/`, `dist/`), and `*.html`, `*.html.part` and `*.info.json` (pages created when the command is run in the project folder). The repository contains only code and configuration, never archived pages.
 
 ---
 

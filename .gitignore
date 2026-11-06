@@ -15,6 +15,3 @@ wheels/
 *.html
 *.html.part
 *.info.json
-
-# Old default output folder (kept locally for tests)
-output/
