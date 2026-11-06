@@ -4,9 +4,14 @@ The page contains the video's metadata (thumbnail, title, channel, counts,
 dates, full description, AI-generated video summary), YouTube's timestamp
 lists (Chapters, Walkthroughs), People mentioned, the podcast the video
 belongs to, the transcript, the license (if not the standard one) and all
-comments with their reply threads, sorted oldest first. Images (thumbnail, avatars) are embedded as data URIs, so the
-result is one file that works offline, like a page saved with SingleFile.
-The video itself is not downloaded.
+comments with their reply threads, sorted oldest first. Images (thumbnail,
+avatars, photos) are embedded as data URIs, so the result is one file that
+works offline, like a page saved with SingleFile. The video itself is not
+downloaded.
+
+Layout of this file: configuration and data keys; fetching (yt-dlp, then the
+watch page for what yt-dlp does not return); transcript; images; formatting
+helpers; HTML rendering; command line.
 
 Usage (installed as a command, or with "uv run yt2html.py" in the project):
     yt2html URL [URL ...] [options]
@@ -72,6 +77,45 @@ USER_AGENT = (
 
 YOUTUBE = "https://www.youtube.com"
 
+# --------------------------------------------------------------------------
+# Keys of yt2html's own data in the info dict (and in --save-json files),
+# next to yt-dlp's fields
+# --------------------------------------------------------------------------
+
+# Date of fetching, stored so that --from-json keeps the original snapshot date.
+ARCHIVED_KEY = "yt2html_archived"
+
+# Key under which the timestamp lists are stored in the info dict (and in a
+# --save-json file). Not a yt-dlp field.
+MARKERS_KEY = "yt2html_marker_lists"
+
+# Key for extra description elements (e.g. the AI-generated video summary).
+EXTRAS_KEY = "yt2html_description_extras"
+
+# Comment count as YouTube shows it ("116", "1.2K"). yt-dlp replaces its own
+# `comment_count` with the number of downloaded comments when it fetches them.
+YT_COUNT_KEY = "yt2html_youtube_comment_count"
+
+# The --max-comments value used when fetching (None = no limit).
+LIMIT_KEY = "yt2html_max_comments"
+
+# The "License" row of the video details: {title, runs: [{text, url}]}.
+LICENSE_KEY = "yt2html_license"
+
+# The caption track YouTube's transcript panel opens with: {language, kind}.
+CAPTION_KEY = "yt2html_default_caption_track"
+
+# Languages YouTube can translate captions into: {code: name}.
+TRANSLATIONS_KEY = "yt2html_translation_languages"
+
+# The transcript: {language, name, kind, cues: [{start, text}], translations:
+# {lang: {language, name, cues}}}; None if the video has none, absent with
+# --transcript none. All versions on the page are built from the same cues.
+TRANSCRIPT_KEY = "yt2html_transcript"
+
+# Keys filled from the watch page; all None when the page cannot be read.
+PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TRANSLATIONS_KEY)
+
 
 # --------------------------------------------------------------------------
 # Fetching data
@@ -114,45 +158,20 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         return info
 
 
-# Date of fetching, stored so that --from-json keeps the original snapshot date.
-ARCHIVED_KEY = "yt2html_archived"
-
-# Key under which the timestamp lists are stored in the info dict (and in a
-# --save-json file). Not a yt-dlp field.
-MARKERS_KEY = "yt2html_marker_lists"
-
-# Key for extra description elements (e.g. the AI-generated video summary).
-EXTRAS_KEY = "yt2html_description_extras"
-
-# Comment count as YouTube shows it ("116", "1.2K"). yt-dlp replaces its own
-# `comment_count` with the number of downloaded comments when it fetches them.
-YT_COUNT_KEY = "yt2html_youtube_comment_count"
-
-# The --max-comments value used when fetching (None = no limit).
-LIMIT_KEY = "yt2html_max_comments"
-
-# The "License" row of the video details: {title, runs: [{text, url}]}.
-LICENSE_KEY = "yt2html_license"
-
-# The caption track YouTube's transcript panel opens with: {language, kind}.
-CAPTION_KEY = "yt2html_default_caption_track"
-
-# Languages YouTube can translate captions into: {code: name}.
-TRANSLATIONS_KEY = "yt2html_translation_languages"
-
-# The transcript: {language, name, kind, cues: [{start, text}]}, None if the
-# video has none. Absent with --transcript none. All versions are built from
-# the same cues; translations: {"translations": {lang: {language, name, cues}}}.
-TRANSCRIPT_KEY = "yt2html_transcript"
-
+# --------------------------------------------------------------------------
+# Reading the watch page (what yt-dlp does not return)
+# --------------------------------------------------------------------------
 
 def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
-    """Add what yt-dlp does not return: timestamp lists and description extras.
+    """Fill PAGE_KEYS from the watch page, fetched once more.
 
     yt-dlp keeps only one timestamp list, as `chapters`, without its name and
-    origin, and nothing of the extra description elements. So the watch page
-    is fetched once more (with yt-dlp's cookies and consent) and read from its
-    ytInitialData. On failure both keys are set to None.
+    origin, replaces YouTube's comment count with the downloaded number, and
+    returns nothing of the description extras, the license link or the
+    default caption track. The page is fetched with yt-dlp's cookies and
+    consent; ytInitialData and ytInitialPlayerResponse are read from it.
+    If it cannot be read, all PAGE_KEYS are None and the page falls back to
+    yt-dlp's data where it can.
     """
     url = f"{YOUTUBE}/watch?v={info.get('id')}&hl=en"
     try:
@@ -162,8 +181,7 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
         data = initial_data_of(webpage)
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
-        info[MARKERS_KEY] = info[EXTRAS_KEY] = info[YT_COUNT_KEY] = info[CAPTION_KEY] = None
-        info[LICENSE_KEY] = info[TRANSLATIONS_KEY] = None
+        info.update(dict.fromkeys(PAGE_KEYS))
         return
     try:
         player_response = embedded_json(webpage, "ytInitialPlayerResponse")
@@ -663,6 +681,10 @@ def marker_lists_of(info: dict) -> list[dict]:
             if items else [])
 
 
+# --------------------------------------------------------------------------
+# Transcript
+# --------------------------------------------------------------------------
+
 def base_language(code: str | None) -> str:
     """'en-US' -> 'en'; also strips yt-dlp's '-orig' suffix."""
     return (code or "").removesuffix("-orig").split("-")[0].lower()
@@ -683,9 +705,10 @@ def choose_caption_track(info: dict) -> tuple[str, str, list[dict]] | None:
     audio (see default_caption_track). Otherwise: author subtitles in the
     original audio language, then automatic captions of that language, then
     any author subtitles. Without page data or yt-dlp's audio languages, a
-    single "-orig" track gives the language. Auto-dubbed videos have automatic captions for every
-    dubbed language, each marked "-orig" by yt-dlp, so the language must come
-    from the original audio, not from the "-orig" mark.
+    single "-orig" track gives the language. Auto-dubbed videos have
+    automatic captions for every dubbed language, each marked "-orig" by
+    yt-dlp, so the language must come from the original audio, not from the
+    "-orig" mark.
     Returns (kind, language code, formats) or None.
     """
     manual = {lang: fmts for lang, fmts in (info.get("subtitles") or {}).items()
@@ -817,12 +840,8 @@ def bilingual_languages(spec: list[tuple[str, str | None]]) -> list[str]:
 
 
 def translations_of(transcript: dict) -> dict[str, dict]:
-    """{language: translation}; also reads the single "translation" of older files."""
-    translations = dict(transcript.get("translations") or {})
-    old = transcript.get("translation")
-    if old and old.get("language") not in translations:
-        translations[old["language"]] = old
-    return translations
+    """{language: translation} of a transcript (empty if it has none)."""
+    return transcript.get("translations") or {}
 
 
 def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
@@ -836,34 +855,29 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     With `translate_to` (a list of language codes), any failure raises
     TranscriptError instead of leaving the transcript out.
     """
+    def unavailable(reason: str) -> None:
+        # A requested translation needs the transcript: stop; otherwise the
+        # page is simply made without a transcript.
+        if translate_to:
+            raise TranscriptError(f"{reason}; nothing was saved.")
+        log(f"No transcript: {reason}.")
+
     track = choose_caption_track(info)
     if not track:
-        if translate_to:
-            raise TranscriptError("the video has no transcript to translate.")
-        log("No transcript available.")
-        return None
+        return unavailable("the video has no captions")
     kind, lang, formats = track
     fmt = next((f for f in formats if f.get("ext") == "json3" and f.get("url")), None)
     name = re.sub(r"\s*\((Original|auto-generated)\)$", "", (formats[0].get("name") or lang))
     if not fmt:
-        if translate_to:
-            raise TranscriptError(f"no usable captions for {name} to translate.")
-        log(f"No transcript available (no json3 captions for {name}).")
-        return None
+        return unavailable(f"no usable captions for {name}")
     label = f"{name}, auto-generated" if kind == "auto" else name
     log(f"Downloading transcript ({label})...")
     try:
         cues = download_cues(ydl, fmt["url"])
     except Exception as error:
-        if translate_to:
-            raise TranscriptError(f"could not download the transcript ({error}).")
-        log(f"  Could not download the transcript ({error}).")
-        return None
+        return unavailable(f"could not download it ({error})")
     if not cues:
-        if translate_to:
-            raise TranscriptError("YouTube returned an empty transcript.")
-        log("  YouTube returned an empty transcript.")
-        return None
+        return unavailable("YouTube returned it empty")
     transcript = {"language": lang, "name": name, "kind": kind, "cues": cues}
     if translate_to:
         transcript["translations"] = {
@@ -871,6 +885,10 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
             for target in translate_to}
     return transcript
 
+
+# --------------------------------------------------------------------------
+# Images
+# --------------------------------------------------------------------------
 
 def fetch_image(url: str) -> str | None:
     """Download an image and return it as a data URI, or None on failure."""
@@ -929,32 +947,22 @@ def fetch_thumbnail(info: dict) -> str | None:
     return None
 
 
-def fetch_images(urls: set[str], what: str) -> dict[str, str]:
-    """Download images in parallel as they are; returns {url: data_uri}."""
+def fetch_images(urls: set, what: str, resize=None) -> dict[str, str]:
+    """Download images in parallel; returns {original url: data URI}.
+
+    `resize` may turn a URL into one for a smaller image (avatars). Images
+    that cannot be downloaded are left out; the page shows a placeholder.
+    """
     urls = sorted(u for u in urls if u)
     if not urls:
         return {}
     log(f"Downloading {len(urls)} {what}...")
     with ThreadPoolExecutor(max_workers=IMAGE_WORKERS) as pool:
-        images = {u: d for u, d in zip(urls, pool.map(fetch_image, urls)) if d}
+        results = pool.map(lambda u: fetch_image(resize(u) if resize else u), urls)
+        images = {u: d for u, d in zip(urls, results) if d}
     if len(images) < len(urls):
         log(f"  {len(urls) - len(images)} could not be downloaded (placeholders used).")
     return images
-
-
-def fetch_avatars(urls: set[str]) -> dict[str, str]:
-    """Download avatars in parallel; returns {original_url: data_uri}."""
-    urls = sorted(u for u in urls if u)
-    if not urls:
-        return {}
-    log(f"Downloading {len(urls)} avatars...")
-    with ThreadPoolExecutor(max_workers=IMAGE_WORKERS) as pool:
-        results = pool.map(lambda u: fetch_image(resize_avatar_url(u)), urls)
-        avatars = {u: d for u, d in zip(urls, results) if d}
-    missing = len(urls) - len(avatars)
-    if missing:
-        log(f"  {missing} avatars could not be downloaded (letter placeholders used).")
-    return avatars
 
 
 # --------------------------------------------------------------------------
@@ -1066,8 +1074,28 @@ def trim_url(url: str) -> tuple[str, str]:
 
 
 def link(href: str, text: str) -> str:
+    """A link opening in a new tab; `text` is escaped."""
+    return link_html(href, esc(text))
+
+
+def link_html(href: str, inner_html: str) -> str:
+    """Like link(), but around HTML that is already escaped."""
     return (f'<a href="{esc(href)}" target="_blank" '
-            f'rel="noopener noreferrer">{esc(text)}</a>')
+            f'rel="noopener noreferrer">{inner_html}</a>')
+
+
+def time_link(video_id: str, start: float, text: str | None = None) -> str:
+    """A timestamp linking to the video at that second (plain text without an id)."""
+    seconds = int(start)
+    text = text or format_duration(seconds)
+    if not video_id:
+        return esc(text)
+    return link(f"{YOUTUBE}/watch?v={video_id}&t={seconds}s", text)
+
+
+def note_html(note: str | None) -> str:
+    """The grey note after a section heading (information added by yt2html)."""
+    return f' <span class="source">{esc(note)}</span>' if note else ""
 
 
 def linkify(text: str, video_id: str | None, duration) -> str:
@@ -1177,19 +1205,23 @@ h1.title a{color:var(--text)}
 .fact .value{font-size:16px;font-weight:700;line-height:22px;white-space:nowrap}
 .fact .label{color:var(--muted);font-size:12px;line-height:18px}
 .fact.extra .value{color:var(--muted)}
-.desc-extra{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
-.desc-extra h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
+/* Panels below the facts share one look */
+.description,.desc-extra,.markers,.transcript{background:var(--panel);border-radius:12px;
+  padding:12px;margin-top:12px}
+.desc-extra h2,.markers h2,.transcript h2{font-size:16px;line-height:22px;font-weight:700;
+  margin:0 0 8px}
+h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .desc-extra p{margin:0 0 8px;white-space:pre-wrap;overflow-wrap:anywhere}
 .desc-extra p:last-child{margin-bottom:0}
 .desc-extra .subtitle{color:var(--muted);font-size:12px;line-height:18px;margin-top:-6px}
 .desc-extra .info{color:var(--muted);font-size:12px;line-height:18px;margin-top:2px}
 .people-list{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}
 .person{width:150px}
-.person .photo{display:block;width:150px;height:150px;object-fit:cover;border-radius:12px;
+.person .photo{display:flex;width:150px;height:150px;object-fit:cover;border-radius:12px;
   background:var(--chip)}
 .person .name{font-weight:500;margin-top:6px;overflow-wrap:anywhere}
 .person .about{color:var(--muted);font-size:12px;line-height:18px;overflow-wrap:anywhere}
-.img-placeholder{display:flex !important;align-items:center;justify-content:center;
+.img-placeholder{align-items:center;justify-content:center;
   color:var(--muted);font-size:40px;font-weight:500;user-select:none}
 .playlist{display:flex;gap:16px;align-items:flex-start;margin-top:4px}
 .playlist + .playlist{margin-top:12px}
@@ -1198,16 +1230,10 @@ h1.title a{color:var(--text)}
 .playlist .name{font-size:14px;line-height:20px;font-weight:700;overflow-wrap:anywhere}
 .playlist .name a{color:var(--text)}
 .playlist .meta{color:var(--muted);font-size:12px;line-height:18px}
-.markers{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
-.markers h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
-.markers h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .markers ol{list-style:none;margin:0;padding:0}
 .markers li{display:flex;gap:12px;padding:3px 0}
 .markers .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:500}
 .markers .label{overflow-wrap:anywhere}
-.transcript{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px}
-.transcript h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 8px}
-.transcript h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .transcript h3{font-size:14px;line-height:20px;font-weight:700;margin:16px 0 4px}
 .transcript h2 + h3{margin-top:4px}
 .transcript p{margin:0;overflow-wrap:anywhere}
@@ -1220,12 +1246,7 @@ h1.title a{color:var(--text)}
 .transcript .bi-row .text{overflow-wrap:anywhere}
 .transcript .bi-row .text + .text{border-left:1px solid var(--line);padding-left:12px}
 .transcript .bi-head{color:var(--muted);font-size:12px;line-height:18px;padding-bottom:4px}
-@media (max-width:600px){
-  .transcript .bi-row{grid-template-columns:48px 1fr}
-  .transcript .bi-row .text + .text{grid-column:2;border-left:0;padding-left:0;color:var(--muted)}
-}
-.description{background:var(--panel);border-radius:12px;padding:12px;margin-top:12px;
-  white-space:pre-wrap;overflow-wrap:anywhere}
+.description{white-space:pre-wrap;overflow-wrap:anywhere}
 .description.empty{color:var(--muted)}
 .comments{margin-top:24px}
 .comments h2{font-size:20px;line-height:28px;font-weight:700;margin:0}
@@ -1251,10 +1272,13 @@ h1.title a{color:var(--text)}
 .replies .replies{margin-left:36px}
 .footer{color:var(--muted);font-size:12px;margin-top:32px;padding-top:12px;
   border-top:1px solid var(--line)}
+/* Phones */
 @media (max-width:600px){
   .page{padding:12px}
   .replies{margin-left:20px}
   .replies .replies{margin-left:12px}
+  .transcript .bi-row{grid-template-columns:48px 1fr}
+  .transcript .bi-row .text + .text{grid-column:2;border-left:0;padding-left:0;color:var(--muted)}
 }
 """
 
@@ -1307,6 +1331,7 @@ class AvatarStyles:
 
 def render_comment(c: dict, children: dict, avatars: AvatarStyles,
                    video_id: str, duration, uploader: str) -> str:
+    """One comment and, below it, its replies (recursively)."""
     author = c.get("author") or "(unknown)"
     author_html = esc(author)
     if c.get("author_url"):
@@ -1416,29 +1441,22 @@ def render_playlists(extra: dict, images: dict[str, str]) -> str:
             f'{"".join(rows)}</section>')
 
 
-def link_html(href: str, inner_html: str) -> str:
-    """Like link(), but around HTML that is already escaped."""
-    return (f'<a href="{esc(href)}" target="_blank" '
-            f'rel="noopener noreferrer">{inner_html}</a>')
-
-
 def render_description_extras(extras: list[dict], video_id: str, duration,
                               images: dict[str, str] | None = None) -> str:
     """Extra description elements: AI summary, People mentioned, podcast."""
     images = images or {}
     sections = []
     for extra in extras:
-        if extra.get("type") == "people":
+        kind = extra.get("type")
+        if kind == "video_summary":
+            paragraphs = "".join(f"<p>{linkify(p, video_id, duration)}</p>"
+                                 for p in extra.get("paragraphs") or [])
+            sections.append(f'<section class="desc-extra video-summary">'
+                            f'<h2>{esc(extra.get("title") or "")}</h2>{paragraphs}</section>')
+        elif kind == "people":
             sections.append(render_people(extra, images))
-            continue
-        if extra.get("type") == "playlists":
+        elif kind == "playlists":
             sections.append(render_playlists(extra, images))
-            continue
-        paragraphs = "".join(f"<p>{linkify(p, video_id, duration)}</p>"
-                             for p in extra.get("paragraphs") or [])
-        css_type = re.sub(r"[^a-z0-9-]+", "-", (extra.get("type") or "extra").lower())
-        sections.append(f'<section class="desc-extra {esc(css_type)}">'
-                        f'<h2>{esc(extra.get("title") or "")}</h2>{paragraphs}</section>')
     return "\n".join(sections)
 
 
@@ -1449,18 +1467,23 @@ def render_marker_lists(lists: list[dict], video_id: str) -> str:
         rows = []
         for item in marker_list.get("items") or []:
             start = item.get("start_time")
-            time_text = item.get("time_text") or format_duration(start)
-            time_html = (link(f"{YOUTUBE}/watch?v={video_id}&t={int(start)}s", time_text)
-                         if video_id and start is not None else esc(time_text))
+            time_html = (time_link(video_id, start, item.get("time_text")) if start is not None
+                         else esc(item.get("time_text") or ""))
             rows.append(f'<li><span class="time">{time_html}</span>'
                         f'<span class="label">{esc(item.get("title") or "")}</span></li>')
         list_id = re.sub(r"[^a-z0-9-]+", "-", (marker_list.get("id") or "markers").lower())
-        note = SOURCE_NOTES.get(marker_list.get("source"))
-        note_html = f' <span class="source">{esc(note)}</span>' if note else ""
+        note = note_html(SOURCE_NOTES.get(marker_list.get("source")))
         sections.append(f'<section class="markers" id="{esc(list_id)}">'
-                        f'<h2>{esc(marker_list.get("title") or "Chapters")}{note_html}</h2>'
+                        f'<h2>{esc(marker_list.get("title") or "Chapters")}{note}</h2>'
                         f'<ol>{"".join(rows)}</ol></section>')
     return "\n".join(sections)
+
+
+def render_license(license_info: dict) -> str:
+    text = "".join(link(r["url"], r["text"]) if r.get("url") else esc(r["text"])
+                   for r in license_info["runs"])
+    return (f'<section class="desc-extra license">'
+            f'<h2>{esc(license_info.get("title") or "License")}</h2><p>{text}</p></section>')
 
 
 def render_transcripts(transcript: dict, chapters: list[dict], video_id: str,
@@ -1497,13 +1520,6 @@ def group_by_chapters(cues: list[dict], chapters: list[dict]) -> list[dict]:
                 index = i + 1
         groups[index]["cues"].append(cue)
     return [g for g in groups if g["cues"]]
-
-
-def time_link(video_id: str, start: float) -> str:
-    seconds = int(start)
-    if not video_id:
-        return esc(format_duration(seconds))
-    return link(f"{YOUTUBE}/watch?v={video_id}&t={seconds}s", format_duration(seconds))
 
 
 def transcript_note(transcript: dict) -> str:
@@ -1578,9 +1594,8 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
     note = transcript_note(transcript)
     if note_suffix:
         note = f"{note}, {note_suffix}" if note else note_suffix
-    note_html = f' <span class="source">{esc(note)}</span>' if note else ""
     css = "transcript with-timestamps" if timestamps else "transcript"
-    return (f'<section class="{css}"><h2>Transcript{note_html}</h2>'
+    return (f'<section class="{css}"><h2>Transcript{note_html(note)}</h2>'
             f'{"".join(parts)}</section>')
 
 
@@ -1589,6 +1604,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 transcript_spec: list | None = None,
                 extra_images: dict[str, str] | None = None,
                 theme: str = "auto") -> str:
+    """The whole HTML page. Images come as data URIs: `thumbnail`,
+    `avatar_uris` and `extra_images` ({image url: data URI})."""
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -1657,10 +1674,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
 
     license_info = license_of(info)
     if license_info:
-        text = "".join(link(r["url"], r["text"]) if r.get("url") else esc(r["text"])
-                       for r in license_info["runs"])
-        body.append(f'<section class="desc-extra license">'
-                    f'<h2>{esc(license_info.get("title") or "License")}</h2><p>{text}</p></section>')
+        body.append(render_license(license_info))
 
     if "comments" in info:
         roots, children = build_comment_tree(comments)
@@ -1700,8 +1714,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         f'<meta name="source-url" content="{esc(url)}">',
         f'<meta name="archived" content="{archived.isoformat()}">',
         f"<title>{esc(title)}</title>",
-        # The body is already rendered here, so every avatar class is known.
         f'<meta name="color-scheme" content="{COLOR_SCHEMES.get(theme, "dark")}">',
+        # The body is already rendered here, so every avatar class is known.
         f"<style>{CSS}\n{theme_css(theme)}\n{avatars.css()}\n</style>",
         "</head>",
         "<body>",
@@ -1713,7 +1727,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
 
 
 # --------------------------------------------------------------------------
-# Main
+# Command line
 # --------------------------------------------------------------------------
 
 def output_path(info: dict, output_dir: Path) -> Path:
@@ -1724,6 +1738,11 @@ def output_path(info: dict, output_dir: Path) -> Path:
 
 
 def archive(source: str, args: argparse.Namespace) -> Path:
+    """Make the page for one URL (or one .info.json file); returns its path.
+
+    Everything that can fail for a reason the user should know (playlist URL,
+    missing translation) is checked before anything is written.
+    """
     if args.from_json:
         log(f"Reading {source}")
         info = json.loads(Path(source).read_text(encoding="utf-8"))
@@ -1753,17 +1772,16 @@ def archive(source: str, args: argparse.Namespace) -> Path:
     thumbnail = fetch_thumbnail(info)
     if not thumbnail:
         log("  Thumbnail could not be downloaded.")
-
     avatar_uris = {}
     if not args.no_avatars:
-        avatar_uris = fetch_avatars({c.get("author_thumbnail")
-                                     for c in info.get("comments") or []})
+        avatar_uris = fetch_images({c.get("author_thumbnail") for c in info.get("comments") or []},
+                                   "avatars", resize=resize_avatar_url)
+    extra_images = fetch_images(extra_image_urls(info), "images (people, podcast)")
 
     try:
         archived = dt.date.fromisoformat(info.get(ARCHIVED_KEY) or "")
     except ValueError:
         archived = dt.date.today()  # older JSON files without the date
-    extra_images = fetch_images(extra_image_urls(info), "images (people, podcast)")
     page = render_page(info, thumbnail, avatar_uris, archived,
                        show_snapshot=not args.no_snapshot,
                        theme=args.theme,
@@ -1820,8 +1838,8 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yt2html",
-        description="Save a YouTube video page (metadata, description, all comments) "
-                    "as a single offline HTML file.",
+        description="Save a YouTube video page (metadata, description, chapters, "
+                    "transcript, all comments) as a single offline HTML file.",
     )
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__} (yt-dlp {yt_dlp.version.__version__})")

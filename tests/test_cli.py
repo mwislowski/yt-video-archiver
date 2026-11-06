@@ -73,16 +73,6 @@ def test_bilingual_with_saved_translation(capsys, info_file, tmp_path):
     assert code == 0 and "transcript bilingual" in html
 
 
-def test_older_json_with_single_translation(capsys, info, tmp_path):
-    transcript = info[yt2html.TRANSCRIPT_KEY]
-    transcript["translation"] = transcript.pop("translations")["pl"]
-    path = tmp_path / "old.info.json"
-    path.write_text(json.dumps(info), encoding="utf-8")
-    code, _ = run(capsys, "--from-json", str(path), "-o", str(tmp_path / "o"),
-                  "--transcript", "bilingual:pl")
-    assert code == 0
-
-
 def test_page_is_self_contained(capsys, info_file, tmp_path, monkeypatch):
     monkeypatch.setattr(yt2html, "fetch_image", lambda url: "data:image/png;base64,AAAA")
     out_dir = tmp_path / "pages"
