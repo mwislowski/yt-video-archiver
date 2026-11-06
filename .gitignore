@@ -15,3 +15,6 @@ wheels/
 *.html
 *.html.part
 *.info.json
+
+# Private notes, kept only on this computer (no copy on GitHub)
+NOTES.local.md

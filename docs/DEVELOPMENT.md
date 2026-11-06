@@ -24,7 +24,7 @@ uv tool install --editable PATH\TO\yt-video-archiver
 
 After a change in `pyproject.toml` (dependencies, command) add `--reinstall`. To update yt-dlp in the project: `uv lock --upgrade-package yt-dlp`, then `uv sync`, and commit the updated `uv.lock`.
 
-`.gitignore` excludes `.venv`, the test cache (`.pytest_cache/`), build output (`build/`, `dist/`), and `*.html`, `*.html.part` and `*.info.json` (pages created when the command is run in the project folder). The repository contains only code, configuration and documentation, never archived pages. Private notes can go into a file excluded by `.gitignore` (e.g. `NOTES.local.md`), keeping in mind that it then has no copy on GitHub.
+`.gitignore` excludes `.venv`, the test cache (`.pytest_cache/`), build output (`build/`, `dist/`), `*.html`, `*.html.part` and `*.info.json` (pages created when the command is run in the project folder), and `NOTES.local.md` (private notes, kept only on this computer, so without a copy on GitHub). The repository contains only code, configuration and documentation, never archived pages.
 
 ## Files
 
