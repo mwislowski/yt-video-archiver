@@ -6,8 +6,9 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
+# Virtual environments and test cache
 .venv
+.pytest_cache/
 
 # Generated pages and metadata (never commit). Pages are saved in the folder
 # the command is run in, so running it in the project folder puts them here.

@@ -13,6 +13,13 @@ dependencies = [
     "yt-dlp[default]>=2026.10.26",
 ]
 
+# Development tools: "uv run pytest" installs them into the project's .venv
+# (they are not part of the installed program).
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
 [project.urls]
 Repository = "https://github.com/mwislowski/yt-video-archiver"
 
@@ -30,3 +37,7 @@ path = "yt2html.py"
 
 [tool.hatch.build.targets.wheel]
 only-include = ["yt2html.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["online: downloads real pages from YouTube (run with --online)"]

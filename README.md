@@ -40,6 +40,7 @@ Not included: the top bar, the video player, the transcript, *Video details* (it
 | `pyproject.toml`, `uv.lock` | Project, dependency (`yt-dlp[default]`) and packaging definition for `uv`: build backend hatchling, the `yt2html` command, version read from `yt2html.py`. |
 | `.python-version` | Python version used by `uv`. |
 | `LICENSE` | MIT License. |
+| `tests/` | Automated tests (pytest): `conftest.py` with synthetic YouTube data and fakes, one file per area, `test_online.py` for checks against real YouTube pages. |
 
 ### Version, packaging, releases
 
@@ -175,7 +176,36 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 ### Testing
 
-`--from-json` renders a page from a saved `.info.json` (made with `--save-json`) without contacting YouTube for metadata, which makes layout changes quick to test. A synthetic `.info.json` is useful for edge cases: pinned comment, replies by the creator, missing avatar, HTML special characters in text, Polish characters and emoji, URLs in parentheses, invalid and too-long timestamps, e-mail addresses next to handles, a title with `: " | / < > ?`.
+**Run the tests after every change**, in the project folder:
+
+```powershell
+uv run pytest
+```
+
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `113 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+
+**What is covered (offline):**
+
+| File | Area |
+|---|---|
+| `test_formatting.py` | numbers (`1.23M`), durations, dates, file names, `linkify()` (URLs, timestamps, hashtags, handles, e-mails, HTML escaping) |
+| `test_comments.py` | comment order (oldest first, pinned, equal estimated times, nested replies), avatars embedded once, the comments note, `No comments.` rules |
+| `test_chapters.py` | description chapter check, chapter origin (description / auto / uncertain), Walkthroughs, fallback to yt-dlp chapters |
+| `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables |
+| `test_transcript.py` | choosing the caption track (incl. auto-dubbed videos), json3 captions, translations (alignment, HTTP 429 retries, errors), `--transcript` parsing and rendering |
+| `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, old JSON files, self-contained page, one failure does not stop the others |
+
+The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.
+
+**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast and the original-language transcript of an auto-dubbed video (`Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`):
+
+```powershell
+uv run pytest --online -m online
+```
+
+They take a minute or two. Run them now and then, and whenever real pages look wrong: a failure usually means YouTube changed its page data or yt-dlp needs an update. If a reference video disappears or changes, replace it in `test_online.py`.
+
+**When changing the program:** add a test for each new feature or fixed bug (usually a new builder in `conftest.py` with data copied from the real page, then a test of the parser and of the rendered page). `--from-json` with a file saved by `--save-json` remains handy for checking the look of a page in a browser.
 
 ---
 
