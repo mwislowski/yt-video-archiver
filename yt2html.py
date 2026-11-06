@@ -128,6 +128,9 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
     opts = {
         "skip_download": True,
         "noplaylist": True,
+        # A URL that still turns out to be a playlist or channel returns only
+        # the list of its videos, which are not extracted (comments included).
+        "extract_flat": "in_playlist",
         "getcomments": not args.no_comments,
         # The video is not downloaded, so a missing format must not be fatal.
         "ignore_no_formats_error": True,
@@ -1763,6 +1766,18 @@ def video_id_from_url(url: str) -> str | None:
     return None
 
 
+def is_playlist_url(url: str) -> bool:
+    """True for a YouTube playlist or channel URL (or a bare playlist id),
+    recognised without any request. A watch URL with &list= is a video."""
+    from yt_dlp.extractor.youtube import YoutubePlaylistIE, YoutubeTabIE
+    if video_id_from_url(url):
+        return False
+    try:
+        return YoutubeTabIE.suitable(url) or YoutubePlaylistIE.suitable(url)
+    except Exception:
+        return False
+
+
 def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
     """A page for this video in the output folder (not its subfolders).
 
@@ -1784,6 +1799,9 @@ def write_atomically(path: Path, text: str) -> None:
     os.replace(temporary, path)
 
 
+PLAYLIST_ERROR = "this is a playlist or channel URL, not a single video"
+
+
 def archive(source: str, args: argparse.Namespace) -> Path | None:
     """Make the page for one URL (or one .info.json file).
 
@@ -1803,6 +1821,8 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
             log(f"Skipped (page exists): {found}")
             return None
 
+    if not args.from_json and is_playlist_url(source):
+        raise ValueError(PLAYLIST_ERROR)
     if args.from_json:
         log(f"Reading {source}")
         info = json.loads(Path(source).read_text(encoding="utf-8"))
@@ -1811,7 +1831,7 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
         info = fetch_info(source, args)
 
     if info.get("_type") in ("playlist", "multi_video"):
-        raise ValueError("this is a playlist or channel URL, not a single video")
+        raise ValueError(PLAYLIST_ERROR)
 
     available = translations_of(info.get(TRANSCRIPT_KEY) or {})
     for language in bilingual_languages(args.transcript):
@@ -1901,6 +1921,65 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
     return spec
 
 
+def read_batch_file(path: str) -> list[str]:
+    """The sources listed in a --batch-file, one per line.
+
+    Spaces around a line, blank lines and lines starting with "#" (comments)
+    are ignored; a UTF-8 byte order mark, as some Windows editors write it,
+    is accepted. Raises ValueError if the file cannot be read or lists
+    nothing. The file is only read, never changed.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValueError(f"batch file '{path}' is not UTF-8 text") from None
+    except OSError as error:
+        raise ValueError(f"cannot read batch file '{path}': {error.strerror or error}") from None
+    lines = [line.strip() for line in text.splitlines()]
+    sources = [line for line in lines if line and not line.startswith("#")]
+    if not sources:
+        raise ValueError(f"batch file '{path}' contains no URLs")
+    return sources
+
+
+def collect_sources(args: argparse.Namespace) -> list[str]:
+    """Sources from the command line, then from each --batch-file in order,
+    each video only once.
+
+    Two URLs are the same video if they have the same video id (e.g.
+    youtu.be/ID and watch?v=ID); anything else (playlist URLs, .info.json
+    paths) must match exactly. Raises ValueError if there is nothing to do
+    or a batch file cannot be used.
+    """
+    def count(n: int, word: str) -> str:
+        return f"{n} {word}" + ("" if n == 1 else "s")
+
+    what = "file" if args.from_json else "URL"
+    seen = set()
+
+    def new(source: str) -> bool:
+        key = source if args.from_json else (video_id_from_url(source) or source)
+        if key in seen:
+            return False
+        seen.add(key)
+        return True
+
+    sources = [source for source in args.sources if new(source)]
+    if len(sources) < len(args.sources):
+        log(f"Ignored {count(len(args.sources) - len(sources), 'duplicate ' + what)} "
+            f"given on the command line.")
+    for path in args.batch_file:
+        listed = read_batch_file(path)
+        added = [source for source in listed if new(source)]
+        duplicates = len(listed) - len(added)
+        note = f" ({count(duplicates, 'duplicate')} ignored)" if duplicates else ""
+        log(f"Read {count(len(listed), what)} from {path}{note}.")
+        sources += added
+    if not sources:
+        raise ValueError("give at least one URL or a batch file (-a FILE)")
+    return sources
+
+
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yt2html",
@@ -1909,8 +1988,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__} (yt-dlp {yt_dlp.version.__version__})")
-    parser.add_argument("sources", nargs="+", metavar="URL",
+    parser.add_argument("sources", nargs="*", metavar="URL",
                         help="video URL(s); with --from-json: path(s) to .info.json files")
+    parser.add_argument("-a", "--batch-file", action="append", default=[], metavar="FILE",
+                        help="also read URLs (with --from-json: .info.json paths) from a "
+                             "UTF-8 text file, one per line; blank lines and lines starting "
+                             "with '#' are ignored. Can be given several times. A video "
+                             "listed more than once is archived once")
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
                         help="folder for the generated pages (default: the current folder)")
     parser.add_argument("--no-comments", action="store_true",
@@ -1945,7 +2029,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--from-json", action="store_true",
                         help="build pages from saved .info.json files instead of URLs "
                              "(existing pages are always replaced)")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    try:
+        args.sources = collect_sources(args)
+    except ValueError as error:
+        parser.error(str(error))
+    return args
 
 
 def main(argv=None) -> int:

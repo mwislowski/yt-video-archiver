@@ -81,6 +81,7 @@ Not included: the top bar, the video player, *Video details* (it repeats the dat
 `yt_dlp.YoutubeDL(...).extract_info(url, download=False)` with:
 
 - `skip_download`, `noplaylist`, `getcomments`;
+- `extract_flat: "in_playlist"`: `noplaylist` only turns watch URLs with `&list=` into the video; a real playlist or channel URL would otherwise be extracted video by video, comments included, before being rejected. Such URLs are first recognised without a request (`is_playlist_url()`: no video id and yt-dlp's `YoutubeTabIE` or `YoutubePlaylistIE` matches) and fail at once; anything that still turns out to be a playlist returns only its flat list and fails as well;
 - `ignore_no_formats_error: True` — the video is not downloaded, so missing formats (e.g. when no JavaScript runtime is installed for YouTube's player challenges) must not abort the run;
 - `extractor_args = {"youtube": {"comment_sort": ["new"], "max_comments": [N or "all", "all", "all", "all"]}}`.
 
@@ -200,6 +201,13 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 - Default: skip (`Skipped (page exists): ...`), and `archive()` returns `None`; `main()` counts saved, skipped and failed. `--overwrite` makes the page again; `--from-json` always does (no requests, and re-rendering is its purpose). A replaced page keeps its existing (possibly renamed) file name.
 - Pages are written by `write_atomically()`: first `NAME.html.part`, then renamed (`os.replace`). An interrupted run leaves at most a `.part` file, which never counts as a finished page; a video that failed has no page and is tried again on the next run.
 
+## Batch files (`-a`)
+
+- `read_batch_file()` reads the file as UTF-8 (`utf-8-sig`, so a byte order mark from a Windows editor does no harm), strips each line and drops blank lines and lines starting with `#`. A file that cannot be read, is not UTF-8 or lists nothing is an error.
+- `collect_sources()`, called from `parse_args()`, builds the final list: the URLs from the command line first, then each `-a` file in the order given. A video is kept once: two URLs are the same video if `video_id_from_url()` gives the same id (`youtu.be/ID`, `watch?v=ID`, a bare id); other lines (playlist URLs, `.info.json` paths with `--from-json`) must match exactly. It logs `Read N URLs from FILE (M duplicates ignored).` per file.
+- Errors in the files themselves end the program through `parser.error()` (exit code 2) before anything is fetched. A bad line (wrong URL, playlist) only fails that line in `main()`, like a bad URL on the command line.
+- The file is only read, never changed: what is done follows from the pages in the output folder, so running the same list again archives what is missing and retries what failed.
+
 ## Testing
 
 **Run the tests after every change**, in the project folder:
@@ -208,7 +216,7 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 uv run pytest
 ```
 
-The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `129 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `155 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
 
 **What is covered (offline):**
 
@@ -220,7 +228,8 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 | `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables |
 | `test_transcript.py` | choosing the caption track (incl. auto-dubbed videos), json3 captions, translations (alignment, HTTP 429 retries, errors), `--transcript` parsing and rendering |
 | `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
-| `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes |
+| `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes, playlist and channel URLs rejected without fetching |
+| `test_batch.py` | `-a` files: comments, blank lines, byte order mark, order, duplicates in other URL forms, unusable files stop before fetching, bad lines fail alone, rerunning a list, the file is not changed, `--from-json` paths |
 
 The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.
 

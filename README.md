@@ -47,6 +47,7 @@ The page is saved in the current folder (e.g. the folder with your downloaded vi
 | Task | Command |
 |---|---|
 | Several videos at once | `yt2html "URL1" "URL2" "URL3"` |
+| Videos listed in a text file (see below) | `yt2html -a list.txt` |
 | Save into another folder | `yt2html "URL" -o "D:\Videos\Channel"` |
 | Make a page again although the video already has one (e.g. for newer comments) | `yt2html "URL" --overwrite` |
 | Without comments | `yt2html "URL" --no-comments` |
@@ -74,6 +75,16 @@ The page is saved in the current folder (e.g. the folder with your downloaded vi
 Examples: `--transcript plain,timestamps`, `--transcript plain,bilingual:pl,bilingual:de`. Each version may appear only once and `none` cannot be combined with others. If a requested translation is not available, the program stops with an error, lists the languages that are, and saves nothing.
 
 ### Archiving many videos
+
+For many videos, put their URLs into a text file, one per line, e.g. `list.txt` made in Notepad, and run `yt2html -a list.txt`. Blank lines and lines starting with `#` are ignored, so the list can have comments:
+
+```text
+# Season 1
+https://www.youtube.com/watch?v=Z8lf5oWKfj0
+https://youtu.be/qyqCTMirNWg
+```
+
+`-a` can be given several times and combined with URLs in the command; a video listed more than once (also in another URL form) is archived once. The file must be saved as UTF-8 (Notepad's default). The program only reads it, never changes it. Playlist URLs are not supported, in the file or in the command.
 
 **Videos that already have a page are skipped**, so running the same command again only archives what is missing, and an interrupted run continues where it stopped. A page is recognised by the video id in square brackets at the end of its name, e.g. `[Z8lf5oWKfj0].html`: you may rename pages freely (`042 My title [Z8lf5oWKfj0].html`) as long as that part stays. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--from-json` always replaces the page.
 
