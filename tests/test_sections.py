@@ -113,7 +113,7 @@ def test_themes(info):
 def test_no_fixed_colours_outside_the_variables():
     # New styles must use CSS variables, or they break one of the themes.
     allowed = {"#0f0f0f", "#f1f1f1", "#aaaaaa", "#272727", "#3f3f3f", "#3ea6ff", "#3a3a3a",
-               "#000", "#ff4e45", "#fff", "#0e8f85"}
+               "#000", "#ff4e45", "#fff", "#0e8f85", "#3cc8b4"}
     import re
     assert set(re.findall(r"#[0-9a-fA-F]{3,6}\b", yt2html.CSS)) <= allowed
 
@@ -146,3 +146,69 @@ def test_player_is_hidden_until_a_video_is_found():
     assert ".has-video .fact.play{display:block}" in yt2html.CSS
     assert ".player{display:none}" in yt2html.CSS
     assert ".player-open .page > .thumbnail{display:none}" in yt2html.CSS
+
+
+def test_every_timestamp_can_play_the_local_copy(info):
+    info["comments"][0]["text"] = "Best part at 1:23"
+    info["description"] = "Starts at 0:42 sharp."
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6),
+                               transcript_spec=[("timestamps", None), ("bilingual", "pl")])
+    import re
+    links = re.findall(r'<a class="t" data-t="(\d+)" href="([^"]+)"', html)
+    times = {int(t) for t, _ in links}
+    assert {42, 83, 21} <= times                           # description, comment, walkthrough
+    assert all(href.endswith(f"&amp;t={t}s") for t, href in links)
+    # every link to a moment of the video is a player timestamp
+    assert html.count("watch?v=TESTVIDEO01&amp;t=") == len(links)
+
+
+def test_transcript_cues_carry_their_start(info):
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6),
+                               transcript_spec=[("timestamps", None), ("plain", None),
+                                                ("bilingual", "pl")])
+    assert '<div class="cue" data-c="0"><span class="time">' in html
+    assert '<div class="bi-row" data-c="0"><span class="time">' in html
+    assert '<p><span data-c="0">' in html
+    assert yt2html.cue_start({"start": 12.3456}) == "12.35"
+    assert yt2html.cue_start({"start": 4.0}) == "4"
+
+
+def test_player_has_follow_buttons_and_the_lines_under_the_video(info):
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
+    assert 'data-do="follow"' in html and 'data-do="unfollow"' in html
+    assert ('<div class="now-playing" title="Show in the transcript"><div class="chapter"></div>'
+            '<div class="line prev"></div><div class="line current"></div>'
+            '<div class="line translation"></div><div class="line next"></div></div>') in html
+
+
+def test_css_has_only_printable_characters():
+    # A backslash escape in the Python string (e.g. "\2013") once put a control
+    # character and a "3" on the page instead of the intended mark.
+    for css in (yt2html.CSS, yt2html.LIGHT_VARIABLES):
+        assert all(ch.isprintable() or ch in "\n\t" for ch in css)
+        assert "\\" not in css
+
+
+def test_speaker_mark_is_a_grey_bubble():
+    assert ".transcript .speaker{color:var(--muted)}" in yt2html.CSS
+    rule = yt2html.CSS.split(".transcript .cue .speaker::before", 1)[1].split("}", 1)[0]
+    assert 'content:""' in rule and "background:currentColor" in rule and "mask:url(" in rule
+
+
+def test_subtitles_button_and_language_buttons(info):
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
+    assert ('<button type="button" data-do="subtitles" aria-pressed="false" '
+            'title="Show the current sentences under the video">Subtitles</button>'
+            '<span class="langs"></span></div>') in html
+    # the language buttons are made by the script, one per bilingual transcript
+    assert "bilinguals.map(function (list, i)" in yt2html.PLAYER_JS
+    assert "box.hidden = true;" in yt2html.PLAYER_JS          # no lines until Subtitles
+    assert ".player .now-playing .line{color:var(--muted);font-size:18px;" in yt2html.CSS
+
+
+def test_chapters_label_without_a_transcript_and_no_line_above_the_subtitles():
+    assert "subtitlesButton.textContent = 'Chapters';" in yt2html.PLAYER_JS
+    rule = yt2html.CSS.split(".player .now-playing{", 1)[1].split("}", 1)[0]
+    assert "border" not in rule
+    chapter = yt2html.CSS.split(".player .now-playing .chapter{", 1)[1].split("}", 1)[0]
+    assert "color:var(--accent-text)" in chapter and "opacity:.75" in chapter

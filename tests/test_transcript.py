@@ -1,6 +1,7 @@
 """Transcript: choosing the track, captions, versions, bilingual and translations."""
 
 import argparse
+import datetime as dt
 
 import pytest
 
@@ -145,15 +146,19 @@ class TestSpec:
 def sections(info, spec):
     html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5), transcript_spec=spec)
     import re
-    return re.findall(r'<section class="(transcript[^"]*)">', html), html
+    return re.findall(r'<section class="(transcript[^"]*)"[ >]', html), html
 
 
 class TestRendering:
     def test_default_plain_split_by_chapters(self, info):
         found, html = sections(info, None)
         assert found == ["transcript"]
-        assert "<h3>Intro</h3><p>Hello and welcome first line second line</p>" in html
-        assert "<h3>Second part</h3><p>[Music]</p>" in html
+        import re
+        visible = re.sub(r"<span data-c=\"[0-9.]+\">|</span>", "", html)  # the text as shown
+        assert "<h3>Intro</h3><p>Hello and welcome first line second line</p>" in visible
+        assert "<h3>Second part</h3><p>[Music]</p>" in visible
+        # one invisible span per cue with its start, for the player
+        assert '<p><span data-c="0">Hello and welcome</span> <span data-c=' in html
 
     def test_versions_in_given_order(self, info):
         found, html = sections(info, [("timestamps", None), ("plain", None), ("bilingual", "pl")])
@@ -163,3 +168,43 @@ class TestRendering:
 
     def test_none_hides_a_saved_transcript(self, info):
         assert sections(info, [])[0] == []
+
+
+class TestSpeakerChanges:
+    """YouTube's ">>" (new speaker) becomes our grey mark."""
+
+    MARK = yt2html.SPEAKER_MARK
+
+    def test_marks_are_replaced(self):
+        assert yt2html.speaker_html(">> Hello & bye") == (f"{self.MARK} Hello &amp; bye", True)
+        assert yt2html.speaker_html("Right. >> Yes.") == (f"Right. {self.MARK} Yes.", True)
+        assert yt2html.speaker_html(">>> New topic")[0] == f"{self.MARK} New topic"
+        assert yt2html.speaker_html("No change") == ("No change", False)
+        assert yt2html.speaker_html(">> Start", at_start=False) == ("Start", True)
+
+    def render(self, info, spec):
+        info[yt2html.TRANSCRIPT_KEY]["cues"][0]["text"] = ">> Hello and welcome"
+        info[yt2html.TRANSCRIPT_KEY]["cues"][1]["text"] = "first line >> second voice"
+        return yt2html.render_page(info, None, {}, dt.date(2026, 11, 7), transcript_spec=spec)
+
+    def test_timestamps_and_bilingual(self, info):
+        html = self.render(info, [("timestamps", None), ("bilingual", "pl")])
+        assert "&gt;&gt;" not in html
+        assert f'<span class="text">{self.MARK} Hello and welcome</span>' in html
+        assert f'<span class="text">first line {self.MARK} second voice</span>' in html
+        # the translation of a cue that starts a new speaker gets the mark too
+        assert html.count(f'<span class="text">{self.MARK} ') >= 3
+
+    def test_plain_uses_a_grey_bar_but_not_at_the_start(self, info):
+        html = self.render(info, [("plain", None)])
+        assert "&gt;&gt;" not in html
+        assert '<p><span data-c="0">Hello and welcome</span>' in html      # start of a part
+        assert f"first line {yt2html.PLAIN_SPEAKER_MARK} second voice" in html
+
+    def test_lines_under_the_video_leave_the_marks_out(self):
+        assert "all('.speaker', copy).forEach(function (mark) { mark.remove(); });" in yt2html.PLAYER_JS
+
+
+def test_bilingual_section_names_its_language(info):
+    _, html = sections(info, [("bilingual", "pl")])
+    assert '<section class="transcript bilingual" data-lang="pl"><h2>Transcript</h2>' in html

@@ -1228,12 +1228,16 @@ def link_html(href: str, inner_html: str) -> str:
 
 
 def time_link(video_id: str, start: float, text: str | None = None) -> str:
-    """A timestamp linking to the video at that second (plain text without an id)."""
+    """A timestamp linking to the video at that second (plain text without an id).
+
+    `class="t"` and `data-t` (seconds) let the player script play the local
+    copy from there instead of opening YouTube while the player is open."""
     seconds = int(start)
     text = text or format_duration(seconds)
     if not video_id:
         return esc(text)
-    return link(f"{YOUTUBE}/watch?v={video_id}&t={seconds}s", text)
+    return (f'<a class="t" data-t="{seconds}" href="{esc(f"{YOUTUBE}/watch?v={video_id}&t={seconds}s")}" '
+            f'target="_blank" rel="noopener noreferrer">{esc(text)}</a>')
 
 
 def note_html(note: str | None) -> str:
@@ -1259,7 +1263,7 @@ def linkify(text: str, video_id: str | None, duration) -> str:
             seconds = sum(p * 60 ** i for i, p in enumerate(reversed(parts)))
             valid = parts[-1] < 60 and (len(parts) < 3 or parts[-2] < 60)
             if video_id and valid and (duration is None or seconds <= duration):
-                out.append(link(f"{YOUTUBE}/watch?v={video_id}&t={seconds}s", token))
+                out.append(time_link(video_id, seconds, token))
             else:
                 out.append(esc(token))
         elif kind == "tag":
@@ -1323,7 +1327,8 @@ CSS = """
 :root{
   --bg:#0f0f0f; --text:#f1f1f1; --muted:#aaaaaa; --panel:#272727;
   --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
-  --accent:#0e8f85; --on-accent:#fff;
+  --accent:#0e8f85; --on-accent:#fff; --accent-text:#3cc8b4;
+  --accent-soft:rgba(14,143,133,.28); --hover:brightness(1.15);
   --player-w:clamp(320px,40vw,720px);
   color-scheme:dark;
 }
@@ -1402,6 +1407,13 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .transcript .bi-row .text{overflow-wrap:anywhere}
 .transcript .bi-row .text + .text{border-left:1px solid var(--line);padding-left:12px}
 .transcript .bi-head{color:var(--muted);font-size:12px;line-height:18px;padding-bottom:4px}
+/* Speaker change (">>" in YouTube's captions): grey mark */
+.transcript .speaker{color:var(--muted)}
+/* a speech bubble outline, drawn in the grey text colour through a mask */
+.transcript .cue .speaker::before,.transcript .bi-row .speaker::before{content:"";
+  display:inline-block;width:.95em;height:.95em;vertical-align:-.12em;background:currentColor;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H7l-3 3v-3h-.5A1.5 1.5 0 0 1 2 9.5z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H7l-3 3v-3h-.5A1.5 1.5 0 0 1 2 9.5z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat}
 .description{white-space:pre-wrap;overflow-wrap:anywhere}
 .description.empty{color:var(--muted)}
 .comments{margin-top:24px}
@@ -1453,7 +1465,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .has-video .fact.play{display:block}
 .fact.play .value,.fact.play .label{color:var(--on-accent)}
 .fact.play .label{opacity:.85}
-.fact.play:hover{filter:brightness(1.1)}
+.fact.play:hover{filter:var(--hover)}
 .fact.play:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .player{display:none}
 .player-open .player{display:flex;flex-direction:column;gap:12px;position:fixed;top:0;left:0;
@@ -1467,11 +1479,34 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .player .buttons{display:flex;flex-wrap:wrap;gap:8px}
 .player button{width:60px;padding:7px 0;border:0;border-radius:18px;background:var(--chip);
   color:var(--text);font:inherit;font-weight:600;cursor:pointer}
-.player button:hover{filter:brightness(1.15)}
+.player button:hover{filter:var(--hover)}
 .player button.main{width:72px;background:var(--accent);color:var(--on-accent)}
 .player button.wide{width:auto;padding:7px 14px}
 .player .speed button{width:52px;padding:4px 0;font-size:12px}
 .player .speed button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
+/* Follow row: as high as the speeds, both buttons as wide as "Stop following" */
+.player .buttons.follow button{width:116px;padding:4px 0;font-size:12px}
+.player .buttons.follow .langs{display:contents}
+.player .buttons.follow button.lang{width:40px}
+.player button:disabled{opacity:.45;cursor:default;filter:none}
+.player .buttons.follow button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
+.player .now-playing{padding-top:12px;cursor:pointer}
+/* the chapter in a softened accent colour, apart from the spoken lines */
+.player .now-playing .chapter{color:var(--accent-text);opacity:.75;font-size:12px;line-height:18px;
+  font-weight:600;
+  margin-bottom:6px}
+/* all lines the same size: current bold, translation bold grey, the others grey */
+.player .now-playing .line{color:var(--muted);font-size:18px;line-height:26px;overflow-wrap:anywhere}
+.player .now-playing .current{color:var(--text);font-weight:600}
+.player .now-playing .translation{font-weight:600}
+.player .now-playing div:empty{display:none}
+/* While the player is open: timestamps play the local copy, current places marked */
+.player-open a.t{color:var(--accent-text)}
+.player-open .transcript p span[data-c]{cursor:pointer}
+.player-open #chapters li.now,.transcript .cue.now,.transcript .bi-row.now,
+.transcript .cue.found,.transcript .bi-row.found{margin:0 -6px;padding-left:6px;padding-right:6px;
+  border-radius:6px;background:var(--accent-soft)}
+.transcript p span.now,.transcript p span.found{border-radius:4px;background:var(--accent-soft)}
 .player-open .page{max-width:none;margin:0 0 0 var(--player-w)}
 .player-open .page > .thumbnail{display:none}
 .player-open.pip .player{display:none}
@@ -1499,7 +1534,8 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 LIGHT_VARIABLES = """
   --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
   --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
-  --accent:#0f766e;
+  --accent:#0f766e; --accent-text:#0f766e; --accent-soft:rgba(15,118,110,.16);
+  --hover:brightness(.92);
   color-scheme:light;
 """
 
@@ -1746,6 +1782,33 @@ def render_transcripts(transcript: dict, chapters: list[dict], video_id: str,
     return sections
 
 
+# YouTube's automatic captions start a new speaker's words with ">>" (">>>" for
+# a new topic), a convention of TV captions. The page shows its own grey mark.
+SPEAKER_RE = re.compile(r"\s*>>>?\s*")
+SPEAKER_MARK = '<span class="speaker" aria-hidden="true"></span>'
+PLAIN_SPEAKER_MARK = '<span class="speaker">|</span>'
+
+
+def speaker_html(text: str, mark: str = SPEAKER_MARK, at_start: bool = True) -> tuple[str, bool]:
+    """(escaped text with each ">>" replaced by `mark`, whether there was one).
+    A mark at the very start is left out when `at_start` is false."""
+    parts = SPEAKER_RE.split(text or "")
+    if len(parts) == 1:
+        return esc(text or ""), False
+    pieces = []
+    for i, part in enumerate(parts):
+        if i and (pieces or at_start):
+            pieces.append(mark)
+        if part:
+            pieces.append(esc(part))
+    return " ".join(pieces), True
+
+
+def cue_start(cue: dict) -> str:
+    """A cue's start for its data-c attribute: seconds with two decimals."""
+    return f"{float(cue.get('start') or 0):.2f}".rstrip("0").rstrip(".")
+
+
 def group_by_chapters(cues: list[dict], chapters: list[dict]) -> list[dict]:
     """[{title or None, cues}]: cues under the last chapter starting before them."""
     starts = [c.get("start_time") or 0 for c in chapters]
@@ -1801,11 +1864,17 @@ def render_bilingual_transcript(transcript: dict, translation: dict,
         if group["title"] is not None:
             parts.append(f'<h3>{esc(group["title"])}</h3>')
         for cue in group["cues"]:
-            parts.append(f'<div class="bi-row"><span class="time">{time_link(video_id, cue["start"])}</span>'
-                         f'<span class="text">{esc(cue["text"])}</span>'
-                         f'<span class="text">{esc(translated[id(cue)])}</span></div>')
+            original, speaker = speaker_html(cue["text"])
+            translated_html, marked = speaker_html(translated[id(cue)])
+            if speaker and not marked:  # the translation keeps the speaker change
+                translated_html = f"{SPEAKER_MARK} {translated_html}"
+            parts.append(f'<div class="bi-row" data-c="{cue_start(cue)}"><span class="time">'
+                         f'{time_link(video_id, cue["start"])}</span>'
+                         f'<span class="text">{original}</span>'
+                         f'<span class="text">{translated_html}</span></div>')
     # The languages are named in the column headings, not again in the heading.
-    return (f'<section class="transcript bilingual"><h2>Transcript</h2>'
+    language = translation.get("language") or ""
+    return (f'<section class="transcript bilingual" data-lang="{esc(language)}"><h2>Transcript</h2>'
             f'{"".join(parts)}</section>')
 
 
@@ -1823,11 +1892,17 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
         if timestamps:
             rows = []
             for cue in group["cues"]:
-                rows.append(f'<div class="cue"><span class="time">{time_link(video_id, cue["start"])}</span>'
-                            f'<span class="text">{esc(cue["text"])}</span></div>')
+                rows.append(f'<div class="cue" data-c="{cue_start(cue)}"><span class="time">'
+                            f'{time_link(video_id, cue["start"])}</span>'
+                            f'<span class="text">{speaker_html(cue["text"])[0]}</span></div>')
             parts.append(f'<div class="cues">{"".join(rows)}</div>')
         else:
-            parts.append(f"<p>{esc(' '.join(c['text'] for c in group['cues']))}</p>")
+            # One invisible span per cue, so the player can mark and seek it.
+            # A speaker change is a grey " | " (none at the start of a part).
+            parts.append("<p>" + " ".join(
+                f'<span data-c="{cue_start(c)}">'
+                f'{speaker_html(c["text"], PLAIN_SPEAKER_MARK, at_start=i > 0)[0]}</span>'
+                for i, c in enumerate(group["cues"])) + "</p>")
 
     note = transcript_note(transcript)
     if note_suffix:
@@ -1913,12 +1988,25 @@ def render_player(video_names: list[str]) -> str:
         'title="Separate window (picture in picture)">Pop out</button>'
         '</div>'
         f'<div class="buttons speed">{speeds}</div>'
+        '<div class="buttons follow">'
+        '<button type="button" data-do="follow" aria-pressed="false" '
+        'title="Mark the current sentence in the transcript and keep it in view; again: '
+        'the next transcript">Follow</button>'
+        '<button type="button" data-do="unfollow">Stop following</button>'
+        '<button type="button" data-do="subtitles" aria-pressed="false" '
+        'title="Show the current sentences under the video">Subtitles</button>'
+        '<span class="langs"></span></div>'
+        '<div class="now-playing" title="Show in the transcript"><div class="chapter"></div>'
+        '<div class="line prev"></div><div class="line current"></div>'
+        '<div class="line translation"></div><div class="line next"></div></div>'
         '</aside>')
 
 
 # The only script of a page: it adds the player when a video file with the
-# page's name (or the original yt-dlp name) lies next to it. Without the
-# script, or without a video file, the page is exactly as before.
+# page's name (or the original yt-dlp name) lies next to it, makes timestamps
+# play the local copy, shows the current chapter and sentences under the video
+# and marks them on the page (Follow). Without the script, or without a video
+# file, the page is exactly as before.
 PLAYER_JS = r"""
 (function () {
   var body = document.body, panel = document.querySelector('.player');
@@ -1951,22 +2039,195 @@ PLAYER_JS = r"""
     panel.querySelector('.total').textContent = clock(video.duration);
   });
   probe(0);
+  function isOpen() { return body.classList.contains('player-open'); }
+  function jump(t) { video.currentTime = Math.max(0, Math.min(video.duration || 0, t)); }
+  function all(selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
+  function indexAt(times, t) {  // the last index whose time is <= t, or -1
+    var low = 0, high = times.length - 1, found = -1;
+    while (low <= high) {
+      var mid = (low + high) >> 1;
+      if (times[mid] <= t + 0.05) { found = mid; low = mid + 1; } else { high = mid - 1; }
+    }
+    return found;
+  }
+
+  // Timestamps (chapters, info cards, transcripts, description, summary,
+  // comments) and the sentences of the continuous transcript play the local
+  // copy while the player is open; otherwise links open YouTube as usual.
+  document.addEventListener('click', function (e) {
+    if (!isOpen() || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    var target = e.target.closest('a.t[data-t], .transcript span[data-c]');
+    if (!target) return;
+    if (target.tagName === 'SPAN' && !window.getSelection().isCollapsed) return;  // selecting text
+    e.preventDefault();
+    jump(Number(target.dataset.t || target.dataset.c));
+    video.play();
+  });
+
+  // Transcripts and chapters: each transcript version is a list of cues.
+  var lists = all('section.transcript').map(function (section) {
+    var els = all('[data-c]', section);
+    return {section: section, els: els, times: els.map(function (el) { return Number(el.dataset.c); })};
+  }).filter(function (list) { return list.els.length; });
+  function timed(list) {
+    return list.section.classList.contains('with-timestamps') || list.section.classList.contains('bilingual');
+  }
+  // Under the video: the first transcript with timestamps, else the continuous one.
+  var source = lists.filter(timed)[0] || lists[0];
+  // Translations: one per bilingual transcript, in page order, chosen by the
+  // language buttons (none at first).
+  var bilinguals = lists.filter(function (l) { return l.section.classList.contains('bilingual'); });
+  var language = -1, subtitles = false;
+  var chapters = all('#chapters li').filter(function (li) { return li.querySelector('a.t[data-t]'); });
+  var chapterTimes = chapters.map(function (li) { return Number(li.querySelector('a.t').dataset.t); });
+  function textOf(el, column) {  // without the speaker marks
+    var texts = el.querySelectorAll('.text');
+    var node = texts.length ? texts[column || 0] : el;
+    if (!node) return '';
+    var copy = node.cloneNode(true);
+    all('.speaker', copy).forEach(function (mark) { mark.remove(); });
+    return copy.textContent.replace(/\s+/g, ' ').trim();
+  }
+  var box = panel.querySelector('.now-playing');
+  var boxPart = {};
+  ['chapter', 'prev', 'current', 'translation', 'next'].forEach(function (name) {
+    boxPart[name] = box.querySelector('.' + name);
+  });
+  var subtitlesButton = panel.querySelector('[data-do=subtitles]');
+  var langs = panel.querySelector('.langs');
+  var langButtons = bilinguals.map(function (list, i) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lang';
+    button.disabled = true;
+    button.setAttribute('aria-pressed', 'false');
+    button.textContent = list.section.dataset.lang || String(i + 1);
+    button.title = 'Translation: ' + button.textContent;
+    button.addEventListener('click', function () { setLanguage(i); button.blur(); });
+    langs.appendChild(button);
+    return button;
+  });
+  function setLanguage(i) {  // a switch: another language replaces it, the same one turns it off
+    language = language === i ? -1 : i;
+    langButtons.forEach(function (b, n) { b.setAttribute('aria-pressed', String(n === language)); });
+    update(true);
+  }
+  function setSubtitles(on) {  // the lines under the video; off resets the languages
+    subtitles = on;
+    subtitlesButton.setAttribute('aria-pressed', String(on));
+    langButtons.forEach(function (b) { b.disabled = !on; });
+    if (!on) setLanguage(-1);
+    box.hidden = !on;
+    update(true);
+  }
+  box.hidden = true;
+  var shownCue = null, shownChapter = null, marked = null;
+  // follow: the followed transcript (-1 = off); lastFollow: the one used last,
+  // where Follow starts again after Stop following or a scroll (until reload)
+  var follow = -1, lastFollow = 0, followButton = panel.querySelector('[data-do=follow]');
+  var autoScroll = false, autoTimer = null;
+  function scrollToCue(el) {
+    autoScroll = true;
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(function () { autoScroll = false; }, 1500);
+    el.scrollIntoView({block: 'center', behavior: 'smooth'});
+  }
+  function mark(el) {  // the current cue of the followed transcript
+    if (marked === el) return false;
+    if (marked) marked.classList.remove('now');
+    marked = el;
+    if (el) el.classList.add('now');
+    return true;
+  }
+  function placeFollow(force) {
+    var list = lists[follow];
+    var i = Math.max(0, indexAt(list.times, video.currentTime));
+    if (mark(list.els[i]) || force) scrollToCue(list.els[i]);
+  }
+  function setFollow(n) {
+    follow = n;
+    if (n >= 0) lastFollow = n;
+    if (followButton) {
+      followButton.setAttribute('aria-pressed', String(n >= 0));
+      followButton.textContent = n >= 0 && lists.length > 1
+        ? 'Follow ' + (n + 1) + '/' + lists.length : 'Follow';
+    }
+    mark(null);
+    if (n >= 0) placeFollow(true);
+  }
+  function update(force) {
+    var t = video.currentTime;
+    var c = isOpen() ? indexAt(chapterTimes, t) : -1;
+    if (force || c !== shownChapter) {
+      chapters.forEach(function (li, i) { li.classList.toggle('now', i === c); });
+      boxPart.chapter.textContent = c >= 0 ? chapters[c].querySelector('.label').textContent : '';
+      shownChapter = c;
+    }
+    if (!source) return;
+    var i = indexAt(source.times, t);
+    if (force || i !== shownCue) {
+      shownCue = i;
+      boxPart.prev.textContent = i > 0 ? textOf(source.els[i - 1]) : '';
+      boxPart.current.textContent = i >= 0 ? textOf(source.els[i]) : '';
+      boxPart.next.textContent = source.els[i + 1] ? textOf(source.els[i + 1]) : '';
+      var translation = bilinguals[language];
+      var j = translation ? indexAt(translation.times, t) : -1;
+      boxPart.translation.textContent = j >= 0 ? textOf(translation.els[j], 1) : '';
+    }
+    if (follow >= 0) placeFollow(false);
+  }
+  // Clicking the lines under the video shows them in the transcript on the right.
+  box.addEventListener('click', function () {
+    var list = follow >= 0 ? lists[follow] : source;
+    if (!list) return;
+    var el = list.els[Math.max(0, indexAt(list.times, video.currentTime))];
+    el.classList.add('found');
+    setTimeout(function () { el.classList.remove('found'); }, 2000);
+    if (follow >= 0) scrollToCue(el); else el.scrollIntoView({block: 'center', behavior: 'smooth'});
+  });
+  window.addEventListener('scrollend', function () {
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(function () { autoScroll = false; }, 100);
+  });
+  window.addEventListener('scroll', function () {  // scrolling by hand ends Follow
+    if (follow >= 0 && !autoScroll) setFollow(-1);
+  }, {passive: true});
+  if (!lists.length) {
+    panel.querySelector('[data-do=follow]').remove();
+    panel.querySelector('[data-do=unfollow]').remove();
+  }
+  if (!source && !chapters.length) panel.querySelector('.buttons.follow').remove();
+  else if (!source) {  // no transcript: the button shows only the current chapter
+    subtitlesButton.textContent = 'Chapters';
+    subtitlesButton.title = 'Show the current chapter under the video';
+  }
+
   function setOpen(open) {
     body.classList.toggle('player-open', open);
     tile.querySelector('.value').textContent = open ? '✕ Close' : '▶ Play';
+    all('a.t[data-t]').forEach(function (a) {
+      if (open) a.title = 'Play from ' + a.textContent; else a.removeAttribute('title');
+    });
+    if (!open) setFollow(-1);
+    update(true);
   }
-  function jump(t) { video.currentTime = Math.max(0, Math.min(video.duration || 0, t)); }
   var actions = {
     start: function () { video.pause(); jump(0); },  // always stopped at the start
     end: function () { jump(video.duration); },
     back: function () { jump(video.currentTime - 10); },
     forward: function () { jump(video.currentTime + 10); },
     toggle: function () { if (video.paused) video.play(); else video.pause(); },
-    pip: function () { video.requestPictureInPicture(); }
+    pip: function () { video.requestPictureInPicture(); },
+    // Follow marks the current sentence in a transcript and keeps it in view,
+    // starting with the one used last; pressed again it moves on to the next
+    // transcript (and round again).
+    follow: function () { setFollow(follow < 0 ? lastFollow : (follow + 1) % lists.length); },
+    unfollow: function () { setFollow(-1); },
+    subtitles: function () { setSubtitles(!subtitles); }
   };
   tile.addEventListener('click', function () {
     tile.blur();  // so that the space key then pauses the video, not the tile
-    if (body.classList.contains('player-open')) {
+    if (isOpen()) {
       video.pause();
       if (document.pictureInPictureElement) document.exitPictureInPicture();
       setOpen(false);
@@ -1975,14 +2236,14 @@ PLAYER_JS = r"""
       video.play();
     }
   });
-  panel.querySelectorAll('[data-do]').forEach(function (button) {
+  all('[data-do]', panel).forEach(function (button) {
     button.addEventListener('click', function () { actions[button.dataset.do](); button.blur(); });
   });
   if (!document.pictureInPictureEnabled) panel.querySelector('[data-do=pip]').remove();
-  panel.querySelectorAll('[data-speed]').forEach(function (button) {
+  all('[data-speed]', panel).forEach(function (button) {
     button.addEventListener('click', function () {
       video.playbackRate = Number(button.dataset.speed);
-      panel.querySelectorAll('[data-speed]').forEach(function (other) {
+      all('[data-speed]', panel).forEach(function (other) {
         other.setAttribute('aria-pressed', String(other === button));
       });
       button.blur();
@@ -1992,7 +2253,9 @@ PLAYER_JS = r"""
   video.addEventListener('timeupdate', function () {
     seek.value = video.currentTime;
     panel.querySelector('.now').textContent = clock(video.currentTime);
+    update(false);
   });
+  video.addEventListener('seeked', function () { update(false); });
   video.addEventListener('play', function () { toggle.textContent = '❚❚'; });
   video.addEventListener('pause', function () { toggle.textContent = '▶'; });
   video.addEventListener('enterpictureinpicture', function () { body.classList.add('pip'); });
@@ -2004,7 +2267,7 @@ PLAYER_JS = r"""
     } catch (e) { /* not supported */ }
   }
   document.addEventListener('keydown', function (e) {
-    if (!body.classList.contains('player-open') || e.altKey || e.ctrlKey || e.metaKey
+    if (!isOpen() || e.altKey || e.ctrlKey || e.metaKey
         || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(e.target.tagName)) return;
     var action = {' ': 'toggle', 'ArrowLeft': 'back', 'ArrowRight': 'forward'}[e.key];
     if (action) { e.preventDefault(); actions[action](); }

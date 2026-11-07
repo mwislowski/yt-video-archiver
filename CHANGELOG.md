@@ -6,6 +6,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ### Added
 - A player for a downloaded copy of the video: if a video file with the page's name (or yt-dlp's original name) lies next to the page, a turquoise *Play* tile opens a player pinned on the left while the page scrolls on the right. Buttons for start (stops the video), ±10 seconds, play/pause, end, a separate window (*Pop out*) and speeds 0.5×–1.5×; keys `Space`, `←`, `→`. The video is found each time the page is opened, so it may be downloaded later.
+- While the player is open, timestamps play the local copy instead of opening YouTube: in chapters and other lists, info cards, transcripts, the description, the AI summary and comments; in the continuous transcript a click on a sentence. *Subtitles* shows under the video the current chapter and the current sentence with the ones before and after it; small language buttons (one per bilingual transcript) add a translation. *Follow* marks the current sentence in a transcript on the page and keeps it in view (pressed again: the next transcript; after *Stop following* or scrolling, which end it, it starts again with the transcript used last).
+- Speaker changes in YouTube's automatic captions (`>>`) are shown as a grey mark in the transcripts (a grey ` | ` in the continuous one) and left out in the lines under the video.
 - The author's info cards (the "i" teasers linking to a video, playlist, channel or website) in a section after the chapters: time, image, title linking to the target, kind, details and the author's message. Link cards point to the real website instead of YouTube's one-time redirect, and show its domain. `--no-cards` leaves them out without reading or requesting anything for them.
 
 ### Changed

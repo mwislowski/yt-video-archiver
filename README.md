@@ -169,11 +169,27 @@ If the video file lies **next to the page with the same name** (`Title [id].mp4`
 - On narrow windows and phones the player stays at the top and the page scrolls below it.
 - Browsers play mp4 with H.264 video and AAC audio everywhere (the yt-dlp command in the table above downloads it). Videos in HEVC/H.265 do not play in Firefox; `.mkv` plays only in some browsers.
 
+**Timestamps play the local copy.** While the player is open, a click on a timestamp plays your copy from that moment instead of opening YouTube (the timestamps turn turquoise). This works everywhere the page has timestamps:
+
+- chapters and other timestamp lists (e.g. Walkthroughs);
+- info cards;
+- the transcript with timestamps and the bilingual transcript;
+- the description and the AI-generated summary (times written in the text, e.g. `12:30`);
+- comments (e.g. `3:15 best part`);
+- the continuous transcript: it shows no times, but each sentence knows its own, so a click on a sentence plays from there.
+
+With the player closed, timestamps open YouTube as before; `Ctrl`+click always opens YouTube.
+
+**Subtitles under the video.** *Subtitles* (off at first) shows the current chapter and the current sentence of the transcript under the video, with the sentences before and after it in grey. The sentences come from the first transcript with timestamps on the page (plain or bilingual), otherwise from the continuous one. Next to *Subtitles* there is a small button for each translation on the page (`pl`, `de`, … in the order of the bilingual transcripts; none without one). They work once *Subtitles* is on: a click shows that translation under the current sentence, another language replaces it, and a second click on the active one hides it. Turning *Subtitles* off also turns the translation off. On a page without a transcript the button is called *Chapters* and shows only the current chapter; without chapters either, it is not shown. A click on the subtitles shows the place in the transcript on the right. The current chapter is also marked in the chapter list.
+
+**Follow** marks the current sentence in the transcript on the right and keeps it in view as the video plays. With several transcripts on the page, pressing *Follow* again moves to the next one (*Follow 2/3*, and round again). *Stop following*, or scrolling the page yourself, ends it; *Follow* then starts again with the transcript you followed last (as long as the page stays open).
+
 ## Good to know
 
 - Comments take most of the time: YouTube serves about 20 per request, so 10,000 comments take a few minutes. `Ctrl+C` stops downloading them and still makes the page from the comments fetched so far; such a page counts as finished on the next run (use `--overwrite` for that video to get all comments). With several videos or a playlist the run stops there; run the same command again to continue with the videos that have no page yet.
 - The number of downloaded comments is usually a bit lower than YouTube's count (deleted or hidden comments); the page shows both. A limited download (`--max-comments`) shows as fewer downloaded comments; `No comments.` appears only when the video really has none.
 - Comment times are as YouTube showed them on the download day (`3 years ago`); hover over one to see the estimated date. Subscriber counts are rounded by YouTube (`1.23M`); views and likes are exact.
+- YouTube's automatic captions mark a change of speaker with `>>`; the page shows a grey mark instead (a grey ` | ` in the continuous transcript) and leaves it out in the lines under the video.
 - The transcript is the one YouTube's *Show transcript* opens: the captions of the video's original language, also for auto-dubbed videos. The AI summary is in the language of the video.
 - `bilingual:LANG` uses YouTube's machine translation, so its quality varies. YouTube refuses translations requested within about a minute of opening the video, so the program may wait up to a minute (shown on screen) and retries after `HTTP 429`.
 - A chapter list in a video description becomes real chapters on YouTube only if it starts at `0:00`, has at least three timestamps in ascending order and each chapter is at least 10 seconds long.
