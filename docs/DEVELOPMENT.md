@@ -222,6 +222,22 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 **Ctrl+C.** yt-dlp catches `Ctrl+C` while it downloads comments: it ends only the comments, keeps those fetched so far and sets `comment_count` to `None` (`comments_interrupted()`; with comments disabled there is no list). `archive()` still makes the page and then raises `CommentsInterrupted` (a `KeyboardInterrupt`), so a run with several videos does not go on with the next one. `main()` catches any `KeyboardInterrupt` between and during videos, prints the summary without a traceback and returns 130. The page made from interrupted comments counts as finished on later runs (`--overwrite` remakes it).
 
+## Info cards
+
+The author's info cards (the "i" teasers during the video) are read from the watch page that `add_watch_page_data()` fetches anyway; the only further requests are their images and one per link card (below). With `--no-cards`, `add_watch_page_data(..., cards=False)` does not touch them (`CARDS_KEY` stays absent), and `archive()` also drops cards kept in a `--from-json` file before images are fetched.
+
+- **Content:** the description panel's `videoDescriptionInfocardsSectionRenderer.infocards[].compactInfocardRenderer.content`, one lockup per card (`CARD_TYPES`, `parse_card()`):
+  - `structuredDescriptionVideoLockupRenderer` (video): `title`, `shortBylineText` ("by …", the "by " is removed), `lengthText`, `metadataDetails`, `navigationEndpoint.watchEndpoint.videoId`;
+  - `structuredDescriptionPlaylistLockupRenderer` (playlist): `title`, `shortBylineText`, `videoCountShortText`, `watchEndpoint.playlistId` (or a `browseEndpoint` `VL…` id);
+  - `structuredDescriptionChannelLockupRenderer` (channel): `title`, `subscriberCountText`, `browseEndpoint.browseId`;
+  - `mediaLockupRenderer` (link): `title`, `subtitle`, `endpoint.urlEndpoint.url`, a one-time `youtube.com/redirect?event=infocard&redir_token=…` link without the target address. `resolve_card_links()` opens it once (with yt-dlp's `urlopen`): YouTube answers with its "Are you sure you want to leave YouTube?" page, whose button `<a id="invalid-token-redirect-goto-site-button" href="TARGET">` holds the target (`LEAVE_BUTTON_RE`). The card then links to the target, and its domain (without `www.`) is added to the details. If the request fails or the page has no `http(s)` target, the card keeps the redirect and a message says so; the video is archived as usual. Checked 07.11.2026 on `dkh1A_mAhY8` (targets such as `content.nordvpn.com/…`, `nordpass.com`); the target itself is not followed further.
+  - Image: the smallest of `thumbnail.thumbnails` / `thumbnailDetails.thumbnails` at least 160 px wide (they come as 112 and 224 px).
+- **Time and teaser:** `ytInitialData["cards"].cardCollectionRenderer.cards[].cardRenderer` (`card_cues()`): `cueRanges[0].startCardActiveMs` and `teaser.simpleCardTeaserRenderer.message`, in the same order as the lockups. They are paired by position only if there are as many cues as lockups; otherwise the cards get no time, never a wrong one. The teaser is kept as `message` only if it differs from the title (e.g. "Check out Nonstop Eurotrip!"). Not `ytInitialPlayerResponse["cards"]`: on all checked videos it held only YouTube's "View corrections" teaser.
+- Cards are sorted by time (cards without one last, in YouTube's order).
+- **Page** (`render_cards()`): `<section class="desc-extra cards" id="info-cards">` right after the chapters and other timestamp lists (the user's choice; YouTube shows them inside the description panel). One `<li>` per card: time (`time_link()`, empty without a time), image (160×90, the area of a 120×120 podcast cover; channels round 90×90; 112×63 on phones), title linking to the target, grey line `Kind · details · “message”` (`CARD_LABELS`).
+- End screens are left out on purpose: their video elements may be picked by YouTube for each viewer, and the data does not say which.
+- Checked on 07.11.2026: `KDRJ5aKWicc` (video card), `nMwUppuqDk4` (playlist), `EBQzfbqFKN0` (channel and three videos), `dkh1A_mAhY8` (three links).
+
 ## Local video player
 
 The page plays a downloaded copy of the video lying next to it. Parts: `PLAYER_TILE` (a `<button class="fact play">`, first in `.facts`, same size as the other tiles: value `▶ Play` / `✕ Close`, label `Player`), `render_player()` (`<aside class="player">` before `<main>`: `<video preload="metadata">`, a range input with times, buttons `|◀ −10 s ▶ +10 s ▶| Pop out`, speeds `PLAYER_SPEEDS`), `PLAYER_JS` (one inline `<script>` at the end of `<body>`), and the CSS block *Local video player* (colours `--accent`, `--on-accent`; width `--player-w: clamp(320px, 40vw, 720px)`).
@@ -255,7 +271,7 @@ The page plays a downloaded copy of the video lying next to it. Parts: `PLAYER_T
 uv run pytest
 ```
 
-The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `230 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `251 passed, 7 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
 
 **What is covered (offline):**
 
@@ -268,13 +284,14 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 | `test_transcript.py` | choosing the caption track (incl. auto-dubbed videos), json3 captions, translations (alignment, HTTP 429 retries, errors), `--transcript` parsing and rendering |
 | `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
 | `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes, channel URLs rejected without fetching |
+| `test_cards.py` | info cards of every kind, pairing with times only when the counts match, sorting, messages, placement after the chapters, images, resolving link cards (and keeping the redirect when that fails), `--no-cards` reading and requesting nothing and hiding saved cards |
 | `test_playlist.py` | playlist and channel URLs, expanding in order, duplicates (in a playlist, across playlists, separate URLs), skipping and rerunning, failed videos and playlists, `Ctrl+C` stopping the run, empty playlists, playlists in batch files, `fetch_playlist()` reading only the list |
 | `test_index.py` | page metadata and comment status, comments line, playlist and list file indexes (renamed pages and index, original titles, reasons and their survival, `Ctrl+C`, numbering, unreadable playlists), `--index-only` without downloads, option errors |
 | `test_batch.py` | `-a` files: comments, blank lines, byte order mark, order, duplicates in other URL forms, unusable files stop before fetching, bad lines fail alone, rerunning a list, the file is not changed, `--from-json` paths |
 
 The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.
 
-**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast and the original-language transcript of an auto-dubbed video (`Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`):
+**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast and the original-language transcript of an auto-dubbed video (`Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`), info cards (`EBQzfbqFKN0`), resolved link cards (`dkh1A_mAhY8`):
 
 ```powershell
 uv run pytest --online -m online

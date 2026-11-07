@@ -312,3 +312,57 @@ def info_file(tmp_path, info):
     path = tmp_path / "test.info.json"
     path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+# Info cards, shaped like the data of the reference videos (07.11.2026)
+def thumbnails(name: str) -> dict:
+    return {"thumbnails": [{"url": f"https://img.test/{name}-112", "width": 112, "height": 64},
+                           {"url": f"https://img.test/{name}-224", "width": 224, "height": 128}]}
+
+
+def video_card(video_id="0KMYAEIXVzA", title="The Largest Rail System In the World") -> dict:
+    return {"structuredDescriptionVideoLockupRenderer": {
+        "thumbnail": thumbnails(video_id), "title": {"simpleText": title},
+        "shortBylineText": {"simpleText": "by RMTransit"},
+        "metadataDetails": {"simpleText": "840K views · 4 years ago"},
+        "navigationEndpoint": {"watchEndpoint": {"videoId": video_id}},
+        "lengthText": {"simpleText": "22:25"}}}
+
+
+def playlist_card() -> dict:
+    return {"structuredDescriptionPlaylistLockupRenderer": {
+        "thumbnail": thumbnails("playlist"), "title": {"simpleText": "Level Builder Updates"},
+        "shortBylineText": {"simpleText": "by Semag Games"},
+        "videoCountShortText": {"simpleText": "6"},
+        "navigationEndpoint": {"watchEndpoint": {"videoId": "wQaMf80NiGg",
+                                                 "playlistId": "PLCGaK2yqfY2J-3SZSNY6f7b2_PWbuIXHa"}}}}
+
+
+def channel_card() -> dict:
+    return {"structuredDescriptionChannelLockupRenderer": {
+        "thumbnail": thumbnails("channel"), "title": {"simpleText": "Nonstop Eurotrip"},
+        "subscriberCountText": {"simpleText": "165K subscribers"},
+        "navigationEndpoint": {"browseEndpoint": {"browseId": "UCBqWe9KKYUavknEaaZLk7cQ"}}}}
+
+
+def link_card(title="NordPass", subtitle="Password manager") -> dict:
+    return {"mediaLockupRenderer": {
+        "title": {"simpleText": title}, "subtitle": {"simpleText": subtitle},
+        "thumbnailDetails": thumbnails("link"),
+        "endpoint": {"urlEndpoint": {"url": "https://www.youtube.com/redirect?event=infocard"
+                                            "&redir_token=TOKEN", "target": "TARGET_NEW_WINDOW"}}}}
+
+
+def infocards_item(*contents: dict) -> dict:
+    return {"videoDescriptionInfocardsSectionRenderer": {
+        "sectionTitle": {"simpleText": "RMTransit"},
+        "infocards": [{"compactInfocardRenderer": {"content": c}} for c in contents]}}
+
+
+def cards_collection(*cues: tuple[int, str]) -> dict:
+    return {"cardCollectionRenderer": {
+        "headerText": {"simpleText": "More from RMTransit"},
+        "cards": [{"cardRenderer": {
+            "teaser": {"simpleCardTeaserRenderer": {"message": {"simpleText": message}}},
+            "cueRanges": [{"startCardActiveMs": str(ms), "endCardActiveMs": "0",
+                           "teaserDurationMs": "6000"}]}} for ms, message in cues]}}

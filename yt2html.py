@@ -115,6 +115,10 @@ TRANSLATIONS_KEY = "yt2html_translation_languages"
 # --transcript none. All versions on the page are built from the same cues.
 TRANSCRIPT_KEY = "yt2html_transcript"
 
+# The author's info cards: [{type, title, url, image, details, message, start}];
+# absent with --no-cards, None when the watch page cannot be read.
+CARDS_KEY = "yt2html_cards"
+
 # Keys filled from the watch page; all None when the page cannot be read.
 PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TRANSLATIONS_KEY)
 
@@ -155,7 +159,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         if not args.no_comments:
             info[LIMIT_KEY] = args.max_comments
         if info.get("_type") not in ("playlist", "multi_video"):
-            add_watch_page_data(ydl, info)
+            add_watch_page_data(ydl, info, cards=not args.no_cards)
             if args.transcript:
                 info[TRANSCRIPT_KEY] = fetch_transcript(
                     ydl, info, bilingual_languages(args.transcript),
@@ -167,7 +171,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
 # Reading the watch page (what yt-dlp does not return)
 # --------------------------------------------------------------------------
 
-def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
+def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -> None:
     """Fill PAGE_KEYS from the watch page, fetched once more.
 
     yt-dlp keeps only one timestamp list, as `chapters`, without its name and
@@ -176,7 +180,8 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
     default caption track. The page is fetched with yt-dlp's cookies and
     consent; ytInitialData and ytInitialPlayerResponse are read from it.
     If it cannot be read, all PAGE_KEYS are None and the page falls back to
-    yt-dlp's data where it can.
+    yt-dlp's data where it can. Info cards are read only if `cards` is true
+    (--no-cards leaves CARDS_KEY out and does nothing for them).
     """
     url = f"{YOUTUBE}/watch?v={info.get('id')}&hl=en"
     try:
@@ -187,6 +192,8 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
         info.update(dict.fromkeys(PAGE_KEYS))
+        if cards:
+            info[CARDS_KEY] = None
         return
     try:
         player_response = embedded_json(webpage, "ytInitialPlayerResponse")
@@ -199,6 +206,9 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict) -> None:
     info[EXTRAS_KEY] = parse_description_extras(data)
     info[YT_COUNT_KEY] = parse_comment_count(data)
     info[LICENSE_KEY] = parse_license(data)
+    if cards:
+        info[CARDS_KEY] = parse_cards(data)
+        resolve_card_links(ydl, info[CARDS_KEY])
 
 
 def unwrap_redirect(url: str) -> str:
@@ -659,13 +669,141 @@ def parse_playlist_section(section: dict) -> dict | None:
             "items": items}
 
 
+# Info cards: the content is a lockup in the description panel's infocards
+# section; the time and the teaser text are in ytInitialData["cards"], in the
+# same order. (ytInitialPlayerResponse["cards"] holds only YouTube's own
+# "View corrections" teaser, not the author's cards.)
+CARD_TYPES = {
+    "structuredDescriptionVideoLockupRenderer": "video",
+    "structuredDescriptionPlaylistLockupRenderer": "playlist",
+    "structuredDescriptionChannelLockupRenderer": "channel",
+    "mediaLockupRenderer": "link",
+}
+
+
+def card_cues(data: dict) -> list[dict]:
+    """[{start (seconds or None), message}] of the cards, in order."""
+    cues = []
+    collection = (data.get("cards") or {}).get("cardCollectionRenderer") or {}
+    for card in collection.get("cards") or []:
+        renderer = card.get("cardRenderer") or {}
+        cue = (renderer.get("cueRanges") or [{}])[0]
+        try:
+            start = int(cue.get("startCardActiveMs")) / 1000
+        except (TypeError, ValueError):
+            start = None
+        teaser = (renderer.get("teaser") or {}).get("simpleCardTeaserRenderer") or {}
+        cues.append({"start": start, "message": text_of(teaser.get("message")).strip()})
+    return cues
+
+
+def parse_card(content: dict) -> dict | None:
+    """One info card's target from its lockup; None for unknown kinds."""
+    kind = next((CARD_TYPES[key] for key in CARD_TYPES if key in content), None)
+    if not kind:
+        return None
+    model = next(content[key] for key in CARD_TYPES if key in content)
+    navigation = model.get("navigationEndpoint") or {}
+    title = text_of(model.get("title")).strip()
+    byline = re.sub(r"^by\s+", "", text_of(model.get("shortBylineText")).strip())
+    url, details = None, []
+    if kind == "video":
+        video_id = (navigation.get("watchEndpoint") or {}).get("videoId")
+        url = f"{YOUTUBE}/watch?v={video_id}" if video_id else None
+        details = [byline, text_of(model.get("lengthText")), text_of(model.get("metadataDetails"))]
+    elif kind == "playlist":
+        playlist_id = (navigation.get("watchEndpoint") or {}).get("playlistId")
+        if not playlist_id:
+            browse_id = (navigation.get("browseEndpoint") or {}).get("browseId") or ""
+            playlist_id = browse_id[2:] if browse_id.startswith("VL") else browse_id
+        url = f"{YOUTUBE}/playlist?list={playlist_id}" if playlist_id else None
+        count = text_of(model.get("videoCountShortText")).strip()
+        details = [byline, f"{count} video{'' if count == '1' else 's'}" if count.isdigit() else count]
+    elif kind == "channel":
+        channel_id = (navigation.get("browseEndpoint") or {}).get("browseId")
+        url = f"{YOUTUBE}/channel/{channel_id}" if channel_id else None
+        details = [text_of(model.get("subscriberCountText"))]
+    else:  # link: a YouTube redirect; the target address is not in the data
+        target = ((model.get("endpoint") or {}).get("urlEndpoint") or {}).get("url")
+        url = unwrap_redirect(target) if target else None
+        subtitle = text_of(model.get("subtitle")).strip()
+        details = [subtitle if subtitle != title else ""]
+    image = best_image_url(((model.get("thumbnail") or model.get("thumbnailDetails") or {})
+                            .get("thumbnails")), wanted=160)
+    return {"type": kind, "title": title, "url": url, "image": image,
+            "details": [d.strip() for d in details if d and d.strip()]}
+
+
+# The "Are you sure you want to leave YouTube?" page behind a link card's
+# redirect has the target in this button.
+LEAVE_BUTTON_RE = re.compile(r'<a\b[^>]*\bid="invalid-token-redirect-goto-site-button"[^>]*>')
+HREF_RE = re.compile(r'\bhref="([^"]*)"')
+
+
+def resolve_card_links(ydl, cards: list[dict]) -> None:
+    """Replace the one-time YouTube redirects of link cards with their target
+    address and add its domain to the details. One request per link card;
+    if it fails, the card keeps the redirect and the video is archived as usual."""
+    links = [c for c in cards if c.get("type") == "link"
+             and "youtube.com/redirect" in (c.get("url") or "")]
+    if links:
+        log(f"Reading the target{'s' if len(links) > 1 else ''} of "
+            f"{plural(len(links), 'info card link')}...")
+    for card in links:
+        try:
+            with ydl.urlopen(card["url"]) as response:
+                page = response.read().decode("utf-8", errors="replace")
+            button = LEAVE_BUTTON_RE.search(page)
+            href = HREF_RE.search(button.group(0)) if button else None
+            target = html.unescape(href.group(1)) if href else ""
+            if not re.match(r"https?://", target):
+                raise ValueError("no target address on the page")
+        except Exception as error:
+            log(f"  Info card link {card.get('title')!r} kept as a YouTube redirect ({error}).")
+            continue
+        card["url"] = target
+        domain = urllib.parse.urlsplit(target).netloc.removeprefix("www.")
+        if domain:
+            card["details"] = [*card.get("details", []), domain]
+
+
+def parse_cards(data: dict) -> list[dict]:
+    """The author's info cards, sorted by time, each with its time and the teaser
+    text if it differs from the title (e.g. "Check out Nonstop Eurotrip!").
+    Times are used only when there are as many as cards, so a card never
+    gets another card's time."""
+    contents = []
+    for item in structured_description_items(data):
+        section = item.get("videoDescriptionInfocardsSectionRenderer")
+        if section:
+            contents += [(c.get("compactInfocardRenderer") or {}).get("content") or {}
+                         for c in section.get("infocards") or []]
+    cues = card_cues(data)
+    if len(cues) != len(contents):
+        cues = [{}] * len(contents)
+    cards = []
+    for content, cue in zip(contents, cues):
+        card = parse_card(content)
+        if card:
+            message = cue.get("message") or ""
+            card["start"] = cue.get("start")
+            card["message"] = message if message.casefold() != card["title"].casefold() else ""
+            cards.append(card)
+    # In the order of the video, like chapters; cards without a time last.
+    return sorted(cards, key=lambda c: (c["start"] is None, c["start"] or 0))
+
+
 def extra_image_urls(info: dict) -> set[str]:
-    """Images used by the description extras (people photos, podcast covers)."""
+    """Images used by the description extras (people photos, podcast covers)
+    and by the info cards."""
     urls = set()
     for extra in info.get(EXTRAS_KEY) or []:
         for entry in (extra.get("people") or []) + (extra.get("items") or []):
             if entry.get("image"):
                 urls.add(entry["image"])
+    for card in info.get(CARDS_KEY) or []:
+        if card.get("image"):
+            urls.add(card["image"])
     return urls
 
 
@@ -1237,6 +1375,17 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .playlist .name{font-size:14px;line-height:20px;font-weight:700;overflow-wrap:anywhere}
 .playlist .name a{color:var(--text)}
 .playlist .meta{color:var(--muted);font-size:12px;line-height:18px}
+/* Info cards: 160x90 images (the area of a 120x120 podcast cover), channel round */
+.cards ol{list-style:none;margin:0;padding:0}
+.cards li{display:flex;gap:12px;align-items:flex-start;padding:6px 0}
+.cards .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:600}
+.cards .card-image{display:flex;flex:none;width:160px;height:90px;object-fit:cover;
+  border-radius:8px;background:var(--chip)}
+.cards .card-image.round{width:90px;height:90px;margin:0 35px;border-radius:50%}
+.cards .details{min-width:0}
+.cards .name{font-weight:700;overflow-wrap:anywhere}
+.cards .name a{color:var(--text)}
+.cards .meta{color:var(--muted);font-size:12px;line-height:18px;overflow-wrap:anywhere}
 .markers ol{list-style:none;margin:0;padding:0}
 .markers li{display:flex;gap:12px;padding:3px 0}
 .markers .time{flex:none;min-width:56px;font-variant-numeric:tabular-nums;font-weight:600}
@@ -1339,6 +1488,8 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
   .replies{margin-left:20px}
   .replies .replies{margin-left:12px}
   .transcript .bi-row{grid-template-columns:48px 1fr}
+  .cards .card-image{width:112px;height:63px}
+  .cards .card-image.round{width:63px;height:63px;margin:0 24.5px}
   .transcript .bi-row .text + .text{grid-column:2;border-left:0;padding-left:0;color:var(--muted)}
 }
 """
@@ -1501,6 +1652,31 @@ def render_playlists(extra: dict, images: dict[str, str]) -> str:
                     f'<div class="name">{title}</div>{lines}</div></div>')
     return (f'<section class="desc-extra playlists"><h2>{esc(extra.get("title") or "")}</h2>'
             f'{"".join(rows)}</section>')
+
+
+CARD_LABELS = {"video": "Video", "playlist": "Playlist", "channel": "Channel", "link": "Link"}
+
+
+def render_cards(cards: list[dict], video_id: str, images: dict[str, str]) -> str:
+    """The "Info cards" section: time, image, title linking to the target and
+    a grey line with the kind, details and the author's message."""
+    rows = []
+    for card in cards:
+        start = card.get("start")
+        time = time_link(video_id, start) if start is not None else ""
+        cls = "card-image round" if card.get("type") == "channel" else "card-image"
+        image = image_or_placeholder(card.get("image"), images, card.get("title") or "", cls)
+        title = esc(card.get("title") or "")
+        if card.get("url"):
+            image = link_html(card["url"], image)
+            title = link_html(card["url"], title)
+        meta = " · ".join([CARD_LABELS.get(card.get("type"), "Card"), *(card.get("details") or [])])
+        if card.get("message"):
+            meta += f" · “{card['message']}”"
+        rows.append(f'<li><span class="time">{time}</span>{image}<div class="details">'
+                    f'<div class="name">{title}</div><div class="meta">{esc(meta)}</div></div></li>')
+    return (f'<section class="desc-extra cards" id="info-cards"><h2>Info cards</h2>'
+            f'<ol>{"".join(rows)}</ol></section>')
 
 
 def render_description_extras(extras: list[dict], video_id: str, duration,
@@ -1909,6 +2085,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     markers = marker_lists_of(info)
     if markers:
         body.append(render_marker_lists(markers, video_id))
+
+    cards = info.get(CARDS_KEY)
+    if cards:
+        body.append(render_cards(cards, video_id, extra_images or {}))
 
     if after:
         body.append(render_description_extras(after, video_id, duration, extra_images))
@@ -2559,7 +2739,9 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
     if not args.no_avatars:
         avatar_uris = fetch_images({c.get("author_thumbnail") for c in info.get("comments") or []},
                                    "avatars", resize=resize_avatar_url)
-    extra_images = fetch_images(extra_image_urls(info), "images (people, podcast)")
+    if args.no_cards:
+        info.pop(CARDS_KEY, None)  # also cards kept in a --from-json file
+    extra_images = fetch_images(extra_image_urls(info), "images (people, podcast, cards)")
 
     try:
         archived = dt.date.fromisoformat(info.get(ARCHIVED_KEY) or "")
@@ -2713,6 +2895,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="do not download comments")
     parser.add_argument("--max-comments", type=int, metavar="N",
                         help="limit the number of downloaded comments (replies included)")
+    parser.add_argument("--no-cards", action="store_true",
+                        help="leave out the author's info cards (nothing is read or "
+                             "downloaded for them)")
     parser.add_argument("--no-avatars", action="store_true",
                         help="do not embed avatars (letter placeholders instead)")
     parser.add_argument(

@@ -57,3 +57,18 @@ def test_people_mentioned(tmp_path):
 def test_license(tmp_path):
     _, info = archive(tmp_path, "KZtvWKpXPro", "--transcript", "none")
     assert "Creative Commons" in info[yt2html.LICENSE_KEY]["runs"][0]["text"]
+
+
+def test_info_cards(tmp_path):
+    html, info = archive(tmp_path, "EBQzfbqFKN0", "--transcript", "none")
+    cards = info[yt2html.CARDS_KEY]
+    assert len(cards) >= 2
+    assert cards[0]["type"] == "channel" and 60 < cards[0]["start"] < 75
+    assert {c["type"] for c in cards[1:]} == {"video"}
+    assert 'id="info-cards"' in html
+
+
+def test_info_card_links_are_resolved(tmp_path):
+    _, info = archive(tmp_path, "dkh1A_mAhY8", "--transcript", "none")
+    links = [c for c in info[yt2html.CARDS_KEY] if c["type"] == "link"]
+    assert links and all("youtube.com/redirect" not in c["url"] for c in links)
