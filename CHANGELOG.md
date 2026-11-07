@@ -4,6 +4,12 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+- A player for a downloaded copy of the video: if a video file with the page's name (or yt-dlp's original name) lies next to the page, a turquoise *Play* tile opens a player pinned on the left while the page scrolls on the right. Buttons for start (stops the video), ±10 seconds, play/pause, end, a separate window (*Pop out*) and speeds 0.5×–1.5×; keys `Space`, `←`, `→`. The video is found each time the page is opened, so it may be downloaded later.
+
+### Changed
+- Pages contain one small built-in script (for the player); without it they work as before.
+
 ## [0.5.0] - 2026-11-06
 
 ### Added

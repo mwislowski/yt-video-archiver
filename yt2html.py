@@ -1185,6 +1185,8 @@ CSS = """
 :root{
   --bg:#0f0f0f; --text:#f1f1f1; --muted:#aaaaaa; --panel:#272727;
   --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
+  --accent:#0e8f85; --on-accent:#fff;
+  --player-w:clamp(320px,40vw,720px);
   color-scheme:dark;
 }
 *{box-sizing:border-box}
@@ -1295,6 +1297,42 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .index-table .yt{width:1%;white-space:nowrap}
 .index-table .missing .name,.index-table .reason{color:var(--muted)}
 .index-table .reason[title]{cursor:help}
+/* Local video player (shown by the script only when a video file is next to
+   the page): turquoise Player tile, player pinned on the left, page on the right */
+.fact.play{display:none;border:0;cursor:pointer;text-align:left;font:inherit;
+  background:var(--accent);color:var(--on-accent)}
+.has-video .fact.play{display:block}
+.fact.play .value,.fact.play .label{color:var(--on-accent)}
+.fact.play .label{opacity:.85}
+.fact.play:hover{filter:brightness(1.1)}
+.fact.play:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.player{display:none}
+.player-open .player{display:flex;flex-direction:column;gap:12px;position:fixed;top:0;left:0;
+  width:var(--player-w);height:100vh;padding:24px;background:var(--bg);
+  border-right:1px solid var(--line);overflow-y:auto;z-index:10}
+.player video{display:block;width:100%;aspect-ratio:16/9;background:var(--media-bg);
+  border-radius:12px}
+.player .seek{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;
+  font-variant-numeric:tabular-nums}
+.player .seek input{flex:1;accent-color:var(--accent)}
+.player .buttons{display:flex;flex-wrap:wrap;gap:8px}
+.player button{width:60px;padding:7px 0;border:0;border-radius:18px;background:var(--chip);
+  color:var(--text);font:inherit;font-weight:600;cursor:pointer}
+.player button:hover{filter:brightness(1.15)}
+.player button.main{width:72px;background:var(--accent);color:var(--on-accent)}
+.player button.wide{width:auto;padding:7px 14px}
+.player .speed button{width:52px;padding:4px 0;font-size:12px}
+.player .speed button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
+.player-open .page{max-width:none;margin:0 0 0 var(--player-w)}
+.player-open .page > .thumbnail{display:none}
+.player-open.pip .player{display:none}
+.player-open.pip .page{max-width:1280px;margin:0 auto}
+.player-open.pip .page > .thumbnail{display:block}
+@media (max-width:900px){
+  .player-open .player{position:sticky;width:auto;height:auto;padding:12px;border-right:0;
+    border-bottom:1px solid var(--line)}
+  .player-open .page{margin:0}
+}
 /* Phones */
 @media (max-width:600px){
   .page{padding:12px}
@@ -1310,6 +1348,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 LIGHT_VARIABLES = """
   --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
   --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
+  --accent:#0f766e;
   color-scheme:light;
 """
 
@@ -1668,6 +1707,145 @@ def read_page_metadata(path: Path) -> dict[str, str]:
     return {name: html.unescape(value) for name, value in META_RE.findall(head)}
 
 
+PLAYER_TILE = ('<button class="fact play" type="button"><div class="value">▶ Play</div>'
+               '<div class="label">Player</div></button>')
+
+PLAYER_SPEEDS = ("0.5", "0.75", "1", "1.25", "1.5")
+VIDEO_EXTENSIONS = ("mp4", "webm", "m4v", "mkv")
+
+
+def render_player(video_names: list[str]) -> str:
+    """The player panel; hidden until the script finds a video file next to
+    the page (the page's own name first, then `video_names`)."""
+    speeds = "".join(f'<button type="button" data-speed="{v}" aria-pressed="{str(v == "1").lower()}">'
+                     f'{v}×</button>' for v in PLAYER_SPEEDS)
+    return (
+        f'<aside class="player" aria-label="Local video player" '
+        f'data-names="{esc(json.dumps(video_names, ensure_ascii=False))}" '
+        f'data-extensions="{" ".join(VIDEO_EXTENSIONS)}">'
+        '<video preload="metadata"></video>'
+        '<div class="seek"><span class="now">0:00</span>'
+        '<input type="range" min="0" max="0" step="0.1" value="0" aria-label="Position">'
+        '<span class="total">0:00</span></div>'
+        '<div class="buttons">'
+        '<button type="button" data-do="start" title="To the start">|◀</button>'
+        '<button type="button" data-do="back" title="10 s back (←)">−10 s</button>'
+        '<button type="button" data-do="toggle" class="main" title="Play / pause (space)">▶</button>'
+        '<button type="button" data-do="forward" title="10 s forward (→)">+10 s</button>'
+        '<button type="button" data-do="end" title="To the end">▶|</button>'
+        '<button type="button" data-do="pip" class="wide" '
+        'title="Separate window (picture in picture)">Pop out</button>'
+        '</div>'
+        f'<div class="buttons speed">{speeds}</div>'
+        '</aside>')
+
+
+# The only script of a page: it adds the player when a video file with the
+# page's name (or the original yt-dlp name) lies next to it. Without the
+# script, or without a video file, the page is exactly as before.
+PLAYER_JS = r"""
+(function () {
+  var body = document.body, panel = document.querySelector('.player');
+  if (!panel) return;
+  var video = panel.querySelector('video'), tile = document.querySelector('.fact.play');
+  var seek = panel.querySelector('.seek input'), toggle = panel.querySelector('[data-do=toggle]');
+  var page = decodeURIComponent(location.pathname.split('/').pop()).replace(/\.html?$/i, '');
+  var names = [page].concat(JSON.parse(panel.dataset.names || '[]'));
+  var candidates = [];
+  names.forEach(function (name) {
+    panel.dataset.extensions.split(' ').forEach(function (ext) {
+      var file = encodeURIComponent(name + '.' + ext);
+      if (candidates.indexOf(file) < 0) candidates.push(file);
+    });
+  });
+  function clock(s) {
+    s = Math.floor(s || 0);
+    var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = String(s % 60);
+    return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + sec.padStart(2, '0');
+  }
+  function probe(i) {  // the first candidate that loads becomes the video
+    if (i >= candidates.length) return;
+    video.onerror = function () { probe(i + 1); };
+    video.src = candidates[i];
+  }
+  video.addEventListener('loadedmetadata', function () {
+    video.onerror = null;
+    body.classList.add('has-video');
+    seek.max = video.duration;
+    panel.querySelector('.total').textContent = clock(video.duration);
+  });
+  probe(0);
+  function setOpen(open) {
+    body.classList.toggle('player-open', open);
+    tile.querySelector('.value').textContent = open ? '✕ Close' : '▶ Play';
+  }
+  function jump(t) { video.currentTime = Math.max(0, Math.min(video.duration || 0, t)); }
+  var actions = {
+    start: function () { video.pause(); jump(0); },  // always stopped at the start
+    end: function () { jump(video.duration); },
+    back: function () { jump(video.currentTime - 10); },
+    forward: function () { jump(video.currentTime + 10); },
+    toggle: function () { if (video.paused) video.play(); else video.pause(); },
+    pip: function () { video.requestPictureInPicture(); }
+  };
+  tile.addEventListener('click', function () {
+    tile.blur();  // so that the space key then pauses the video, not the tile
+    if (body.classList.contains('player-open')) {
+      video.pause();
+      if (document.pictureInPictureElement) document.exitPictureInPicture();
+      setOpen(false);
+    } else {
+      setOpen(true);
+      video.play();
+    }
+  });
+  panel.querySelectorAll('[data-do]').forEach(function (button) {
+    button.addEventListener('click', function () { actions[button.dataset.do](); button.blur(); });
+  });
+  if (!document.pictureInPictureEnabled) panel.querySelector('[data-do=pip]').remove();
+  panel.querySelectorAll('[data-speed]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      video.playbackRate = Number(button.dataset.speed);
+      panel.querySelectorAll('[data-speed]').forEach(function (other) {
+        other.setAttribute('aria-pressed', String(other === button));
+      });
+      button.blur();
+    });
+  });
+  seek.addEventListener('input', function () { jump(Number(seek.value)); });
+  video.addEventListener('timeupdate', function () {
+    seek.value = video.currentTime;
+    panel.querySelector('.now').textContent = clock(video.currentTime);
+  });
+  video.addEventListener('play', function () { toggle.textContent = '❚❚'; });
+  video.addEventListener('pause', function () { toggle.textContent = '▶'; });
+  video.addEventListener('enterpictureinpicture', function () { body.classList.add('pip'); });
+  video.addEventListener('leavepictureinpicture', function () { body.classList.remove('pip'); });
+  if ('mediaSession' in navigator) {  // the ±10 s buttons of the separate window
+    try {
+      navigator.mediaSession.setActionHandler('seekbackward', actions.back);
+      navigator.mediaSession.setActionHandler('seekforward', actions.forward);
+    } catch (e) { /* not supported */ }
+  }
+  document.addEventListener('keydown', function (e) {
+    if (!body.classList.contains('player-open') || e.altKey || e.ctrlKey || e.metaKey
+        || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(e.target.tagName)) return;
+    var action = {' ': 'toggle', 'ArrowLeft': 'back', 'ArrowRight': 'forward'}[e.key];
+    if (action) { e.preventDefault(); actions[action](); }
+  });
+})();
+"""
+
+
+def video_names(info: dict) -> list[str]:
+    """Base names a downloaded video file may have, besides the page's own:
+    yt-dlp's default name "Title [id]" (as the page was named originally)."""
+    try:
+        return [Path(output_path(info, Path("."))).stem]
+    except Exception:
+        return []
+
+
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 archived: dt.date, show_snapshot: bool = True,
                 transcript_spec: list | None = None,
@@ -1705,7 +1883,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 + f'<div><div class="name">{channel_name}{verified}</div>'
                 + f'<div class="subs">{esc(subs_text)}</div></div></div>')
 
-    body.append('<div class="facts">'
+    body.append('<div class="facts">' + PLAYER_TILE
                 + fact("Duration", format_duration(duration))
                 + fact("Published", published_date(info))
                 + fact("Views", format_int(info.get("view_count")))
@@ -1772,6 +1950,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     body.append(f'<footer class="footer">Archived from {link(url, url)} on '
                 f'{archived.strftime(DATE_FORMAT)} with yt2html.</footer>')
     body.append("</main>")
+    body.insert(0, render_player(video_names(info)))
+    body.append(f"<script>{PLAYER_JS}</script>")
 
     return "\n".join([
         "<!DOCTYPE html>",
@@ -2135,10 +2315,15 @@ def write_indexes(args: argparse.Namespace, run: Run) -> int:
 # Command line
 # --------------------------------------------------------------------------
 
+_NAMING_YDL = None  # one quiet instance, only for building file names
+
+
 def output_path(info: dict, output_dir: Path) -> Path:
     """File name built by yt-dlp's own sanitizer, so it matches the video file."""
-    with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
-        name = ydl.prepare_filename({**info, "ext": "html"}, outtmpl=OUTPUT_TEMPLATE)
+    global _NAMING_YDL
+    if _NAMING_YDL is None:
+        _NAMING_YDL = yt_dlp.YoutubeDL({"quiet": True})
+    name = _NAMING_YDL.prepare_filename({**info, "ext": "html"}, outtmpl=OUTPUT_TEMPLATE)
     return output_dir / Path(name).name
 
 

@@ -48,7 +48,7 @@ After a change in `pyproject.toml` (dependencies, command) add `--reinstall`. To
 
 - **English everywhere in code:** identifiers, comments, CLI options, program messages, fixed page labels and invisible HTML (classes, ids, meta tags). Only the archived content itself is in its original language.
 - **Configuration in constants at the top of `yt2html.py`** (`DEFAULT_OUTPUT_DIR`, `OUTPUT_TEMPLATE`, `DATE_FORMAT`, `THOUSANDS_SEPARATOR`, `AVATAR_SIZE`, `IMAGE_WORKERS`, ...); per-run choices are CLI options.
-- **One output file, no JavaScript.** Static HTML + CSS; every image is a `data:` URI. The page must work when opened from disk with no network.
+- **One output file, works without JavaScript.** Static HTML + CSS; every image is a `data:` URI. The page must work when opened from disk with no network. The only script is the built-in player (`PLAYER_JS`), which adds something and never replaces content; index pages have no script.
 - Program messages are prefixed with `[yt2html]`; yt-dlp prints its own `[youtube]` progress lines.
 - A failure for one URL does not stop the others; the exit code is 1 if anything failed.
 
@@ -222,6 +222,15 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 **Ctrl+C.** yt-dlp catches `Ctrl+C` while it downloads comments: it ends only the comments, keeps those fetched so far and sets `comment_count` to `None` (`comments_interrupted()`; with comments disabled there is no list). `archive()` still makes the page and then raises `CommentsInterrupted` (a `KeyboardInterrupt`), so a run with several videos does not go on with the next one. `main()` catches any `KeyboardInterrupt` between and during videos, prints the summary without a traceback and returns 130. The page made from interrupted comments counts as finished on later runs (`--overwrite` remakes it).
 
+## Local video player
+
+The page plays a downloaded copy of the video lying next to it. Parts: `PLAYER_TILE` (a `<button class="fact play">`, first in `.facts`, same size as the other tiles: value `▶ Play` / `✕ Close`, label `Player`), `render_player()` (`<aside class="player">` before `<main>`: `<video preload="metadata">`, a range input with times, buttons `|◀ −10 s ▶ +10 s ▶| Pop out`, speeds `PLAYER_SPEEDS`), `PLAYER_JS` (one inline `<script>` at the end of `<body>`), and the CSS block *Local video player* (colours `--accent`, `--on-accent`; width `--player-w: clamp(320px, 40vw, 720px)`).
+
+- **Finding the file (in the browser, every time the page opens):** the page's own file name without `.html` (from `location.pathname`), then `video_names()` (yt-dlp's default name `Title [id]`, stored in `data-names`, for renamed pages), each with `VIDEO_EXTENSIONS` (`data-extensions`). The candidates are tried one by one as the `<video>` source (`encodeURIComponent`, so `#`, spaces and Unicode work); the first whose metadata loads wins and adds `has-video` to `<body>`, which shows the tile. No file, or no script: the page looks as before.
+- **States** (classes on `<body>`): `player-open` (panel `position:fixed` on the left, `.page` gets `margin-left: var(--player-w)` and no max-width, the thumbnail is hidden), `pip` (the video is in the picture-in-picture window: panel hidden, page and thumbnail as without the player). Below 900 px the panel is `position:sticky` at the top.
+- **Controls:** clicks blur the button, so `Space` / `←` / `→` (handled on `document` only while the player is open and the focus is not in a form control or on a button) act on the video. *Pop out* (`requestPictureInPicture`) is removed where `document.pictureInPictureEnabled` is false (Firefox). Media Session `seekbackward` / `seekforward` give the ±10 s buttons in Chrome's separate window. Closing pauses and exits picture-in-picture; the position is kept.
+- Checked in Chromium (06.11.2026): page and video with the same name, renamed page with the video under yt-dlp's name, no video (no tile, no errors), names with `#` and Polish letters; `#t=` media fragments work only when a file is opened fresh, which is why stage 2 (synchronising chapters and transcript) will use the script, not links.
+
 ## Page metadata and the index (`--index`, `--index-only`)
 
 **Metadata.** Every video page has invisible `<meta name="yt2html:...">` tags in its `<head>`, before the large `<style>` (`page_metadata()`): `video-id`, `title` (the original title), `archived` (ISO date), `comments-status`, `comments-downloaded`, `comments-youtube` (the text of the Comments tile). `comment_status()`: `not-downloaded` (no `comments` key: `--no-comments`), `turned-off` (`comments` is `None`), `interrupted` (`comments_interrupted()`), `limited` (`--max-comments` reached while YouTube shows more), otherwise `complete`. A failed comment download fails the whole video, so it never produces a page. `read_page_metadata()` reads only the first 16 KB of a page.
@@ -246,7 +255,7 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 uv run pytest
 ```
 
-The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `227 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `230 passed, 5 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
 
 **What is covered (offline):**
 
@@ -255,7 +264,7 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 | `test_formatting.py` | numbers (`1.23M`), durations, dates, file names, `linkify()` (URLs, timestamps, hashtags, handles, e-mails, HTML escaping) |
 | `test_comments.py` | comment order (oldest first, pinned, equal estimated times, nested replies), avatars embedded once, the comments note, `No comments.` rules |
 | `test_chapters.py` | description chapter check, chapter origin (description / auto / uncertain), Walkthroughs, fallback to yt-dlp chapters |
-| `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables |
+| `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables, player tile, panel, script and original video name |
 | `test_transcript.py` | choosing the caption track (incl. auto-dubbed videos), json3 captions, translations (alignment, HTTP 429 retries, errors), `--transcript` parsing and rendering |
 | `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
 | `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes, channel URLs rejected without fetching |

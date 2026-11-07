@@ -78,7 +78,7 @@ def test_page_is_self_contained(capsys, info_file, tmp_path, monkeypatch):
     out_dir = tmp_path / "pages"
     run(capsys, "--from-json", str(info_file), "-o", str(out_dir))
     html = next(out_dir.glob("*.html")).read_text(encoding="utf-8")
-    assert "<script" not in html
+    assert html.count("<script") == 1 and "<script src" not in html  # only the built-in player
     assert 'src="http' not in html and "url(http" not in html  # no external images
 
 

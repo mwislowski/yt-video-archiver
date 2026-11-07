@@ -2,6 +2,8 @@
 count, facts and themes."""
 
 import datetime as dt
+import json
+from pathlib import Path
 
 import yt2html
 from conftest import (comments_panel, license_contents, people_item, podcast_item,
@@ -111,6 +113,36 @@ def test_themes(info):
 def test_no_fixed_colours_outside_the_variables():
     # New styles must use CSS variables, or they break one of the themes.
     allowed = {"#0f0f0f", "#f1f1f1", "#aaaaaa", "#272727", "#3f3f3f", "#3ea6ff", "#3a3a3a",
-               "#000", "#ff4e45", "#fff"}
+               "#000", "#ff4e45", "#fff", "#0e8f85"}
     import re
     assert set(re.findall(r"#[0-9a-fA-F]{3,6}\b", yt2html.CSS)) <= allowed
+
+
+# Local video player ----------------------------------------------------------
+
+def test_player_tile_panel_and_script(info):
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
+    facts = html.split('<div class="facts">', 1)[1]
+    assert facts.startswith('<button class="fact play" type="button"><div class="value">▶ Play'
+                            '</div><div class="label">Player</div></button>')
+    assert html.count('<aside class="player"') == 1
+    assert 'data-extensions="mp4 webm m4v mkv"' in html
+    assert [b.split('"')[0] for b in html.split('data-speed="')[1:]] == \
+        ["0.5", "0.75", "1", "1.25", "1.5"]
+    assert html.count("<script>") == 1 and yt2html.PLAYER_JS in html
+
+
+def test_player_knows_the_original_video_name(info):
+    names = yt2html.video_names(info)
+    assert names == [yt2html.output_path(info, Path(".")).stem]
+    assert names[0].endswith("[TESTVIDEO01]")
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
+    assert yt2html.esc(json.dumps(names, ensure_ascii=False)) in html
+
+
+def test_player_is_hidden_until_a_video_is_found():
+    # The tile and the panel show only after the script adds these classes.
+    assert ".fact.play{display:none;" in yt2html.CSS
+    assert ".has-video .fact.play{display:block}" in yt2html.CSS
+    assert ".player{display:none}" in yt2html.CSS
+    assert ".player-open .page > .thumbnail{display:none}" in yt2html.CSS

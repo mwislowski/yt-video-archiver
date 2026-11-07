@@ -15,8 +15,9 @@ The video itself and its subtitles are **not** downloaded; download them separat
 - **Transcript**, already open, split by chapters; as continuous text, with timestamps, or side by side with a translation.
 - **License**, if it is not the standard YouTube one (e.g. Creative Commons).
 - **All comments**, oldest first, every thread fully expanded, with likes, pinned and creator marks.
+- **A player for your downloaded copy of the video**, if it lies next to the page (see below).
 
-Images are embedded in the file and the page needs no JavaScript. It shows in light or dark colours according to the device it is opened on. Not included: the video player, recommendations, YouTube's *Video details* (it repeats the facts).
+Images are embedded in the file. The page works without JavaScript; a small built-in script only adds the player. It shows in light or dark colours according to the device it is opened on. Not included: the video player, recommendations, YouTube's *Video details* (it repeats the facts).
 
 ## Installation
 
@@ -81,6 +82,8 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 **Other**
 
 | Task | Command |
+|---|---|
+| Download the video so that the page can play it (mp4 that every browser plays) | `yt-dlp -f "bv*[vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 "URL"` |
 |---|---|
 | Also keep the raw data | `yt2html "URL" --save-json` |
 | Rebuild a page from saved data (no download; keeps the snapshot date) | `yt2html --from-json "Title [id].info.json"` |
@@ -151,6 +154,18 @@ Good to know about the index:
 - **It always shows the current state of the folder.** It is made at the end of the run, also after `Ctrl+C` (then it lists the whole playlist, with the videos not reached yet in grey). If the program was stopped in any other way, the next run makes it again. Nothing about earlier runs is stored elsewhere: the index itself remembers the list and the reasons, and a reason stays until the video is tried again.
 - **Renaming is safe.** Pages are found by `[video id].html` at the end of their names, so after renaming them the index links to the new names and still shows the original titles. The index of a playlist is found by `[playlist id].html` and may be renamed the same way; the index of a list file must keep its name.
 - **`--index-only` downloads nothing.** It only rebuilds the index from the pages in the folder, e.g. after renaming or deleting pages. It uses the list kept in the earlier index; only if there is none yet, it reads the playlist's list from YouTube (one request, no video). New videos added to the playlist on YouTube appear only after a normal run with `--index`.
+
+### Watching a downloaded video on the page
+
+If the video file lies **next to the page with the same name** (`Title [id].mp4` next to `Title [id].html`, as yt-dlp names it by default), the page shows a turquoise **▶ Play** tile first among the facts. It is checked each time the page is opened, so a video downloaded later works without making the page again. If you renamed the page, the video may keep yt-dlp's original name. Formats tried: `.mp4`, `.webm`, `.m4v`, `.mkv`.
+
+**▶ Play** opens a player pinned on the left, so you can watch (or listen to a podcast) while scrolling the description, chapters, transcript and comments on the right; the thumbnail is hidden meanwhile. **✕ Close** pauses the video and restores the page; *Play* continues where you stopped.
+
+- Buttons: to the start (stops the video), 10 seconds back, play/pause, 10 seconds forward, to the end, *Pop out*, and the speeds 0.5×, 0.75×, 1×, 1.25×, 1.5×.
+- Keys while the player is open: `Space` play/pause, `←` / `→` 10 seconds back/forward.
+- *Pop out* moves the video into a separate window that you can place anywhere, e.g. on another monitor (Chrome, Edge); the page returns to its normal layout meanwhile. Firefox has no such button here; use its own picture-in-picture button on the video.
+- On narrow windows and phones the player stays at the top and the page scrolls below it.
+- Browsers play mp4 with H.264 video and AAC audio everywhere (the yt-dlp command in the table above downloads it). Videos in HEVC/H.265 do not play in Firefox; `.mkv` plays only in some browsers.
 
 ## Good to know
 
