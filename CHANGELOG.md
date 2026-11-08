@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-08
+
 ### Added
 - A player for a downloaded copy of the video: if a video file with the page's name (or yt-dlp's original name) lies next to the page, a turquoise *Play* tile opens a player pinned on the left while the page scrolls on the right. Buttons for start (stops the video), ±10 seconds, play/pause, end, a separate window (*Pop out*) and speeds 0.5×–1.5×; keys `Space`, `←`, `→`. The video is found each time the page is opened, so it may be downloaded later.
 - While the player is open, timestamps play the local copy instead of opening YouTube: in chapters and other lists, info cards, transcripts, the description, the AI summary and comments; in the continuous transcript a click on a sentence. *Subtitles* shows under the video the current chapter and the current sentence with the ones before and after it; small language buttons (one per bilingual transcript) add a translation. *Follow* marks the current sentence in a transcript on the page and keeps it in view (pressed again: the next transcript; after *Stop following* or scrolling, which end it, it starts again with the transcript used last).
@@ -11,7 +13,6 @@ All notable changes to this project. Versions: the second number for new feature
 - The author's info cards (the "i" teasers linking to a video, playlist, channel or website) in a section after the chapters: time, image, title linking to the target, kind, details and the author's message. Link cards point to the real website instead of YouTube's one-time redirect, and show its domain. `--no-cards` leaves them out without reading or requesting anything for them.
 
 - *About this copy*, folded at the bottom of every page instead of the footer: when the data was downloaded and with which versions, when the page was built (also later from saved data), the playlist the video came from (position and length), the command that makes an equivalent copy, whether the video page could be read, and for chapters, info cards, transcript, comments and images what is there, what was left out and what failed; then the licenses of the programs and a disclaimer. Every row is always there.
-
 - `--from-json` also takes patterns with `*` and `?` (expanded by the program, so they work in PowerShell and cmd; square brackets count as part of the name) and video ids or page names, whose saved data is looked up in the output folder (`-o`): `yt2html --from-json VIDEO_ID -o FOLDER`. A missing file is reported with what was looked for. With `--from-json`, `--max-comments N` keeps the first N saved comments (those a download with that limit gets) and `--no-comments` leaves them out; before, both were ignored.
 
 ### Changed
@@ -75,7 +76,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.2.0...v0.3.0

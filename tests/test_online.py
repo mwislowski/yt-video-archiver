@@ -22,7 +22,12 @@ def archive(tmp_path, video_id, *options):
     page = next(tmp_path.glob(f"*[[]{video_id}[]].html"))
     data = next(tmp_path.glob(f"*[[]{video_id}[]].info.json"))
     import json
-    return page.read_text(encoding="utf-8"), json.loads(data.read_text(encoding="utf-8"))
+    info = json.loads(data.read_text(encoding="utf-8"))
+    # Everything below depends on it; a clear message instead of a TypeError later.
+    assert info.get(yt2html.WATCH_PAGE_KEY) == "read", (
+        "the video page could not be read (see 'Could not read them' above); "
+        "usually temporary: run the test again")
+    return page.read_text(encoding="utf-8"), info
 
 
 def test_description_chapters_summary_podcast_and_dubbed_transcript(tmp_path):
