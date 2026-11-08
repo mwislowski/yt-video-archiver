@@ -6,7 +6,7 @@ The video itself and its subtitles are **not** downloaded; download them separat
 
 ## What the page contains
 
-- **Thumbnail, title, channel** with its subscriber count.
+- **Thumbnail, title, channel** with its avatar and subscriber count.
 - **Facts:** duration, publication date, views, likes, comment count, and in grey the *Snapshot* date (when the page was made; added by the program, not by YouTube).
 - **Full description** (what YouTube hides behind *Show more*) with clickable links, timestamps, `#hashtags` and `@handles`.
 - **AI-generated video summary**, if YouTube offers one.
@@ -18,7 +18,7 @@ The video itself and its subtitles are **not** downloaded; download them separat
 - **All comments**, oldest first, every thread fully expanded, with likes, pinned and creator marks.
 - **A player for your downloaded copy of the video**, if it lies next to the page (see below).
 
-Images are embedded in the file. The page works without JavaScript; a small built-in script only adds the player. It shows in light or dark colours according to the device it is opened on. Not included: the video player, recommendations, YouTube's *Video details* (it repeats the facts).
+Images are embedded in the file. The page works without JavaScript; a small built-in script only adds the player. It shows in light or dark colours according to the device it is opened on. Not included: YouTube's own video player, recommendations, YouTube's *Video details* (it repeats the facts).
 
 ## Installation
 

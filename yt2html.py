@@ -119,8 +119,13 @@ TRANSCRIPT_KEY = "yt2html_transcript"
 # absent with --no-cards, None when the watch page cannot be read.
 CARDS_KEY = "yt2html_cards"
 
+# The channel's avatar (image URL) from the watch page's owner row; yt-dlp
+# gives it only for channel pages, not for videos.
+CHANNEL_AVATAR_KEY = "yt2html_channel_avatar"
+
 # Keys filled from the watch page; all None when the page cannot be read.
-PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TRANSLATIONS_KEY)
+PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TRANSLATIONS_KEY,
+             CHANNEL_AVATAR_KEY)
 
 
 # --------------------------------------------------------------------------
@@ -206,6 +211,7 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
     info[EXTRAS_KEY] = parse_description_extras(data)
     info[YT_COUNT_KEY] = parse_comment_count(data)
     info[LICENSE_KEY] = parse_license(data)
+    info[CHANNEL_AVATAR_KEY] = parse_channel_avatar(data)
     if cards:
         info[CARDS_KEY] = parse_cards(data)
         resolve_card_links(ydl, info[CARDS_KEY])
@@ -220,6 +226,27 @@ def unwrap_redirect(url: str) -> str:
     return urllib.parse.urljoin(YOUTUBE, url)
 
 
+def secondary_info(data: dict) -> list[dict]:
+    """The videoSecondaryInfoRenderer blocks (channel row, license) of the watch page."""
+    contents = ((((data.get("contents") or {}).get("twoColumnWatchNextResults") or {})
+                 .get("results") or {}).get("results") or {}).get("contents") or []
+    return [c["videoSecondaryInfoRenderer"] for c in contents
+            if isinstance(c.get("videoSecondaryInfoRenderer"), dict)]
+
+
+def parse_channel_avatar(data: dict) -> str | None:
+    """The channel's avatar from the owner row under the video (largest size;
+    the download asks for a small one anyway)."""
+    for secondary in secondary_info(data):
+        owner = (secondary.get("owner") or {}).get("videoOwnerRenderer") or {}
+        sources = [t for t in (owner.get("thumbnail") or {}).get("thumbnails") or []
+                   if t.get("url")]
+        if sources:
+            url = max(sources, key=lambda t: t.get("width") or 0)["url"]
+            return urllib.parse.urljoin("https:", url)  # sometimes "//yt3..."
+    return None
+
+
 def parse_license(data: dict) -> dict | None:
     """The "License" row (e.g. Creative Commons) from the video's metadata rows.
 
@@ -227,12 +254,7 @@ def parse_license(data: dict) -> dict | None:
     expanded description's "Video details", and only on videos whose author
     chose a license other than the standard YouTube one.
     """
-    contents = ((((data.get("contents") or {}).get("twoColumnWatchNextResults") or {})
-                 .get("results") or {}).get("results") or {}).get("contents") or []
-    for content in contents:
-        secondary = content.get("videoSecondaryInfoRenderer")
-        if not secondary:
-            continue
+    for secondary in secondary_info(data):
         rows = (((secondary.get("metadataRowContainer") or {})
                  .get("metadataRowContainerRenderer") or {}).get("rows") or [])
         for row in rows:
@@ -2285,6 +2307,14 @@ def video_names(info: dict) -> list[str]:
         return []
 
 
+def channel_avatar_url(info: dict) -> str | None:
+    """The channel's avatar: from the watch page, else from a comment of the
+    uploader (pages made from older JSON files, or an unreadable watch page)."""
+    return info.get(CHANNEL_AVATAR_KEY) or next(
+        (c.get("author_thumbnail") for c in info.get("comments") or []
+         if c.get("author_is_uploader") and c.get("author_thumbnail")), None)
+
+
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 archived: dt.date, show_snapshot: bool = True,
                 transcript_spec: list | None = None,
@@ -2301,10 +2331,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     comments = info.get("comments") or []
     avatars = AvatarStyles(avatar_uris)
 
-    # Channel avatar: not part of video metadata, but available when the
-    # uploader has commented under the video.
-    channel_avatar = next((c.get("author_thumbnail") for c in comments
-                           if c.get("author_is_uploader") and c.get("author_thumbnail")), None)
+    channel_avatar = channel_avatar_url(info)
 
     body = ['<main class="page">']
     if thumbnail:
@@ -3000,7 +3027,8 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
         log("  Thumbnail could not be downloaded.")
     avatar_uris = {}
     if not args.no_avatars:
-        avatar_uris = fetch_images({c.get("author_thumbnail") for c in info.get("comments") or []},
+        avatar_uris = fetch_images({c.get("author_thumbnail") for c in info.get("comments") or []}
+                                   | {channel_avatar_url(info)},
                                    "avatars", resize=resize_avatar_url)
     if args.no_cards:
         info.pop(CARDS_KEY, None)  # also cards kept in a --from-json file

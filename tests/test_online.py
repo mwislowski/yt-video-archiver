@@ -66,6 +66,8 @@ def test_info_cards(tmp_path):
     assert cards[0]["type"] == "channel" and 60 < cards[0]["start"] < 75
     assert {c["type"] for c in cards[1:]} == {"video"}
     assert 'id="info-cards"' in html
+    # the channel avatar comes from the row under the video, not from comments
+    assert info[yt2html.CHANNEL_AVATAR_KEY].startswith("https://yt3.")
 
 
 def test_info_card_links_are_resolved(tmp_path):

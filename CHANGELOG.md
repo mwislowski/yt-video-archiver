@@ -12,6 +12,7 @@ All notable changes to this project. Versions: the second number for new feature
 
 ### Changed
 - Pages contain one small built-in script (for the player); without it they work as before.
+- The channel avatar is taken from the video page, so it shows also when the author has not commented under the video (before, it came only from the author's comments, which remain the fallback).
 
 ## [0.5.0] - 2026-11-06
 

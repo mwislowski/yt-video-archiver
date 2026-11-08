@@ -1,5 +1,5 @@
 """Description extras (summary, People mentioned, podcast), license, comment
-count, facts and themes."""
+count, facts, themes and the channel avatar."""
 
 import datetime as dt
 import json
@@ -212,3 +212,76 @@ def test_chapters_label_without_a_transcript_and_no_line_above_the_subtitles():
     assert "border" not in rule
     chapter = yt2html.CSS.split(".player .now-playing .chapter{", 1)[1].split("}", 1)[0]
     assert "color:var(--accent-text)" in chapter and "opacity:.75" in chapter
+
+
+# Channel avatar: from the owner row under the video, else from an uploader's comment
+
+def owner_data(*urls: str) -> dict:
+    sizes = [48, 88, 176]
+    return {"contents": {"twoColumnWatchNextResults": {"results": {"results": {"contents": [
+        {"videoPrimaryInfoRenderer": {}},
+        {"videoSecondaryInfoRenderer": {"owner": {"videoOwnerRenderer": {
+            "title": {"runs": [{"text": "Channel"}]},
+            "thumbnail": {"thumbnails": [{"url": u, "width": w, "height": w}
+                                         for u, w in zip(urls, sizes)]}}}}},
+    ]}}}}}
+
+
+def test_channel_avatar_is_read_from_the_owner_row():
+    data = owner_data("https://yt3.ggpht.test/a=s48", "https://yt3.ggpht.test/a=s88",
+                      "https://yt3.ggpht.test/a=s176")
+    assert yt2html.parse_channel_avatar(data) == "https://yt3.ggpht.test/a=s176"  # largest
+    assert yt2html.parse_channel_avatar(owner_data("//yt3.ggpht.test/b=s48")) == \
+        "https://yt3.ggpht.test/b=s48"
+    assert yt2html.parse_channel_avatar(owner_data()) is None
+    assert yt2html.parse_channel_avatar({}) is None
+
+
+def channel_row(html: str) -> str:
+    return html[html.index('<div class="channel">'):html.index('<div class="facts">')]
+
+
+def test_channel_avatar_without_a_comment_of_the_uploader(info):
+    info["comments"] = [c for c in info["comments"] if not c.get("author_is_uploader")]
+    info[yt2html.CHANNEL_AVATAR_KEY] = "https://yt3.ggpht.test/owner=s176"
+    html = yt2html.render_page(info, None, {"https://yt3.ggpht.test/owner=s176":
+                                            "data:image/png;base64,AAAA"}, DAY)
+    assert 'class="avatar av0"' in channel_row(html)
+    assert '.av0{background-image:url("data:image/png;base64,AAAA")}' in html
+
+
+def test_channel_avatar_prefers_the_watch_page_and_falls_back_to_a_comment(info):
+    uploader_comment = "https://yt3.ggpht.test/@Channel=s88-c-k-c0x00ffffff-no-rj"
+    assert yt2html.channel_avatar_url(info) == uploader_comment       # older JSON: no key
+    info[yt2html.CHANNEL_AVATAR_KEY] = None                            # page not read
+    assert yt2html.channel_avatar_url(info) == uploader_comment
+    info[yt2html.CHANNEL_AVATAR_KEY] = "https://yt3.ggpht.test/owner=s176"
+    assert yt2html.channel_avatar_url(info) == "https://yt3.ggpht.test/owner=s176"
+    info["comments"] = []
+    info[yt2html.CHANNEL_AVATAR_KEY] = None
+    assert yt2html.channel_avatar_url(info) is None
+    html = yt2html.render_page(info, None, {}, DAY)
+    assert '<span class="avatar" style="--hue:' in channel_row(html)  # a letter
+
+
+def test_watch_page_gives_the_channel_avatar(info, fake_ydl):
+    from conftest import watch_page
+    yt2html.add_watch_page_data(fake_ydl(webpage=watch_page(
+        owner_data("https://yt3.ggpht.test/o=s48"), {})), info)
+    assert info[yt2html.CHANNEL_AVATAR_KEY] == "https://yt3.ggpht.test/o=s48"
+
+
+def test_channel_avatar_is_downloaded_small_and_not_with_no_avatars(capsys, info, tmp_path,
+                                                                    monkeypatch):
+    info["comments"] = []
+    info[yt2html.CHANNEL_AVATAR_KEY] = "https://yt3.ggpht.test/owner=s176"
+    saved = tmp_path / "x.info.json"
+    saved.write_text(json.dumps(info), encoding="utf-8")
+    requested = []
+    monkeypatch.setattr(yt2html, "fetch_image",
+                        lambda url: requested.append(url) or "data:image/png;base64,AAAA")
+    yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "a")])
+    assert f"https://yt3.ggpht.test/owner=s{yt2html.AVATAR_SIZE}" in requested
+    requested.clear()
+    yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "b"), "--no-avatars"])
+    assert not any("owner" in url for url in requested)

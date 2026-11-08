@@ -60,7 +60,7 @@ What a user sees, with the rules behind each part; the sections further down exp
 |---|---|
 | Thumbnail | Best available resolution, embedded in the file. |
 | Title | Links to the original video. |
-| Channel | Name (link), verified mark, subscriber count in YouTube's short form (`1.23M subscribers`). The channel avatar appears only if the uploader commented under the video (it is not part of the video metadata); otherwise a letter placeholder. |
+| Channel | Name (link), verified mark, subscriber count in YouTube's short form (`1.23M subscribers`). Channel avatar from the owner row under the video on the watch page (`videoSecondaryInfoRenderer.owner.videoOwnerRenderer.thumbnail`, the largest size; yt-dlp gives the avatar only for channel pages). Fallback when the watch page could not be read, or for older JSON files: the avatar of a comment by the uploader; otherwise a letter placeholder. |
 | Facts | `Duration`, `Published`, `Views`, `Likes`, `Comments` (the count YouTube shows, e.g. `116`, or `1.2K` when YouTube shortens it), and at the end, in grey, `Snapshot`: the date the data was fetched. It is added by the program, not by YouTube, hence the grey colour; `--no-snapshot` leaves it out (the date is still in the footer and in the comments note). Dates are `DD.MM.YYYY`. |
 | Description | Full text (what YouTube hides behind *Show more*), with clickable URLs, timestamps (link to the video at that second), `#hashtags` and `@handles`. |
 | AI-generated video summary | YouTube's summary of the video (on YouTube collapsed under *Summary* below the description), shown expanded: the heading and the text, nothing else. Only when YouTube offers one. |
@@ -85,7 +85,7 @@ Not included: the top bar, the video player, *Video details* (it repeats the dat
 - `ignore_no_formats_error: True` — the video is not downloaded, so missing formats (e.g. when no JavaScript runtime is installed for YouTube's player challenges) must not abort the run;
 - `extractor_args = {"youtube": {"comment_sort": ["new"], "max_comments": [N or "all", "all", "all", "all"]}}`.
 
-Then, in the same `YoutubeDL` instance (same cookies and consent), the watch page is fetched once more with `ydl.urlopen()` for the timestamp lists and the description extras (see below). The program adds keys of its own to the info dict (constants `*_KEY` at the top of `yt2html.py`), all kept by `--save-json`, among them: `yt2html_archived` (ISO date of fetching), `yt2html_marker_lists`, `yt2html_description_extras`, `yt2html_youtube_comment_count` (the comment count text from the comments panel header, `engagementPanels[]` with `panelIdentifier` `engagement-panel-comments-section` → `header.engagementPanelTitleHeaderRenderer.contextualInfo`) and `yt2html_max_comments` (the `--max-comments` value, `null` for no limit).
+Then, in the same `YoutubeDL` instance (same cookies and consent), the watch page is fetched once more with `ydl.urlopen()` for the timestamp lists and the description extras (see below). The program adds keys of its own to the info dict (constants `*_KEY` at the top of `yt2html.py`), all kept by `--save-json`, among them: `yt2html_archived` (ISO date of fetching), `yt2html_marker_lists`, `yt2html_description_extras`, `yt2html_channel_avatar` (the avatar URL, see *The page, part by part*), `yt2html_youtube_comment_count` (the comment count text from the comments panel header, `engagementPanels[]` with `panelIdentifier` `engagement-panel-comments-section` → `header.engagementPanelTitleHeaderRenderer.contextualInfo`) and `yt2html_max_comments` (the `--max-comments` value, `null` for no limit).
 
 Why the program reads the comment count itself: when yt-dlp downloads comments, it **replaces** `comment_count` with the number of comments it downloaded (and sets it to `null` after `Ctrl+C`). So with `--max-comments 50` yt-dlp's `comment_count` is 50. `youtube_comment_count()` therefore uses the page's count; without it, yt-dlp's `comment_count` is used only when it can be trusted (comments not downloaded, or downloaded completely without a limit).
 
@@ -276,7 +276,7 @@ The page plays a downloaded copy of the video lying next to it. Parts: `PLAYER_T
 uv run pytest
 ```
 
-The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `262 passed, 7 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `268 passed, 7 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
 
 **What is covered (offline):**
 
@@ -285,7 +285,7 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 | `test_formatting.py` | numbers (`1.23M`), durations, dates, file names, `linkify()` (URLs, timestamps, hashtags, handles, e-mails, HTML escaping) |
 | `test_comments.py` | comment order (oldest first, pinned, equal estimated times, nested replies), avatars embedded once, the comments note, `No comments.` rules |
 | `test_chapters.py` | description chapter check, chapter origin (description / auto / uncertain), Walkthroughs, fallback to yt-dlp chapters |
-| `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables, player tile, panel, script and original video name, `data-t` on every timestamp, `data-c` on transcript cues, Follow buttons and the lines under the video |
+| `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, channel avatar (watch page, comment fallback, small download, `--no-avatars`), comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables, player tile, panel, script and original video name, `data-t` on every timestamp, `data-c` on transcript cues, Follow buttons and the lines under the video |
 | `test_transcript.py` | choosing the caption track (incl. auto-dubbed videos), json3 captions, translations (alignment, HTTP 429 retries, errors), `--transcript` parsing and rendering |
 | `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
 | `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes, channel URLs rejected without fetching |
@@ -296,7 +296,7 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 
 The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.
 
-**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast and the original-language transcript of an auto-dubbed video (`Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`), info cards (`EBQzfbqFKN0`), resolved link cards (`dkh1A_mAhY8`):
+**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast and the original-language transcript of an auto-dubbed video (`Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`), info cards and the channel avatar (`EBQzfbqFKN0`), resolved link cards (`dkh1A_mAhY8`):
 
 ```powershell
 uv run pytest --online -m online
