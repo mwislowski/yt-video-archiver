@@ -61,7 +61,7 @@ What a user sees, with the rules behind each part; the sections further down exp
 | Thumbnail | Best available resolution, embedded in the file. |
 | Title | Links to the original video. |
 | Channel | Name (link), verified mark, subscriber count in YouTube's short form (`1.23M subscribers`). Channel avatar from the owner row under the video on the watch page (`videoSecondaryInfoRenderer.owner.videoOwnerRenderer.thumbnail`, the largest size; yt-dlp gives the avatar only for channel pages). Fallback when the watch page could not be read, or for older JSON files: the avatar of a comment by the uploader; otherwise a letter placeholder. |
-| Facts | `Duration`, `Published`, `Views`, `Likes`, `Comments` (the count YouTube shows, e.g. `116`, or `1.2K` when YouTube shortens it), and at the end, in grey, `Snapshot`: the date the data was fetched. It is added by the program, not by YouTube, hence the grey colour; `--no-snapshot` leaves it out (the date is still in the footer and in the comments note). Dates are `DD.MM.YYYY`. |
+| Facts | `Duration`, `Published`, `Views`, `Likes`, `Comments` (the count YouTube shows, e.g. `116`, or `1.2K` when YouTube shortens it), and at the end, in grey, `Snapshot`: the date the data was fetched. It is added by the program, not by YouTube, hence the grey colour; `--no-snapshot` leaves it out (the date is still in *About this copy* and in the comments note). Dates are `DD.MM.YYYY`. |
 | Description | Full text (what YouTube hides behind *Show more*), with clickable URLs, timestamps (link to the video at that second), `#hashtags` and `@handles`. |
 | AI-generated video summary | YouTube's summary of the video (on YouTube collapsed under *Summary* below the description), shown expanded: the heading and the text, nothing else. Only when YouTube offers one. |
 | Chapters | The chapters YouTube marks on the progress bar, with a grey note on their origin: `from description` (the author's list in the description) or `auto-generated` (created by YouTube). The note appears only when the program can confirm the origin (see *Chapters and other timestamp lists*); otherwise the heading is just `Chapters`. |
@@ -72,7 +72,7 @@ What a user sees, with the rules behind each part; the sections further down exp
 | License | Only on videos whose author chose a license other than the standard YouTube one (e.g. *Creative Commons Attribution license (reuse allowed)*), after the transcript: heading `License` and the text as YouTube shows it, with its link kept clickable. The rest of YouTube's *Video details* is not repeated. |
 | Comments | All comments, top level oldest first; each thread with all replies already expanded, also oldest first, indented with a vertical line. Author, relative time as YouTube showed it on the download day (tooltip: estimated date), text with clickable links, likes, *Pinned* and *heart by creator* marks, creator highlighted. Avatars are embedded and not clickable. |
 
-At the bottom: a footer with the source URL and the snapshot date.
+At the bottom: *About this copy*, folded (see below).
 
 Not included: the top bar, the video player, *Video details* (it repeats the data above), recommendations.
 
@@ -190,7 +190,7 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 ## Snapshot date
 
-`render_page()` receives the date from `info["yt2html_archived"]` (today for older JSON files without it), so a page rebuilt with `--from-json` keeps the date of the original fetch. The `Snapshot` tile uses the class `fact extra` (grey value); `show_snapshot=False` (`--no-snapshot`) omits it. The footer and the comments note always show the date.
+`render_page()` receives the date from `info["yt2html_archived"]` (today for older JSON files without it), so a page rebuilt with `--from-json` keeps the date of the original fetch. The `Snapshot` tile uses the class `fact extra` (grey value); `show_snapshot=False` (`--no-snapshot`) omits it. *About this copy* and the comments note always show the date.
 
 ## File names
 
@@ -205,7 +205,14 @@ Rendered after the description as `<section class="markers">` with an `<ol>`, on
 
 ## Sources given by page names
 
-`source_from_page_name()` turns a text ending with `[ID]` or `[ID].html` (any case, optionally with a folder; not a URL) into the watch URL for an 11-character video id or the playlist URL for a playlist id (`playlist_id_from_url()`); anything else stays as it is, e.g. `Title [ID].info.json`. `collect_sources()` applies it to the command line and to list files before removing duplicates, except with `--from-json`, whose sources are file paths.
+`source_from_page_name()` turns a text ending with `[ID]` or `[ID].html` (any case, optionally with a folder; not a URL) into the watch URL for an 11-character video id or the playlist URL for a playlist id (`playlist_id_from_url()`); anything else stays as it is, e.g. `Title [ID].info.json`. `collect_sources()` applies it to the command line and to list files before removing duplicates, except with `--from-json` (see below).
+
+## Sources with `--from-json`
+
+- **Patterns:** `expand_pattern()` expands a source with `*` or `?` itself (Windows shells pass patterns on unchanged), sorted, in the command line and in `-a` files. Square brackets are made literal (`[` → `[[]`), since every page and JSON name ends with `[VIDEO_ID]`. A pattern without matches stays and fails as `no file matches ...`.
+- **`saved_data_path()`**, in `archive()`: an existing file is used as it is (so nothing that worked before changes); otherwise a video id, `[ID]`, or a page or JSON name ending in `[ID]` (`.html`, `.info.json` or nothing, with or without a folder) is looked up in the output folder (`-o`) as `*[ID].info.json`, where `--save-json` writes it. Failures say what was looked for: `no saved data for ID in FOLDER (looked for *[ID].info.json)`, `no such file: ...`.
+- An id starting with `-` would be taken for an option; then give the file or page name.
+- **Comments at a rebuild** (`narrow_saved_comments()`): `--no-comments` leaves out the saved comments; `--max-comments N` keeps the first N in the saved order (yt-dlp's, replies counted), i.e. the comments a download with that limit gets, and sets the limit, so a cut after `Ctrl+C` counts as limited. A larger limit cannot widen the data: when the saved comments are limited or interrupted, a note says to download again. `--cookies-from-browser` has no effect and gets a note.
 
 ## Batch files (`-a`)
 
@@ -252,6 +259,26 @@ The page plays a downloaded copy of the video lying next to it. Parts: `PLAYER_T
 - **Follow:** `follow` is the index of the followed transcript section (−1 = off); the button cycles through them, wraps, and shows `Follow N/M` when there are several. `lastFollow` keeps the one used last (in memory, until the page is reloaded), so after *Stop following* or a scroll *Follow* starts there again. The Follow row is as high as the speeds; both buttons are 116 px wide in every state. The current cue of that section gets `now` and is scrolled into view (`scrollIntoView`, smooth) when it changes. A `scroll` event that is not ours (`autoScroll`, cleared on `scrollend` or after 1.5 s) ends Follow, as do *Stop following* and closing the player. The *Follow* row is removed when the page has no transcript.
 - Checked in Chromium (06.11.2026): page and video with the same name, renamed page with the video under yt-dlp's name, no video (no tile, no errors), names with `#` and Polish letters; `#t=` media fragments work only when a file is opened fresh, which is why the script handles timestamps. Checked 07.11.2026: timestamps in chapters, description, comments and the continuous transcript, the lines under the video with a translation, Follow cycling through three transcripts and ending on a manual scroll.
 
+## About this copy
+
+The folded `<details class="copy-info">` at the bottom of every page (it replaced the footer). Folded, it shows `About this copy · Snapshot DD.MM.YYYY · made with yt2html`, the same for every copy; opened, only `About this copy` stays (CSS rule for `details[open]`, no script). Built by `render_about()` from one function per row (`about_*()`).
+
+Rows describe the page as it is, as if it had been made in one go with the Command row's command: a rebuild shows up only in *Page built* (and in Command), never as "downloaded N, shown M". Rules: it describes what makes **this** copy differ from another copy of the same video (settings, moment, failures), and only failures that did not stop the page; **every row is always there**, in a fixed order, one line each, with a short comment when there is nothing to report. Fixed words for states: *left out* (by an option), *none in the video* (the source has none), *could not be read / downloaded* (an error), *may lack* (unknown whether it existed). The Command row is the one deliberate exception to "no option names on the page".
+
+| Row | Content and source |
+|---|---|
+| Downloaded | time of the download (`epoch`, written by yt-dlp; local time), link to the video, yt2html version at download (`yt2html_download`) and yt-dlp version (`_version`, written by yt-dlp) |
+| Page built | `together with the download`, or with `--from-json` the build time and the yt2html version that built it |
+| Playlist | the playlist the video was archived from (`yt2html_playlist`: id, title, position and count on the download day, set by `playlist_context()`); never list files or other playlists |
+| Command | `about_command()`: the command that makes an equivalent copy today. Each option comes from the step where it acts: download (`--cookies-from-browser` with the browser name only), build (`--no-avatars`, `--theme`, `--no-snapshot`), both, the narrower one winning (`--transcript`: the build's value, or `none` if nothing was downloaded; `--no-cards`: if in either step, i.e. the cards key is absent; `--no-comments` and `--max-comments`: a rebuild may narrow the saved comments, see `narrow_saved_comments()`). Defaults are left out; options without effect on the page (`-o`, `-a`, `--overwrite`, `--index`, `--save-json`, `--from-json`) never appear. The video is given by its id; an id starting with `-` would be taken for an option (and PowerShell 5.1 may drop a `--`), so then the full address |
+| Video page | `yt2html_watch_page`: `read`, `partial` (without `ytInitialPlayerResponse`) or `failed`, with what an unread page may cost |
+| Chapters | count and origin, other lists (`also Walkthroughs (4)`); without chapters on a read page, at least 3 description lines with a time (`CLOCK_RE`) give a note that YouTube made no chapters from them (deliberately simple: no check of YouTube's rules) |
+| Info cards | `left out` (key absent), `unknown` (`None`, page unread), `none in the video`, else `N cards: ` and the kinds in a fixed order (video, playlist, channel, link; the order of `CARD_TYPES`), links with `(all to their websites)` or `(N kept as a YouTube redirect)` (a link whose URL is still `youtube.com/redirect`); `; times not shown` when no card has a time |
+| Transcript | `Language (features); N versions: …`: semicolons separate parts, commas list items, parentheses hold features. Versions are the sections shown (the values of `--transcript`), each `bilingual with X (auto-translated)` meaning a downloaded translation; translations kept in a JSON file but not shown are not mentioned. A missing transcript gives the reason kept in `yt2html_transcript_missing`; `original` in the transcript is false when the original language was unknown or differs |
+| Comments | from `comment_status()`: downloaded of YouTube's count, threads and replies, `complete` / `limited to N` (by an option, also when the saved comments were cut at a rebuild) / `interrupted (Ctrl+C)`; `no comments`, `turned off or unavailable`, `left out` |
+| Images | thumbnail size read from the embedded image (`image_size()`: JPEG, PNG, WebP, GIF), avatars embedded of those wanted (comments and channel), other images (people, podcast, cards); counted at build time, since the build downloads the images |
+| Software, Disclaimer | the same for every copy: licenses of yt2html and yt-dlp (not of the content), rights of the authors, personal use, no warranty |
+
 ## Page metadata and the index (`--index`, `--index-only`)
 
 **Metadata.** Every video page has invisible `<meta name="yt2html:...">` tags in its `<head>`, before the large `<style>` (`page_metadata()`): `video-id`, `title` (the original title), `archived` (ISO date), `comments-status`, `comments-downloaded`, `comments-youtube` (the text of the Comments tile). `comment_status()`: `not-downloaded` (no `comments` key: `--no-comments`), `turned-off` (`comments` is `None`), `interrupted` (`comments_interrupted()`), `limited` (`--max-comments` reached while YouTube shows more), otherwise `complete`. A failed comment download fails the whole video, so it never produces a page. `read_page_metadata()` reads only the first 16 KB of a page.
@@ -276,7 +303,7 @@ The page plays a downloaded copy of the video lying next to it. Parts: `PLAYER_T
 uv run pytest
 ```
 
-The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `268 passed, 7 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
+The first run installs pytest into the project's `.venv` (the `dev` dependency group in `pyproject.toml`; it is not part of the installed program). A run takes about a second, needs no network and ends with a line such as `314 passed, 7 skipped`. `uv run pytest -q` prints less, `uv run pytest -x` stops at the first failure, `uv run pytest tests/test_chapters.py` or `-k bilingual` runs a part.
 
 **What is covered (offline):**
 
@@ -287,16 +314,17 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 | `test_chapters.py` | description chapter check, chapter origin (description / auto / uncertain), Walkthroughs, fallback to yt-dlp chapters |
 | `test_sections.py` | summary, People mentioned (only web links clickable), podcast, license, channel avatar (watch page, comment fallback, small download, `--no-avatars`), comment count, Snapshot tile, section order, themes, no fixed colours outside the CSS variables, player tile, panel, script and original video name, `data-t` on every timestamp, `data-c` on transcript cues, Follow buttons and the lines under the video |
 | `test_transcript.py` | choosing the caption track (incl. auto-dubbed videos), json3 captions, translations (alignment, HTTP 429 retries, errors), `--transcript` parsing and rendering |
-| `test_cli.py` | `--version`, defaults, `--from-json`, saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
+| `test_cli.py` | `--version`, defaults, `--from-json` (also patterns with literal brackets, in `-a` files, ids and page names looked up in `-o`, the error messages, an existing file winning), saving in the current folder, `-o`, bilingual errors save nothing, self-contained page, one failure does not stop the others |
 | `test_existing.py` | video id from all URL forms, recognising (renamed) pages, skipping without fetching, `--overwrite` keeping the name, `--from-json` replacing, interrupted writes, channel URLs rejected without fetching |
 | `test_cards.py` | info cards of every kind, pairing with times only when the counts match, sorting, messages, placement after the chapters, images, resolving link cards (and keeping the redirect when that fails), `--no-cards` reading and requesting nothing and hiding saved cards |
 | `test_playlist.py` | playlist and channel URLs, expanding in order, duplicates (in a playlist, across playlists, separate URLs), skipping and rerunning, failed videos and playlists, `Ctrl+C` stopping the run, empty playlists, playlists in batch files, `fetch_playlist()` reading only the list |
 | `test_index.py` | page metadata and comment status, comments line, playlist and list file indexes (renamed pages and index, original titles, reasons and their survival, `Ctrl+C`, numbering, unreadable playlists), `--index-only` without downloads, option errors |
+| `test_about.py` | *About this copy*: folded and open summary, every row always there, each state of each row, the Command rules (defaults, both steps, an id starting with `-`, `--from-json`), rows describing the page and not the saved data, comments narrowed at a rebuild (first N, after `Ctrl+C`, no widening, `--no-comments`), playlist context, download settings, transcript reasons and original language, image sizes, no option names outside the Command row |
 | `test_batch.py` | `-a` files: comments, blank lines, byte order mark, order, duplicates in other URL forms, unusable files stop before fetching, bad lines fail alone, rerunning a list, the file is not changed, `--from-json` paths |
 
 The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.
 
-**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast and the original-language transcript of an auto-dubbed video (`Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`), info cards and the channel avatar (`EBQzfbqFKN0`), resolved link cards (`dkh1A_mAhY8`):
+**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast, the original-language transcript of an auto-dubbed video and the data behind *About this copy* (`epoch`, yt-dlp's `_version`, the video page status, the thumbnail size; `Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`), info cards and the channel avatar (`EBQzfbqFKN0`), resolved link cards (`dkh1A_mAhY8`):
 
 ```powershell
 uv run pytest --online -m online

@@ -1,6 +1,7 @@
 """The command line: options, --version, --from-json and what gets saved."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -87,3 +88,67 @@ def test_failure_of_one_source_does_not_stop_others(capsys, info_file, tmp_path)
                     "-o", str(tmp_path / "o"))
     assert code == 1
     assert "FAILED" in out and "Done: 1 saved, 0 skipped (page exists), 1 failed." in out
+
+
+# --from-json sources: patterns, video ids and page names
+
+def saved(folder, name="Title [TESTVIDEO01].info.json", info=None):
+    import json
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_text(json.dumps(info or {"id": "TESTVIDEO01", "title": "Title"}), encoding="utf-8")
+    return path
+
+
+def test_from_json_pattern_is_expanded_with_literal_brackets(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    saved(tmp_path / "data")
+    saved(tmp_path / "data", "Other [TESTVIDEO02].info.json", {"id": "TESTVIDEO02", "title": "O"})
+    code, out = run(capsys, "--from-json", "data/*[TESTVIDEO01]*", "-o", "pages")
+    assert code == 0 and len(list((tmp_path / "pages").glob("*.html"))) == 1
+    code, out = run(capsys, "--from-json", "data/*.info.json", "-o", "pages2")
+    assert code == 0 and len(list((tmp_path / "pages2").glob("*.html"))) == 2
+
+
+def test_from_json_pattern_without_matches(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    code, out = run(capsys, "--from-json", "data/*nothing*.info.json")
+    assert code == 1 and "FAILED: data/*nothing*.info.json: no file matches" in out
+
+
+def test_from_json_by_video_id_or_name_in_the_output_folder(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    saved(tmp_path / "out")
+    for source in ("TESTVIDEO01", "[TESTVIDEO01]", "Title [TESTVIDEO01].html",
+                   "Title [TESTVIDEO01].info.json", "elsewhere/Title [TESTVIDEO01]"):
+        code, out = run(capsys, "--from-json", source, "-o", "out")
+        assert code == 0, (source, out)
+        assert f"Reading {Path('out') / 'Title [TESTVIDEO01].info.json'}" in out
+    assert (tmp_path / "out" / "Title [TESTVIDEO01].html").exists()
+
+
+def test_from_json_explains_what_was_looked_for(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    code, out = run(capsys, "--from-json", "TESTVIDEO09", "-o", "out")
+    assert code == 1
+    assert "no saved data for TESTVIDEO09 in out (looked for *[TESTVIDEO09].info.json)" in out
+    code, out = run(capsys, "--from-json", "missing.json")
+    assert "FAILED: missing.json: no such file: missing.json" in out
+
+
+def test_an_existing_file_wins_over_the_lookup(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    saved(tmp_path, "TESTVIDEO01", {"id": "TESTVIDEO01", "title": "From the file"})
+    saved(tmp_path / "out", "Lookup [TESTVIDEO01].info.json", {"id": "TESTVIDEO01", "title": "L"})
+    code, out = run(capsys, "--from-json", "TESTVIDEO01", "-o", "out")
+    assert code == 0 and "Reading TESTVIDEO01\n" in out
+
+
+
+def test_from_json_patterns_in_a_batch_file(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    saved(tmp_path / "data")
+    saved(tmp_path / "data", "Other [TESTVIDEO02].info.json", {"id": "TESTVIDEO02", "title": "O"})
+    (tmp_path / "list.txt").write_text("data/*.info.json\n", encoding="utf-8")
+    code, out = run(capsys, "--from-json", "-a", "list.txt", "-o", "pages")
+    assert code == 0 and len(list((tmp_path / "pages").glob("*.html"))) == 2

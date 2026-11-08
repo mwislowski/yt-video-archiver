@@ -79,7 +79,9 @@ def test_limited_download_does_not_claim_no_comments(info):
     html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
     assert "0 downloaded (YouTube shows 9)" in html
     assert "No comments." not in html
-    assert "--max-comments" not in html  # no CLI parameters on the page
+    # no CLI parameters on the page, except in the Command row of "About this copy"
+    import re
+    assert "--max-comments" not in re.sub(r'<code class="command">.*?</code>', "", html)
 
 
 def test_no_comments_section_with_no_comments_option(info):

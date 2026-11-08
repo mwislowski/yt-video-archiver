@@ -34,6 +34,15 @@ def test_description_chapters_summary_podcast_and_dubbed_transcript(tmp_path):
     # auto-dubbed video: the transcript must be the original English one
     assert info[yt2html.TRANSCRIPT_KEY]["language"].startswith("en")
     assert "from description" in html
+    # data behind "About this copy": written by yt-dlp and by the program
+    assert isinstance(info["epoch"], int) and info["_version"]["version"]
+    assert info[yt2html.DOWNLOAD_KEY]["yt2html"] == yt2html.__version__
+    assert info[yt2html.WATCH_PAGE_KEY] == "read"
+    assert info[yt2html.TRANSCRIPT_KEY]["original"] is True
+    assert info[yt2html.PLAYLIST_KEY] is None
+    assert "<dt>Video page</dt><dd>read</dd>" in html
+    import re
+    assert re.search(r"<dt>Images</dt><dd>thumbnail \d+×\d+;", html)  # size read from the image
 
 
 def test_auto_chapters(tmp_path):

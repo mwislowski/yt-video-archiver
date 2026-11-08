@@ -78,6 +78,14 @@ def test_license():
 
 def test_license_falls_back_to_yt_dlp_text():
     assert yt2html.license_of({"license": "CC"})["runs"] == [{"text": "CC", "url": None}]
+
+
+def test_license_falls_back_when_the_video_page_could_not_be_read():
+    info = {"license": "CC", **dict.fromkeys(yt2html.PAGE_KEYS),
+            yt2html.WATCH_PAGE_KEY: "failed"}
+    assert yt2html.license_of(info)["runs"] == [{"text": "CC", "url": None}]
+    info.update({yt2html.WATCH_PAGE_KEY: "read", yt2html.EXTRAS_KEY: []})  # read: no license row
+    assert yt2html.license_of(info) is None
     page_read = {yt2html.LICENSE_KEY: None, yt2html.EXTRAS_KEY: [], "license": "CC"}
     assert yt2html.license_of(page_read) is None
 
@@ -97,7 +105,9 @@ def test_facts_and_snapshot(info):
     html = yt2html.render_page(info, None, {}, DAY)
     assert '<div class="fact extra"><div class="value">05.11.2026</div><div class="label">Snapshot' in html
     assert '<div class="value">9</div><div class="label">Comments' in html
-    assert "Snapshot" not in yt2html.render_page(info, None, {}, DAY, show_snapshot=False)
+    hidden = yt2html.render_page(info, None, {}, DAY, show_snapshot=False)
+    assert 'class="label">Snapshot' not in hidden
+    assert "Snapshot 05.11.2026 · made with yt2html" in hidden   # the date stays at the bottom
 
 
 def test_themes(info):

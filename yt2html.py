@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as dt
+import glob
 import html
 import html.parser
 import json
@@ -123,6 +124,20 @@ CARDS_KEY = "yt2html_cards"
 # gives it only for channel pages, not for videos.
 CHANNEL_AVATAR_KEY = "yt2html_channel_avatar"
 
+# How the data was downloaded, for "About this copy":
+# {yt2html: version, cookies_from_browser: browser name or None}.
+DOWNLOAD_KEY = "yt2html_download"
+
+# The playlist the video was archived from: {id, title, position, count}
+# (position and count on the download day); None if not from a playlist.
+PLAYLIST_KEY = "yt2html_playlist"
+
+# Why the transcript is missing when TRANSCRIPT_KEY is None.
+TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
+
+# The watch page: "read", "partial" (without the player data) or "failed".
+WATCH_PAGE_KEY = "yt2html_watch_page"
+
 # Keys filled from the watch page; all None when the page cannot be read.
 PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TRANSLATIONS_KEY,
              CHANNEL_AVATAR_KEY)
@@ -161,6 +176,8 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
         info[ARCHIVED_KEY] = dt.date.today().isoformat()
+        info[DOWNLOAD_KEY] = {"yt2html": __version__,
+                              "cookies_from_browser": browser_name(args.cookies_from_browser)}
         if not args.no_comments:
             info[LIMIT_KEY] = args.max_comments
         if info.get("_type") not in ("playlist", "multi_video"):
@@ -197,6 +214,7 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
         info.update(dict.fromkeys(PAGE_KEYS))
+        info[WATCH_PAGE_KEY] = "failed"
         if cards:
             info[CARDS_KEY] = None
         return
@@ -204,8 +222,10 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
         player_response = embedded_json(webpage, "ytInitialPlayerResponse")
         info[CAPTION_KEY] = default_caption_track(player_response)
         info[TRANSLATIONS_KEY] = translation_languages(player_response)
+        info[WATCH_PAGE_KEY] = "read"
     except Exception:
         info[CAPTION_KEY] = info[TRANSLATIONS_KEY] = None
+        info[WATCH_PAGE_KEY] = "partial"
     info[MARKERS_KEY] = parse_marker_lists(data, info.get("description") or "",
                                            info.get("duration"))
     info[EXTRAS_KEY] = parse_description_extras(data)
@@ -278,8 +298,7 @@ def parse_license(data: dict) -> dict | None:
 
 def license_of(info: dict) -> dict | None:
     """License to show; falls back to yt-dlp's plain-text `license`."""
-    page_read = LICENSE_KEY in info and info.get(EXTRAS_KEY) is not None
-    if page_read:
+    if LICENSE_KEY in info and watch_page_status(info) != "failed":
         return info[LICENSE_KEY]
     # Watch page not read (or an older JSON file): yt-dlp's text, no link.
     text = info.get("license")
@@ -863,6 +882,15 @@ def original_audio_language(info: dict) -> str | None:
     return info.get("language")
 
 
+def transcript_language(info: dict) -> str | None:
+    """The video's original language for the transcript: the watch page's
+    default track, else yt-dlp's original audio, else a single "-orig" track."""
+    auto = [lang for lang, fmts in (info.get("automatic_captions") or {}).items() if fmts]
+    origs = [lang for lang in auto if lang.endswith("-orig")]
+    return ((info.get(CAPTION_KEY) or {}).get("language") or original_audio_language(info)
+            or (origs[0].removesuffix("-orig") if len(origs) == 1 else None))
+
+
 def choose_caption_track(info: dict) -> tuple[str, str, list[dict]] | None:
     """Pick the track YouTube's transcript panel shows by default.
 
@@ -894,9 +922,7 @@ def choose_caption_track(info: dict) -> tuple[str, str, list[dict]] | None:
         return None
 
     default = info.get(CAPTION_KEY) or {}
-    origs = [lang for lang in auto if lang.endswith("-orig")]
-    language = (default.get("language") or original_audio_language(info)
-                or (origs[0].removesuffix("-orig") if len(origs) == 1 else None))
+    language = transcript_language(info)
     if language:
         if default.get("kind") == "asr":
             order = (find_auto, find_manual)
@@ -1022,7 +1048,9 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     """
     def unavailable(reason: str) -> None:
         # A requested translation needs the transcript: stop; otherwise the
-        # page is simply made without a transcript.
+        # page is simply made without a transcript (the reason is kept for
+        # "About this copy").
+        info[TRANSCRIPT_MISSING_KEY] = reason
         if translate_to:
             raise TranscriptError(f"{reason}; nothing was saved.")
         log(f"No transcript: {reason}.")
@@ -1043,7 +1071,9 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
         return unavailable(f"could not download it ({error})")
     if not cues:
         return unavailable("YouTube returned it empty")
-    transcript = {"language": lang, "name": name, "kind": kind, "cues": cues}
+    original = transcript_language(info)
+    transcript = {"language": lang, "name": name, "kind": kind, "cues": cues,
+                  "original": bool(original) and base_language(original) == base_language(lang)}
     if translate_to:
         transcript["translations"] = {
             target: fetch_translation(ydl, info, transcript, fmt["url"], target, not_before)
@@ -1460,6 +1490,22 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .replies .avatar{width:24px;height:24px;font-size:12px}
 .replies .comment{gap:12px;margin-top:12px}
 .replies .replies{margin-left:36px}
+/* About this copy: folded at the bottom; open, only its title stays in the summary */
+.copy-info{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
+  color:var(--muted);font-size:12px;line-height:18px}
+.copy-info summary{cursor:pointer;width:max-content;max-width:100%}
+.copy-info[open] summary .rest{display:none}
+.copy-info dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:10px 0 0 14px}
+.copy-info dt{font-weight:600}
+.copy-info dd{margin:0;overflow-wrap:anywhere}
+.copy-info a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
+.copy-info .command{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:12px;
+  background:var(--chip);border-radius:4px;padding:1px 6px;
+  -webkit-box-decoration-break:clone;box-decoration-break:clone}
+@media (max-width:600px){
+  .copy-info dl{grid-template-columns:1fr;gap:0;margin-left:0}
+  .copy-info dd{margin-bottom:8px}
+}
 .footer{color:var(--muted);font-size:12px;margin-top:32px;padding-top:12px;
   border-top:1px solid var(--line)}
 /* Index of a playlist or a list file: a table without visible lines */
@@ -2307,6 +2353,307 @@ def video_names(info: dict) -> list[str]:
         return []
 
 
+# --------------------------------------------------------------------------
+# About this copy (the folded block at the bottom of the page)
+# --------------------------------------------------------------------------
+
+REPOSITORY = "https://github.com/mwislowski/yt-video-archiver"
+COPYRIGHT = "© 2026 Mateusz Wisłowski"
+DISCLAIMER = ("The video, its texts and images belong to their authors and to the commenters. "
+              "This copy is meant for personal use; please support the authors by watching "
+              "and subscribing on YouTube. The software comes without any warranty; the user "
+              "is responsible for complying with YouTube's terms and the law.")
+UNREAD_PAGE = "the video page could not be read"
+
+
+def browser_name(spec: str | None) -> str | None:
+    """'firefox:profile' -> 'firefox': the browser only, no profile or path."""
+    return re.split(r"[:+]", spec)[0] if spec else None
+
+
+def image_size(data_uri: str | None) -> tuple[int, int] | None:
+    """(width, height) of an embedded JPEG, PNG, WebP or GIF image."""
+    try:
+        data = base64.b64decode(data_uri.split(",", 1)[1])
+    except Exception:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        chunk = data[12:16]
+        if chunk == b"VP8 ":
+            return (int.from_bytes(data[26:28], "little") & 0x3FFF,
+                    int.from_bytes(data[28:30], "little") & 0x3FFF)
+        if chunk == b"VP8L":
+            bits = int.from_bytes(data[21:25], "little")
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+        if chunk == b"VP8X":
+            return (int.from_bytes(data[24:27], "little") + 1,
+                    int.from_bytes(data[27:30], "little") + 1)
+        return None
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7 or marker == 0xFF:
+                i += 1 if marker == 0xFF else 2
+                continue
+            length = int.from_bytes(data[i + 2:i + 4], "big")
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                return (int.from_bytes(data[i + 7:i + 9], "big"),
+                        int.from_bytes(data[i + 5:i + 7], "big"))
+            i += 2 + length
+    return None
+
+
+def watch_page_status(info: dict) -> str:
+    """"read", "partial" or "failed" (pages made before the status was kept:
+    read if the description extras are there)."""
+    return info.get(WATCH_PAGE_KEY) or ("read" if info.get(EXTRAS_KEY) is not None else "failed")
+
+
+def date_time(moment: dt.datetime) -> str:
+    return moment.strftime(f"{DATE_FORMAT} %H:%M")
+
+
+def about_downloaded(info: dict, archived: dt.date) -> str:
+    epoch = info.get("epoch")
+    when = date_time(dt.datetime.fromtimestamp(epoch)) if epoch else archived.strftime(DATE_FORMAT)
+    video_id = info.get("id") or ""
+    source = f'<a href="{esc(f"{YOUTUBE}/watch?v={video_id}")}">youtube.com/watch?v={esc(video_id)}</a>'
+    programs = []
+    version = (info.get(DOWNLOAD_KEY) or {}).get("yt2html")
+    if version:
+        programs.append(f"yt2html {esc(version)}")
+    ytdlp = (info.get("_version") or {}).get("version")
+    if ytdlp:
+        programs.append(f"yt-dlp {esc(ytdlp)}")
+    return f"{when} from {source}" + (f" with {' and '.join(programs)}" if programs else "")
+
+
+def about_page_built(from_json: bool, built: dt.datetime) -> str:
+    if not from_json:
+        return "together with the download"
+    return f"{date_time(built)} from the saved data, with yt2html {__version__}"
+
+
+def about_playlist(info: dict) -> str:
+    playlist = info.get(PLAYLIST_KEY)
+    if not playlist:
+        return "not archived from a playlist"
+    url = f"{YOUTUBE}/playlist?list={playlist.get('id') or ''}"
+    return (f'{playlist.get("position") or "?"} of {playlist.get("count") or "?"} in '
+            f'<a href="{esc(url)}">{esc(playlist.get("title") or playlist.get("id") or "")}</a>')
+
+
+def format_transcript_spec(spec: list[tuple[str, str | None]]) -> str:
+    return ",".join(version if language is None else f"{version}:{language}"
+                    for version, language in spec) or "none"
+
+
+def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
+                  no_avatars: bool) -> str:
+    """The command that makes an equivalent copy today: the settings that
+    shaped this page, from the download and (for a page built from saved
+    data) from the build; defaults are left out, paths never appear."""
+    video_id = info.get("id") or ""
+    # An id starting with "-" would be taken for an option; PowerShell 5.1 may
+    # drop a "--" before it, so the full address is used instead.
+    parts = ["yt2html", video_id if video_id and not video_id.startswith("-")
+             else f"{YOUTUBE}/watch?v={video_id}"]
+    if "comments" not in info:
+        parts.append("--no-comments")
+    elif info.get(LIMIT_KEY) is not None:
+        parts += ["--max-comments", str(info[LIMIT_KEY])]
+    if CARDS_KEY not in info:
+        parts.append("--no-cards")
+    if no_avatars:
+        parts.append("--no-avatars")
+    versions = format_transcript_spec(spec if TRANSCRIPT_KEY in info else [])
+    if versions != "plain":
+        parts += ["--transcript", versions]
+    if theme != "auto":
+        parts += ["--theme", theme]
+    if not show_snapshot:
+        parts.append("--no-snapshot")
+    browser = (info.get(DOWNLOAD_KEY) or {}).get("cookies_from_browser")
+    if browser:
+        parts += ["--cookies-from-browser", browser]
+    return f'<code class="command">{esc(" ".join(parts))}</code>'
+
+
+def about_video_page(info: dict) -> str:
+    status = watch_page_status(info)
+    if status == "read":
+        return "read"
+    if status == "partial":
+        return "read, without the player data (transcript language guessed)"
+    return (f"{UNREAD_PAGE}: this copy may lack the AI summary, other timestamp lists, "
+            "info cards, People mentioned and the podcast; chapters without their origin, "
+            "the license without its link, YouTube's comment count unknown, the channel "
+            "avatar only from the author's comments")
+
+
+CHAPTER_ORIGINS = {"description": "from the description", "auto": "auto-generated by YouTube"}
+
+
+def about_chapters(info: dict) -> str:
+    lists = marker_lists_of(info)
+    chapters = next((m for m in lists if m.get("id") == "chapters"), None)
+    others = [m for m in lists if m.get("id") != "chapters"]
+    read = watch_page_status(info) != "failed"
+    if chapters:
+        count = len(chapters.get("items") or [])
+        origin = (CHAPTER_ORIGINS.get(chapters.get("source"), "origin unclear") if read
+                  else f"origin unknown ({UNREAD_PAGE})")
+        parts = [f"{count}, {origin}"]
+    elif not read:
+        parts = [f"none in the yt-dlp data ({UNREAD_PAGE})"]
+    else:
+        # Deliberately simple: lines with a time, not a check of YouTube's rules.
+        timed = sum(1 for line in (info.get("description") or "").splitlines()
+                    if CLOCK_RE.search(line))
+        parts = [f"none; {timed} lines of the description contain times, but YouTube made "
+                 "no chapters from them" if timed >= 3 else "none in the video"]
+    if others:
+        parts.append("also " + ", ".join(f'{esc(m.get("title") or "")} ({len(m.get("items") or [])})'
+                                         for m in others))
+    return "; ".join(parts)
+
+
+def about_cards(info: dict) -> str:
+    if CARDS_KEY not in info:
+        return "left out"
+    cards = info[CARDS_KEY]
+    if cards is None:
+        return f"unknown ({UNREAD_PAGE})"
+    if not cards:
+        return "none in the video"
+    kinds = []
+    for kind in CARD_TYPES.values():  # video, playlist, channel, link
+        count = sum(1 for c in cards if c.get("type") == kind)
+        if not count:
+            continue
+        text = plural(count, kind)
+        if kind == "link":  # only links can fail: resolving the redirect
+            redirects = sum(1 for c in cards if c.get("type") == "link"
+                            and "youtube.com/redirect" in (c.get("url") or ""))
+            text += (" (all to their websites)" if not redirects else
+                     f" ({redirects} kept as a YouTube redirect)" if redirects == 1 else
+                     f" ({redirects} kept as YouTube redirects)")
+        kinds.append(text)
+    parts = [f"{plural(len(cards), 'card')}: {', '.join(kinds)}"]
+    if all(c.get("start") is None for c in cards):
+        parts.append("times not shown (YouTube's data did not match)")
+    return "; ".join(parts)
+
+
+def about_transcript(info: dict, spec: list) -> str:
+    """Language (features); N versions: the versions shown, each bilingual one
+    with its translation. Like every row, it describes the page, not what a
+    saved data file holds besides."""
+    if TRANSCRIPT_KEY not in info or not spec:
+        return "left out"
+    transcript = info[TRANSCRIPT_KEY]
+    if transcript is None:
+        reason = info.get(TRANSCRIPT_MISSING_KEY)
+        return f"none: {esc(reason)}" if reason else "none"
+    kind = "auto-generated" if transcript.get("kind") == "auto" else "by the author"
+    features = (f"original language, {kind}" if transcript.get("original", True)
+                else f"{kind}; original language unknown")
+    name = transcript.get("name") or transcript.get("language") or ""
+    translations = translations_of(transcript)
+
+    def translated(language):
+        return f'{esc((translations.get(language) or {}).get("name") or language)} (auto-translated)'
+
+    versions = [f"bilingual with {translated(language)}" if version == "bilingual" else version
+                for version, language in spec]
+    return f"{esc(name)} ({features}); {plural(len(versions), 'version')}: {', '.join(versions)}"
+
+
+def about_comments(info: dict) -> str:
+    status = comment_status(info)
+    if status == "not-downloaded":
+        return "left out"
+    if status == "turned-off":
+        return "turned off or unavailable"
+    comments = info["comments"]
+    if not comments and status == "complete":
+        return "no comments"
+    roots, _ = build_comment_tree(comments)
+    replies = len(comments) - len(roots)
+    count_text, _ = youtube_comment_count(info)
+    amount = (f"{format_int(len(comments))} of {esc(count_text)}" if count_text
+              else f"{format_int(len(comments))} downloaded, YouTube's count unknown")
+    state = {"complete": "complete", "interrupted": "interrupted (Ctrl+C)",
+             "limited": f"limited to {format_int(info.get(LIMIT_KEY) or 0)}"}[status]
+    return (f"{amount}; {plural(len(roots), 'thread')}, "
+            f"{replies} {'reply' if replies == 1 else 'replies'}; {state}")
+
+
+def about_images(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
+                 extra_images: dict[str, str], no_avatars: bool) -> str:
+    size = image_size(thumbnail) if thumbnail else None
+    parts = [f"thumbnail {size[0]}×{size[1]}" if size else
+             "thumbnail" if thumbnail else "no thumbnail"]
+    wanted = avatar_urls(info)
+    if no_avatars:
+        parts.append("avatars left out")
+    elif wanted:
+        embedded = sum(1 for u in wanted if u in avatar_uris)
+        missing = len(wanted) - embedded
+        parts.append(f"avatars {embedded} of {len(wanted)}"
+                     + (f" ({missing} shown as letters)" if missing else ""))
+    else:
+        parts.append("no avatars")
+    others = extra_image_urls(info)
+    if others:
+        parts.append(f"other images {sum(1 for u in others if u in extra_images)} of {len(others)}")
+    else:
+        parts.append("no other images")
+    return "; ".join(parts)
+
+
+def about_software() -> str:
+    return (f'<a href="{REPOSITORY}">yt2html</a> {__version__}, {COPYRIGHT}, '
+            f'<a href="{REPOSITORY}/blob/HEAD/LICENSE">MIT License</a> · '
+            f'<a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a> {yt_dlp.version.__version__}, '
+            '<a href="https://unlicense.org">Unlicense</a> (public domain); '
+            "these licenses cover the programs, not the content of this copy.")
+
+
+def render_about(info: dict, archived: dt.date, thumbnail: str | None,
+                 avatar_uris: dict[str, str], extra_images: dict[str, str], spec: list,
+                 theme: str, show_snapshot: bool, no_avatars: bool, from_json: bool,
+                 built: dt.datetime) -> str:
+    """"About this copy": how this copy was made, what worked and what did not.
+    Every row is always there, in a fixed order (see docs/DEVELOPMENT.md)."""
+    rows = [
+        ("Downloaded", about_downloaded(info, archived)),
+        ("Page built", about_page_built(from_json, built)),
+        ("Playlist", about_playlist(info)),
+        ("Command", about_command(info, spec, theme, show_snapshot, no_avatars)),
+        ("Video page", about_video_page(info)),
+        ("Chapters", about_chapters(info)),
+        ("Info cards", about_cards(info)),
+        ("Transcript", about_transcript(info, spec)),
+        ("Comments", about_comments(info)),
+        ("Images", about_images(info, thumbnail, avatar_uris, extra_images, no_avatars)),
+        ("Software", about_software()),
+        ("Disclaimer", esc(DISCLAIMER)),
+    ]
+    items = "\n".join(f"<dt>{name}</dt><dd>{value}</dd>" for name, value in rows)
+    return ('<details class="copy-info"><summary>About this copy<span class="rest"> · '
+            f'Snapshot {archived.strftime(DATE_FORMAT)} · made with yt2html</span></summary>\n'
+            f'<dl>\n{items}\n</dl></details>')
+
+
 def channel_avatar_url(info: dict) -> str | None:
     """The channel's avatar: from the watch page, else from a comment of the
     uploader (pages made from older JSON files, or an unreadable watch page)."""
@@ -2315,13 +2662,23 @@ def channel_avatar_url(info: dict) -> str | None:
          if c.get("author_is_uploader") and c.get("author_thumbnail")), None)
 
 
+def avatar_urls(info: dict) -> set[str]:
+    """The avatars a page needs: comment authors and the channel. The same set
+    is downloaded and counted in "About this copy"."""
+    urls = {c.get("author_thumbnail") for c in info.get("comments") or []}
+    return {url for url in urls | {channel_avatar_url(info)} if url}
+
+
 def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 archived: dt.date, show_snapshot: bool = True,
                 transcript_spec: list | None = None,
                 extra_images: dict[str, str] | None = None,
-                theme: str = "auto") -> str:
+                theme: str = "auto", no_avatars: bool = False,
+                from_json: bool = False, built: dt.datetime | None = None) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
-    `avatar_uris` and `extra_images` ({image url: data URI})."""
+    `avatar_uris` and `extra_images` ({image url: data URI}). `no_avatars`,
+    `from_json` and `built` (the build time, default now) are only described
+    in "About this copy"."""
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -2417,8 +2774,9 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
             body.append(render_comment(c, children, avatars, video_id, duration, uploader))
         body.append("</section>")
 
-    body.append(f'<footer class="footer">Archived from {link(url, url)} on '
-                f'{archived.strftime(DATE_FORMAT)} with yt2html.</footer>')
+    body.append(render_about(info, archived, thumbnail, avatar_uris, extra_images or {},
+                             spec, theme, show_snapshot, no_avatars, from_json,
+                             built or dt.datetime.now()))
     body.append("</main>")
     body.insert(0, render_player(video_names(info)))
     body.append(f"<script>{PLAYER_JS}</script>")
@@ -2931,6 +3289,19 @@ def playlist_videos(source: str, args: argparse.Namespace, seen: set[str],
     return urls
 
 
+def playlist_context(run: Run, source: str, url: str) -> dict | None:
+    """The playlist a video comes from, for "About this copy": its id, title,
+    the video's position (first occurrence) and the number of videos."""
+    section = run.playlists.get(playlist_id_from_url(source) or source)
+    video_id = video_id_from_url(url)
+    if not section:
+        return None
+    entries = section["entries"]
+    position = next((i for i, e in enumerate(entries, 1) if e["id"] == video_id), None)
+    return {"id": section["playlist_id"], "title": section["title"],
+            "position": position, "count": len(entries)}
+
+
 def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
     """A page for this video in the output folder (not its subfolders).
 
@@ -2964,12 +3335,33 @@ def comments_interrupted(info: dict) -> bool:
     return isinstance(info.get("comments"), list) and info.get("comment_count") is None
 
 
+def narrow_saved_comments(info: dict, args: argparse.Namespace) -> None:
+    """--no-comments and --max-comments with --from-json: they can only narrow
+    the saved comments, as if the download had used them. The first N are
+    kept, in the saved (yt-dlp's) order, replies counted: the comments a
+    download with that limit gets. The page then shows the result only."""
+    if args.no_comments:
+        info.pop("comments", None)
+        return
+    comments = info.get("comments")
+    limit = args.max_comments
+    if limit is None or not isinstance(comments, list):
+        return
+    if len(comments) > limit:
+        info["comments"] = comments[:limit]
+        info[LIMIT_KEY] = limit
+        info["comment_count"] = limit  # cut by the limit, not by Ctrl+C any more
+    elif comment_status(info) in ("limited", "interrupted"):
+        log(f"  The saved data has only {plural(len(comments), 'comment')}; download "
+            f"again (without --from-json) to get more.")
+
+
 PLAYLIST_ERROR = "this URL leads to a playlist or channel, not a single video"
 CHANNEL_ERROR = ("this is a channel URL; only videos and playlists are supported "
                  "(open the channel's playlist and use its URL)")
 
 
-def archive(source: str, args: argparse.Namespace) -> Path | None:
+def archive(source: str, args: argparse.Namespace, playlist: dict | None = None) -> Path | None:
     """Make the page for one URL (or one .info.json file).
 
     Returns the page's path, or None if the video already has a page in the
@@ -2991,14 +3383,18 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
     if not args.from_json and is_channel_url(source):
         raise ValueError(CHANNEL_ERROR)
     if args.from_json:
-        log(f"Reading {source}")
-        info = json.loads(Path(source).read_text(encoding="utf-8"))
+        path = saved_data_path(source, output_dir)
+        log(f"Reading {path}")
+        info = json.loads(path.read_text(encoding="utf-8"))
     else:
         log(f"Fetching {source}")
         info = fetch_info(source, args)
+        info[PLAYLIST_KEY] = playlist
 
     if info.get("_type") in ("playlist", "multi_video"):
         raise ValueError(PLAYLIST_ERROR)
+    if args.from_json:
+        narrow_saved_comments(info, args)
 
     available = translations_of(info.get(TRANSCRIPT_KEY) or {})
     for language in bilingual_languages(args.transcript):
@@ -3027,9 +3423,7 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
         log("  Thumbnail could not be downloaded.")
     avatar_uris = {}
     if not args.no_avatars:
-        avatar_uris = fetch_images({c.get("author_thumbnail") for c in info.get("comments") or []}
-                                   | {channel_avatar_url(info)},
-                                   "avatars", resize=resize_avatar_url)
+        avatar_uris = fetch_images(avatar_urls(info), "avatars", resize=resize_avatar_url)
     if args.no_cards:
         info.pop(CARDS_KEY, None)  # also cards kept in a --from-json file
     extra_images = fetch_images(extra_image_urls(info), "images (people, podcast, cards)")
@@ -3042,7 +3436,8 @@ def archive(source: str, args: argparse.Namespace) -> Path | None:
                        show_snapshot=not args.no_snapshot,
                        theme=args.theme,
                        transcript_spec=args.transcript,
-                       extra_images=extra_images)
+                       extra_images=extra_images,
+                       no_avatars=args.no_avatars, from_json=args.from_json)
     write_atomically(target, page)
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
@@ -3121,6 +3516,50 @@ def read_batch_file(path: str) -> list[str]:
     return sources
 
 
+def has_wildcards(text: str) -> bool:
+    return "*" in text or "?" in text
+
+
+def expand_pattern(source: str) -> list[str]:
+    """--from-json paths with * or ?, expanded by the program (Windows shells
+    pass them on as they are), sorted. Square brackets stay literal, since
+    every page name ends with "[VIDEO_ID]". A pattern without matches is kept;
+    saved_data_path() reports it."""
+    if not has_wildcards(source):
+        return [source]
+    pattern = re.sub(r"[][]", lambda m: f"[{m.group(0)}]", source)
+    return sorted(glob.glob(pattern)) or [source]
+
+
+SAVED_DATA_NAME = re.compile(r"\[([A-Za-z0-9_-]{11})\](?:\.html?|\.info\.json)?\s*$",
+                             re.IGNORECASE)
+
+
+def saved_data_path(source: str, output_dir: Path) -> Path:
+    """The .info.json file for a --from-json source: an existing file; else a
+    video id, "[ID]", or the name of a page or JSON file ending in "[ID]",
+    looked up in the output folder as "...[ID].info.json". Raises ValueError
+    with what was looked for."""
+    path = Path(source)
+    if path.is_file():
+        return path
+    if has_wildcards(source):
+        raise ValueError(f"no file matches {source}")
+    if VIDEO_ID.fullmatch(source):
+        video_id = source
+    else:
+        match = SAVED_DATA_NAME.search(source)
+        video_id = match.group(1) if match else None
+    if not video_id:
+        raise ValueError(f"no such file: {source}")
+    suffix = f"[{video_id}].info.json"
+    candidates = sorted(output_dir.iterdir()) if output_dir.is_dir() else []
+    found = next((p for p in candidates if p.is_file() and p.name.endswith(suffix)), None)
+    if not found:
+        raise ValueError(f"no saved data for {video_id} in {output_dir} (looked for *{suffix})")
+    return found
+
+
 def collect_sources(args: argparse.Namespace) -> list[str]:
     """Sources from the command line, then from each --batch-file in order,
     each video only once.
@@ -3132,7 +3571,9 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
     """
     what = "file" if args.from_json else "URL"
     seen = set()
-    if not args.from_json:
+    if args.from_json:
+        args.sources = [path for source in args.sources for path in expand_pattern(source)]
+    else:
         args.sources = [source_from_page_name(source) for source in args.sources]
 
     def new(source: str) -> bool:
@@ -3150,7 +3591,9 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
             f"given on the command line.")
     for path in args.batch_file:
         listed = read_batch_file(path)
-        if not args.from_json:
+        if args.from_json:
+            listed = [found for source in listed for found in expand_pattern(source)]
+        else:
             listed = [source_from_page_name(source) for source in listed]
         args.batch_lines[path] = listed
         added = [source for source in listed if new(source)]
@@ -3174,7 +3617,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("sources", nargs="*", metavar="URL",
                         help="video or playlist URL(s) or id(s), or the name of a page or "
                              "index made by yt2html ('Title [ID].html'); a playlist archives "
-                             "all its videos. With --from-json: path(s) to .info.json files")
+                             "all its videos. With --from-json: .info.json file(s), also as patterns "
+                             "with * or ?, or video id(s) or page names, looked up in the "
+                             "output folder (-o)")
     parser.add_argument("-a", "--batch-file", action="append", default=[], metavar="FILE",
                         help="also read URLs (with --from-json: .info.json paths) from a "
                              "UTF-8 text file, one per line; blank lines and lines starting "
@@ -3183,9 +3628,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
                         help="folder for the generated pages (default: the current folder)")
     parser.add_argument("--no-comments", action="store_true",
-                        help="do not download comments")
+                        help="do not download comments (with --from-json: leave out the "
+                             "saved ones)")
     parser.add_argument("--max-comments", type=int, metavar="N",
-                        help="limit the number of downloaded comments (replies included)")
+                        help="limit the number of downloaded comments (replies included; "
+                             "with --from-json: keep only the first N saved ones)")
     parser.add_argument("--no-cards", action="store_true",
                         help="leave out the author's info cards (nothing is read or "
                              "downloaded for them)")
@@ -3204,7 +3651,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "'Use device theme'), dark or light")
     parser.add_argument("--no-snapshot", action="store_true",
                         help="leave out the grey 'Snapshot' date tile "
-                             "(the date stays in the footer)")
+                             "(the date stays in 'About this copy' at the bottom)")
     parser.add_argument("--cookies-from-browser", metavar="BROWSER",
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in")
@@ -3229,6 +3676,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.from_json and (args.index or args.index_only):
         parser.error("--index and --index-only cannot be used with --from-json")
+    if args.from_json and args.cookies_from_browser:
+        log("Note: --cookies-from-browser has no effect with --from-json (nothing is downloaded).")
     try:
         args.sources = collect_sources(args)
     except ValueError as error:
@@ -3264,12 +3713,13 @@ def main(argv=None) -> int:
             run.failures[video_id] = reason
         return None
 
-    def archive_video(source: str):
+    def archive_video(source: str, playlist: dict | None = None):
         video_id = video_id_from_url(source)
         if video_id:
             run.attempted.add(video_id)
         try:
-            result = attempt(source, lambda: archive(source, args) or "skipped", video_id)
+            result = attempt(source, lambda: archive(source, args, playlist) or "skipped",
+                             video_id)
         except CommentsInterrupted:
             counts["saved"] += 1  # the page was made, then the run stops
             raise
@@ -3287,7 +3737,7 @@ def main(argv=None) -> int:
                 playlists += 1
                 for url in attempt(source,
                                    lambda: playlist_videos(source, args, seen, run)) or []:
-                    archive_video(url)
+                    archive_video(url, playlist_context(run, source, url))
                 continue
             video_id = None if args.from_json else video_id_from_url(source)
             if video_id in seen:

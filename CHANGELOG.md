@@ -10,6 +10,10 @@ All notable changes to this project. Versions: the second number for new feature
 - Speaker changes in YouTube's automatic captions (`>>`) are shown as a grey mark in the transcripts (a grey ` | ` in the continuous one) and left out in the lines under the video.
 - The author's info cards (the "i" teasers linking to a video, playlist, channel or website) in a section after the chapters: time, image, title linking to the target, kind, details and the author's message. Link cards point to the real website instead of YouTube's one-time redirect, and show its domain. `--no-cards` leaves them out without reading or requesting anything for them.
 
+- *About this copy*, folded at the bottom of every page instead of the footer: when the data was downloaded and with which versions, when the page was built (also later from saved data), the playlist the video came from (position and length), the command that makes an equivalent copy, whether the video page could be read, and for chapters, info cards, transcript, comments and images what is there, what was left out and what failed; then the licenses of the programs and a disclaimer. Every row is always there.
+
+- `--from-json` also takes patterns with `*` and `?` (expanded by the program, so they work in PowerShell and cmd; square brackets count as part of the name) and video ids or page names, whose saved data is looked up in the output folder (`-o`): `yt2html --from-json VIDEO_ID -o FOLDER`. A missing file is reported with what was looked for. With `--from-json`, `--max-comments N` keeps the first N saved comments (those a download with that limit gets) and `--no-comments` leaves them out; before, both were ignored.
+
 ### Changed
 - Pages contain one small built-in script (for the player); without it they work as before.
 - The channel avatar is taken from the video page, so it shows also when the author has not commented under the video (before, it came only from the author's comments, which remain the fallback).
