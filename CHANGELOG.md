@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-09
+
 ### Added
 - Player: **↺** goes back to the start of the previous sentence of the transcript (for repeating a phrase); each further click one sentence more; 5 seconds back when that would be more than 20 seconds or there is no transcript. Keys `Shift+←` for it and `Ctrl+←` / `Ctrl+→` for the start and the end.
 - Player: *Chapters* button that shows the current chapter above the subtitles, on one line with its place reserved, so the subtitles never move.
@@ -89,7 +91,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.3.0...v0.4.0
