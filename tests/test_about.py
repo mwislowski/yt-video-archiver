@@ -73,16 +73,16 @@ def test_downloaded_without_the_time_uses_the_snapshot_date(info):
 
 
 def test_page_built(info):
-    assert row(render(info), "Page built") == "together with the download"
+    assert row(render(info), "Page built") == "at download"
     assert row(render(info, from_json=True), "Page built") == \
         f"08.11.2026 15:40 from the saved data, with yt2html {yt2html.__version__}"
 
 
 def test_playlist_row(info):
-    assert row(render(info), "Playlist") == "not archived from a playlist"
+    assert row(render(info), "Playlist") == "none"
     info[yt2html.PLAYLIST_KEY] = {"id": "PLx", "title": "Season <2>", "position": 3, "count": 15}
     html = render(info)
-    assert ('<dd>3 of 15 in <a href="https://www.youtube.com/playlist?list=PLx">Season &lt;2&gt;</a>'
+    assert ('<dd>video 3 of 15 in <a href="https://www.youtube.com/playlist?list=PLx">Season &lt;2&gt;</a>'
             '</dd>' in html)
 
 
@@ -98,12 +98,12 @@ def test_playlist_context_is_the_playlist_used(tmp_path, monkeypatch, info):
     assert saved[yt2html.PLAYLIST_KEY] == {"id": "PLtest1234567890", "title": "Test playlist",
                                            "position": 2, "count": 3}
     html = next(tmp_path.glob("*TESTVIDEO02*.html")).read_text("utf-8")
-    assert row(html, "Playlist") == "2 of 3 in Test playlist"
+    assert row(html, "Playlist") == "video 2 of 3 in Test playlist"
     # a single video given separately is not "from a playlist"
     monkeypatch.setattr(yt2html, "fetch_info", lambda source, args: {**info, "id": "TESTVIDEO09"})
     yt2html.main(["https://www.youtube.com/watch?v=TESTVIDEO09", "-o", str(tmp_path)])
     html = next(tmp_path.glob("*TESTVIDEO09*.html")).read_text("utf-8")
-    assert row(html, "Playlist") == "not archived from a playlist"
+    assert row(html, "Playlist") == "none"
 
 
 def test_fetch_info_keeps_the_download_settings(monkeypatch, info):
@@ -223,7 +223,7 @@ def test_no_chapters_and_times_in_the_description(info):
     assert row(render(info), "Chapters") == \
         "none; 4 lines of the description contain times, but YouTube made no chapters from them"
     info["description"] = "Lunch at 12:00\nDinner at 19:30"
-    assert row(render(info), "Chapters") == "none in the video"
+    assert row(render(info), "Chapters") == "none"
 
 
 def test_chapters_when_the_video_page_could_not_be_read(info):
@@ -250,7 +250,7 @@ def test_info_cards_row(info):
     info[yt2html.CARDS_KEY] = None
     assert row(render(info), "Info cards") == "unknown (the video page could not be read)"
     info[yt2html.CARDS_KEY] = []
-    assert row(render(info), "Info cards") == "none in the video"
+    assert row(render(info), "Info cards") == "none"
     info[yt2html.CARDS_KEY] = [card("link", "https://example.org/")] * 3
     assert row(render(info), "Info cards") == "3 cards: 3 links (all to their websites)"
     info[yt2html.CARDS_KEY] = [card("channel"), card("video"), card("video"), card("video")]
@@ -383,14 +383,19 @@ def test_images_row(info):
     avatars = {c["author_thumbnail"]: "data:image/png;base64,AAAA"
                for c in info["comments"] if c.get("author_thumbnail")}
     html = render(info, thumbnail=data_uri(JPEG), avatars=avatars)
-    assert row(html, "Images") == "thumbnail 1280×720; avatars 5 of 5; no other images"
+    assert row(html, "Images") == \
+        "thumbnail 1280×720; channel avatar; comment avatars 5 of 5; no other images"
     del avatars["https://yt3.ggpht.test/@newest=s88-c-k-c0x00ffffff-no-rj"]
     info[yt2html.CARDS_KEY] = [{"type": "video", "image": "https://img.test/a"},
                                {"type": "video", "image": "https://img.test/b"}]
     html = render(info, avatars=avatars, extra_images={"https://img.test/a": "data:,x"})
     assert row(html, "Images") == \
-        "no thumbnail; avatars 4 of 5 (1 shown as letters); other images 1 of 2"
-    assert "avatars left out" in row(render(info, no_avatars=True), "Images")
+        "no thumbnail; channel avatar; comment avatars 4 of 5 (1 shown as letters); other images 1 of 2"
+    text = row(render(info, no_avatars=True), "Images")
+    assert "channel avatar shown as a letter; comment avatars left out" in text
+    info["comments"] = []                      # no comments, no channel avatar known
+    assert row(render(info), "Images") == \
+        "no thumbnail; no channel avatar; no comment avatars; other images 0 of 2"
 
 
 def test_software_and_disclaimer(info):

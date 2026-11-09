@@ -4,6 +4,18 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+- Player: **↺** goes back to the start of the previous sentence of the transcript (for repeating a phrase); each further click one sentence more; 5 seconds back when that would be more than 20 seconds or there is no transcript. Keys `Shift+←` for it and `Ctrl+←` / `Ctrl+→` for the start and the end.
+- Player: *Chapters* button that shows the current chapter above the subtitles, on one line with its place reserved, so the subtitles never move.
+
+### Changed
+- Player: *Subtitles* cycles through the sentence only, with one and with two sentences before and after, and off (shown as dots on the button).
+- Player: *Follow* is one button: through the transcripts, then off; *Stop following* is gone.
+- Player: the translation under the video has a faint touch of turquoise, so it stands out from the original lines.
+- Player: no *Pop out* button; the browser's own picture-in-picture still works (right-click the video in Chrome or Edge, Firefox's own button).
+- `--no-avatars` leaves out only the avatars of comment authors; the channel's avatar stays.
+- *About this copy*: shorter states (`at download`, `none`, `video 3 of 15 in …`) and the channel avatar apart from the comment avatars.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added

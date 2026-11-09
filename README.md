@@ -78,7 +78,7 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Only the first N comments (quick test) | `yt2html "URL" --max-comments 200` |
 | Transcript versions (see below) | `yt2html "URL" --transcript plain,timestamps` |
 | Without info cards | `yt2html "URL" --no-cards` |
-| Without avatars (smaller file) | `yt2html "URL" --no-avatars` |
+| Without the avatars of comment authors (smaller file; the channel's avatar stays) | `yt2html "URL" --no-avatars` |
 | Without the grey Snapshot date tile (the date stays in *About this copy*) | `yt2html "URL" --no-snapshot` |
 | Page always dark / always light (default: follows the device) | `yt2html "URL" --theme dark` / `--theme light` |
 
@@ -166,9 +166,10 @@ If the video file lies **next to the page with the same name** (`Title [id].mp4`
 
 **▶ Play** opens a player pinned on the left, so you can watch (or listen to a podcast) while scrolling the description, chapters, transcript and comments on the right; the thumbnail is hidden meanwhile. **✕ Close** pauses the video and restores the page; *Play* continues where you stopped.
 
-- Buttons: to the start (stops the video), 10 seconds back, play/pause, 10 seconds forward, to the end, *Pop out*, and the speeds 0.5×, 0.75×, 1×, 1.25×, 1.5×.
-- Keys while the player is open: `Space` play/pause, `←` / `→` 10 seconds back/forward.
-- *Pop out* moves the video into a separate window that you can place anywhere, e.g. on another monitor (Chrome, Edge); the page returns to its normal layout meanwhile. Firefox has no such button here; use its own picture-in-picture button on the video.
+- Buttons: to the start (stops the video), 10 seconds back, **↺ previous sentence**, play/pause, 10 seconds forward, to the end, and the speeds 0.5×, 0.75×, 1×, 1.25×, 1.5×.
+- **↺** goes back to the start of the previous sentence of the transcript, handy for repeating a phrase when learning a language; each further click goes one sentence further back. If that would be more than 20 seconds back (a long pause, music), or the page has no transcript, it goes 5 seconds back.
+- Keys while the player is open: `Space` play/pause, `←` / `→` 10 seconds back/forward, `Shift`+`←` previous sentence, `Ctrl`+`←` / `Ctrl`+`→` to the start / to the end.
+- A separate video window (picture in picture) is available through the browser itself: right-click the video in Chrome or Edge, or use Firefox's own button on the video; the page returns to its normal layout meanwhile.
 - On narrow windows and phones the player stays at the top and the page scrolls below it.
 - Browsers play mp4 with H.264 video and AAC audio everywhere (the yt-dlp command in the table above downloads it). Videos in HEVC/H.265 do not play in Firefox; `.mkv` plays only in some browsers.
 
@@ -183,9 +184,11 @@ If the video file lies **next to the page with the same name** (`Title [id].mp4`
 
 With the player closed, timestamps open YouTube as before; `Ctrl`+click always opens YouTube.
 
-**Subtitles under the video.** *Subtitles* (off at first) shows the current chapter and the current sentence of the transcript under the video, with the sentences before and after it in grey. The sentences come from the first transcript with timestamps on the page (plain or bilingual), otherwise from the continuous one. Next to *Subtitles* there is a small button for each translation on the page (`pl`, `de`, … in the order of the bilingual transcripts; none without one). They work once *Subtitles* is on: a click shows that translation under the current sentence, another language replaces it, and a second click on the active one hides it. Turning *Subtitles* off also turns the translation off. On a page without a transcript the button is called *Chapters* and shows only the current chapter; without chapters either, it is not shown. A click on the subtitles shows the place in the transcript on the right. The current chapter is also marked in the chapter list.
+**Subtitles under the video.** *Subtitles* (off at first) shows the current sentence of the transcript under the video; each click adds context and then turns it off again: the sentence only (one hollow dot on the button), with one sentence before and after it in grey (one dot), with two (two dots), off. The sentences come from the first transcript with timestamps on the page (plain or bilingual), otherwise from the continuous one. Next to *Subtitles* there is a small button for each translation on the page (`pl`, `de`, … in the order of the bilingual transcripts; none without one). They work once *Subtitles* is on: a click shows that translation under the current sentence, another language replaces it, and a second click on the active one hides it. Turning *Subtitles* off also turns the translation off. A click on the subtitles shows the place in the transcript on the right: in the followed transcript while *Follow* is on, otherwise in the one the subtitles come from.
 
-**Follow** marks the current sentence in the transcript on the right and keeps it in view as the video plays. With several transcripts on the page, pressing *Follow* again moves to the next one (*Follow 2/3*, and round again). *Stop following*, or scrolling the page yourself, ends it; *Follow* then starts again with the transcript you followed last (as long as the page stays open).
+**Chapters** (off at first) shows the current chapter above the subtitles, on one line (a long title is cut with `…`); its place stays reserved, so turning it on or off never moves the subtitles. The current chapter is also marked in the chapter list. Buttons appear only when there is something to show: a page without a transcript has only *Chapters*, a page without chapters has no *Chapters*.
+
+**Follow** marks the current sentence in the transcript on the right and keeps it in view as the video plays. With several transcripts on the page, pressing *Follow* again moves to the next one (*Follow 2/3*), and after the last one it turns off. Scrolling the page yourself also ends it; *Follow* then starts again with the transcript you followed last (as long as the page stays open).
 
 ### About this copy
 

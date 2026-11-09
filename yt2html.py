@@ -1548,8 +1548,9 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .player button{width:60px;padding:7px 0;border:0;border-radius:18px;background:var(--chip);
   color:var(--text);font:inherit;font-weight:600;cursor:pointer}
 .player button:hover{filter:var(--hover)}
+/* the repeat arrow is a small glyph: larger, the button keeps its height */
+.player button[data-do=repeat]{font-size:19px}
 .player button.main{width:72px;background:var(--accent);color:var(--on-accent)}
-.player button.wide{width:auto;padding:7px 14px}
 .player .speed button{width:52px;padding:4px 0;font-size:12px}
 .player .speed button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
 /* Follow row: as high as the speeds, both buttons as wide as "Stop following" */
@@ -1558,16 +1559,25 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .player .buttons.follow button.lang{width:40px}
 .player button:disabled{opacity:.45;cursor:default;filter:none}
 .player .buttons.follow button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
-.player .now-playing{padding-top:12px;cursor:pointer}
-/* the chapter in a softened accent colour, apart from the spoken lines */
+.player .now-playing{margin-top:4px;cursor:pointer}
+/* the chapter in a softened accent colour, one line (cut with an ellipsis);
+   its line stays reserved while chapters are off, so the sentences never move */
 .player .now-playing .chapter{color:var(--accent-text);opacity:.75;font-size:12px;line-height:18px;
-  font-weight:600;
-  margin-bottom:6px}
-/* all lines the same size: current bold, translation bold grey, the others grey */
+  font-weight:600;margin-bottom:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.player .now-playing .chapter.off{visibility:hidden}
 .player .now-playing .line{color:var(--muted);font-size:18px;line-height:26px;overflow-wrap:anywhere}
 .player .now-playing .current{color:var(--text);font-weight:600}
-.player .now-playing .translation{font-weight:600}
-.player .now-playing div:empty{display:none}
+/* the translation: grey with a faint touch of the accent (weaker than the chapter),
+   so the eye tells it from the original lines; older browsers keep the grey */
+.player .now-playing .translation{font-weight:600;
+  color:color-mix(in srgb,var(--accent-text) 30%,var(--muted))}
+.player .now-playing .line:empty{display:none}
+.player .now-playing .chapter:empty{display:none}
+/* Subtitles: the mode as small dots, hollow (sentence only) or filled (context lines) */
+.player .dots{display:inline-flex;gap:3px;margin-left:5px;vertical-align:1px}
+.player .dots i{width:6px;height:6px;border-radius:50%;border:1.5px solid currentColor;
+  box-sizing:border-box}
+.player .dots i.full{background:currentColor}
 /* While the player is open: timestamps play the local copy, current places marked */
 .player-open a.t{color:var(--accent-text)}
 .player-open .transcript p span[data-c]{cursor:pointer}
@@ -2047,26 +2057,29 @@ def render_player(video_names: list[str]) -> str:
         '<input type="range" min="0" max="0" step="0.1" value="0" aria-label="Position">'
         '<span class="total">0:00</span></div>'
         '<div class="buttons">'
-        '<button type="button" data-do="start" title="To the start">|◀</button>'
+        '<button type="button" data-do="start" title="To the start (Ctrl+←)">|◀</button>'
         '<button type="button" data-do="back" title="10 s back (←)">−10 s</button>'
+        '<button type="button" data-do="repeat" title="Previous sentence (Shift+←); '
+        'click again for one more">↺</button>'
         '<button type="button" data-do="toggle" class="main" title="Play / pause (space)">▶</button>'
         '<button type="button" data-do="forward" title="10 s forward (→)">+10 s</button>'
-        '<button type="button" data-do="end" title="To the end">▶|</button>'
-        '<button type="button" data-do="pip" class="wide" '
-        'title="Separate window (picture in picture)">Pop out</button>'
+        '<button type="button" data-do="end" title="To the end (Ctrl+→)">▶|</button>'
         '</div>'
         f'<div class="buttons speed">{speeds}</div>'
         '<div class="buttons follow">'
         '<button type="button" data-do="follow" aria-pressed="false" '
         'title="Mark the current sentence in the transcript and keep it in view; again: '
-        'the next transcript">Follow</button>'
-        '<button type="button" data-do="unfollow">Stop following</button>'
+        'the next transcript, after the last one off">Follow</button>'
+        '<button type="button" data-do="chapters" aria-pressed="false" '
+        'title="Show the current chapter under the video">Chapters</button>'
         '<button type="button" data-do="subtitles" aria-pressed="false" '
-        'title="Show the current sentences under the video">Subtitles</button>'
+        'title="Show the current sentence under the video; again: with one line before '
+        'and after, with two, off">Subtitles<span class="dots"></span></button>'
         '<span class="langs"></span></div>'
         '<div class="now-playing" title="Show in the transcript"><div class="chapter"></div>'
-        '<div class="line prev"></div><div class="line current"></div>'
-        '<div class="line translation"></div><div class="line next"></div></div>'
+        '<div class="line prev2"></div><div class="line prev"></div><div class="line current"></div>'
+        '<div class="line translation"></div><div class="line next"></div>'
+        '<div class="line next2"></div></div>'
         '</aside>')
 
 
@@ -2145,7 +2158,8 @@ PLAYER_JS = r"""
   // Translations: one per bilingual transcript, in page order, chosen by the
   // language buttons (none at first).
   var bilinguals = lists.filter(function (l) { return l.section.classList.contains('bilingual'); });
-  var language = -1, subtitles = false;
+  // subtitles: 0 off, 1 the sentence only, 2 and 3 with 1 or 2 lines before and after
+  var language = -1, subtitles = 0, showChapters = false;
   var chapters = all('#chapters li').filter(function (li) { return li.querySelector('a.t[data-t]'); });
   var chapterTimes = chapters.map(function (li) { return Number(li.querySelector('a.t').dataset.t); });
   function textOf(el, column) {  // without the speaker marks
@@ -2158,7 +2172,7 @@ PLAYER_JS = r"""
   }
   var box = panel.querySelector('.now-playing');
   var boxPart = {};
-  ['chapter', 'prev', 'current', 'translation', 'next'].forEach(function (name) {
+  ['chapter', 'prev2', 'prev', 'current', 'translation', 'next', 'next2'].forEach(function (name) {
     boxPart[name] = box.querySelector('.' + name);
   });
   var subtitlesButton = panel.querySelector('[data-do=subtitles]');
@@ -2180,18 +2194,31 @@ PLAYER_JS = r"""
     langButtons.forEach(function (b, n) { b.setAttribute('aria-pressed', String(n === language)); });
     update(true);
   }
-  function setSubtitles(on) {  // the lines under the video; off resets the languages
-    subtitles = on;
-    subtitlesButton.setAttribute('aria-pressed', String(on));
-    langButtons.forEach(function (b) { b.disabled = !on; });
-    if (!on) setLanguage(-1);
-    box.hidden = !on;
+  var chaptersButton = panel.querySelector('[data-do=chapters]');
+  function showBox() {  // the box shows when the sentences or the chapter are on
+    box.hidden = !subtitles && !showChapters;
+    boxPart.chapter.classList.toggle('off', !showChapters);
+  }
+  function setSubtitles(mode) {  // 0-3; off resets the languages
+    subtitles = mode;
+    subtitlesButton.setAttribute('aria-pressed', String(mode > 0));
+    subtitlesButton.querySelector('.dots').innerHTML =
+      ['', '<i></i>', '<i class="full"></i>', '<i class="full"></i><i class="full"></i>'][mode];
+    langButtons.forEach(function (b) { b.disabled = !mode; });
+    if (!mode) setLanguage(-1);
+    showBox();
     update(true);
+  }
+  function setChapters(on) {
+    showChapters = on;
+    chaptersButton.setAttribute('aria-pressed', String(on));
+    showBox();
   }
   box.hidden = true;
   var shownCue = null, shownChapter = null, marked = null;
   // follow: the followed transcript (-1 = off); lastFollow: the one used last,
-  // where Follow starts again after Stop following or a scroll (until reload)
+  // where Follow starts again after a scroll ended it (until reload); after
+  // the last transcript Follow is off and starts again with the first
   var follow = -1, lastFollow = 0, followButton = panel.querySelector('[data-do=follow]');
   var autoScroll = false, autoTimer = null;
   function scrollToCue(el) {
@@ -2235,9 +2262,13 @@ PLAYER_JS = r"""
     var i = indexAt(source.times, t);
     if (force || i !== shownCue) {
       shownCue = i;
-      boxPart.prev.textContent = i > 0 ? textOf(source.els[i - 1]) : '';
-      boxPart.current.textContent = i >= 0 ? textOf(source.els[i]) : '';
-      boxPart.next.textContent = source.els[i + 1] ? textOf(source.els[i + 1]) : '';
+      var context = Math.max(0, subtitles - 1);  // lines before and after the sentence
+      function cue(k) { return k >= 0 && source.els[k] ? textOf(source.els[k]) : ''; }
+      boxPart.prev2.textContent = context >= 2 && i >= 0 ? cue(i - 2) : '';
+      boxPart.prev.textContent = context >= 1 && i >= 0 ? cue(i - 1) : '';
+      boxPart.current.textContent = subtitles ? cue(i) : '';  // Chapters alone: no sentence
+      boxPart.next.textContent = context >= 1 ? cue(i + 1) : '';
+      boxPart.next2.textContent = context >= 2 ? cue(i + 2) : '';
       var translation = bilinguals[language];
       var j = translation ? indexAt(translation.times, t) : -1;
       boxPart.translation.textContent = j >= 0 ? textOf(translation.els[j], 1) : '';
@@ -2260,15 +2291,11 @@ PLAYER_JS = r"""
   window.addEventListener('scroll', function () {  // scrolling by hand ends Follow
     if (follow >= 0 && !autoScroll) setFollow(-1);
   }, {passive: true});
-  if (!lists.length) {
-    panel.querySelector('[data-do=follow]').remove();
-    panel.querySelector('[data-do=unfollow]').remove();
-  }
-  if (!source && !chapters.length) panel.querySelector('.buttons.follow').remove();
-  else if (!source) {  // no transcript: the button shows only the current chapter
-    subtitlesButton.textContent = 'Chapters';
-    subtitlesButton.title = 'Show the current chapter under the video';
-  }
+  // Only the buttons that have something to show: no transcript, no Follow and
+  // Subtitles; no chapters, no Chapters; neither, no row at all.
+  if (!lists.length) { followButton.remove(); subtitlesButton.remove(); langs.remove(); }
+  if (!chapters.length) chaptersButton.remove();
+  if (!lists.length && !chapters.length) panel.querySelector('.buttons.follow').remove();
 
   function setOpen(open) {
     body.classList.toggle('player-open', open);
@@ -2283,15 +2310,25 @@ PLAYER_JS = r"""
     start: function () { video.pause(); jump(0); },  // always stopped at the start
     end: function () { jump(video.duration); },
     back: function () { jump(video.currentTime - 10); },
+    // To the start of the previous sentence; pressed again, one more. A jump
+    // of more than 20 s (a long pause, music) or no transcript: 5 s back.
+    repeat: function () {
+      var t = video.currentTime, i = source ? indexAt(source.times, t) : -1;
+      var target = i > 0 ? source.times[i - 1] : -1;
+      jump(target >= 0 && t - target <= 20 ? target : t - 5);
+    },
     forward: function () { jump(video.currentTime + 10); },
     toggle: function () { if (video.paused) video.play(); else video.pause(); },
-    pip: function () { video.requestPictureInPicture(); },
     // Follow marks the current sentence in a transcript and keeps it in view,
     // starting with the one used last; pressed again it moves on to the next
-    // transcript (and round again).
-    follow: function () { setFollow(follow < 0 ? lastFollow : (follow + 1) % lists.length); },
-    unfollow: function () { setFollow(-1); },
-    subtitles: function () { setSubtitles(!subtitles); }
+    // transcript, and after the last one it is off.
+    follow: function () {
+      if (follow < 0) setFollow(lastFollow);
+      else if (follow + 1 < lists.length) setFollow(follow + 1);
+      else { setFollow(-1); lastFollow = 0; }
+    },
+    chapters: function () { setChapters(!showChapters); },
+    subtitles: function () { setSubtitles((subtitles + 1) % 4); }
   };
   tile.addEventListener('click', function () {
     tile.blur();  // so that the space key then pauses the video, not the tile
@@ -2307,7 +2344,6 @@ PLAYER_JS = r"""
   all('[data-do]', panel).forEach(function (button) {
     button.addEventListener('click', function () { actions[button.dataset.do](); button.blur(); });
   });
-  if (!document.pictureInPictureEnabled) panel.querySelector('[data-do=pip]').remove();
   all('[data-speed]', panel).forEach(function (button) {
     button.addEventListener('click', function () {
       video.playbackRate = Number(button.dataset.speed);
@@ -2328,16 +2364,21 @@ PLAYER_JS = r"""
   video.addEventListener('pause', function () { toggle.textContent = '▶'; });
   video.addEventListener('enterpictureinpicture', function () { body.classList.add('pip'); });
   video.addEventListener('leavepictureinpicture', function () { body.classList.remove('pip'); });
-  if ('mediaSession' in navigator) {  // the ±10 s buttons of the separate window
+  if ('mediaSession' in navigator) {  // ±10 s in the browser's own picture-in-picture window
     try {
       navigator.mediaSession.setActionHandler('seekbackward', actions.back);
       navigator.mediaSession.setActionHandler('seekforward', actions.forward);
     } catch (e) { /* not supported */ }
   }
   document.addEventListener('keydown', function (e) {
-    if (!isOpen() || e.altKey || e.ctrlKey || e.metaKey
+    if (!isOpen() || e.altKey || e.metaKey
         || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(e.target.tagName)) return;
-    var action = {' ': 'toggle', 'ArrowLeft': 'back', 'ArrowRight': 'forward'}[e.key];
+    // Space play/pause, arrows 10 s, Shift+left the previous sentence,
+    // Ctrl+arrows the start and the end.
+    var key = (e.ctrlKey ? 'Ctrl+' : '') + (e.shiftKey ? 'Shift+' : '') + e.key;
+    var action = {' ': 'toggle', 'ArrowLeft': 'back', 'ArrowRight': 'forward',
+                  'Shift+ArrowLeft': 'repeat', 'Ctrl+ArrowLeft': 'start',
+                  'Ctrl+ArrowRight': 'end'}[key];
     if (action) { e.preventDefault(); actions[action](); }
   });
 })();
@@ -2438,16 +2479,16 @@ def about_downloaded(info: dict, archived: dt.date) -> str:
 
 def about_page_built(from_json: bool, built: dt.datetime) -> str:
     if not from_json:
-        return "together with the download"
+        return "at download"
     return f"{date_time(built)} from the saved data, with yt2html {__version__}"
 
 
 def about_playlist(info: dict) -> str:
     playlist = info.get(PLAYLIST_KEY)
     if not playlist:
-        return "not archived from a playlist"
+        return "none"
     url = f"{YOUTUBE}/playlist?list={playlist.get('id') or ''}"
-    return (f'{playlist.get("position") or "?"} of {playlist.get("count") or "?"} in '
+    return (f'video {playlist.get("position") or "?"} of {playlist.get("count") or "?"} in '
             f'<a href="{esc(url)}">{esc(playlist.get("title") or playlist.get("id") or "")}</a>')
 
 
@@ -2519,7 +2560,7 @@ def about_chapters(info: dict) -> str:
         timed = sum(1 for line in (info.get("description") or "").splitlines()
                     if CLOCK_RE.search(line))
         parts = [f"none; {timed} lines of the description contain times, but YouTube made "
-                 "no chapters from them" if timed >= 3 else "none in the video"]
+                 "no chapters from them" if timed >= 3 else "none"]
     if others:
         parts.append("also " + ", ".join(f'{esc(m.get("title") or "")} ({len(m.get("items") or [])})'
                                          for m in others))
@@ -2533,7 +2574,7 @@ def about_cards(info: dict) -> str:
     if cards is None:
         return f"unknown ({UNREAD_PAGE})"
     if not cards:
-        return "none in the video"
+        return "none"
     kinds = []
     for kind in CARD_TYPES.values():  # video, playlist, channel, link
         count = sum(1 for c in cards if c.get("type") == kind)
@@ -2602,16 +2643,19 @@ def about_images(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     size = image_size(thumbnail) if thumbnail else None
     parts = [f"thumbnail {size[0]}×{size[1]}" if size else
              "thumbnail" if thumbnail else "no thumbnail"]
-    wanted = avatar_urls(info)
+    channel = channel_avatar_url(info)
+    parts.append("channel avatar" if channel in avatar_uris else
+                 "channel avatar shown as a letter" if channel else "no channel avatar")
+    wanted = comment_avatar_urls(info)
     if no_avatars:
-        parts.append("avatars left out")
+        parts.append("comment avatars left out")
     elif wanted:
         embedded = sum(1 for u in wanted if u in avatar_uris)
         missing = len(wanted) - embedded
-        parts.append(f"avatars {embedded} of {len(wanted)}"
+        parts.append(f"comment avatars {embedded} of {len(wanted)}"
                      + (f" ({missing} shown as letters)" if missing else ""))
     else:
-        parts.append("no avatars")
+        parts.append("no comment avatars")
     others = extra_image_urls(info)
     if others:
         parts.append(f"other images {sum(1 for u in others if u in extra_images)} of {len(others)}")
@@ -2662,10 +2706,16 @@ def channel_avatar_url(info: dict) -> str | None:
          if c.get("author_is_uploader") and c.get("author_thumbnail")), None)
 
 
-def avatar_urls(info: dict) -> set[str]:
-    """The avatars a page needs: comment authors and the channel. The same set
-    is downloaded and counted in "About this copy"."""
-    urls = {c.get("author_thumbnail") for c in info.get("comments") or []}
+def comment_avatar_urls(info: dict) -> set[str]:
+    """The avatars of the comment authors (the channel's own is apart: it stays
+    with --no-avatars). The same set is downloaded and counted in "About this copy"."""
+    return {c.get("author_thumbnail") for c in info.get("comments") or []} - {None, ""}
+
+
+def avatar_urls(info: dict, comments: bool = True) -> set[str]:
+    """The avatars to download: the channel's, and the comment authors' unless
+    left out (--no-avatars)."""
+    urls = comment_avatar_urls(info) if comments else set()
     return {url for url in urls | {channel_avatar_url(info)} if url}
 
 
@@ -3421,9 +3471,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None)
     thumbnail = fetch_thumbnail(info)
     if not thumbnail:
         log("  Thumbnail could not be downloaded.")
-    avatar_uris = {}
-    if not args.no_avatars:
-        avatar_uris = fetch_images(avatar_urls(info), "avatars", resize=resize_avatar_url)
+    avatar_uris = fetch_images(avatar_urls(info, comments=not args.no_avatars), "avatars",
+                               resize=resize_avatar_url)
     if args.no_cards:
         info.pop(CARDS_KEY, None)  # also cards kept in a --from-json file
     extra_images = fetch_images(extra_image_urls(info), "images (people, podcast, cards)")
@@ -3637,7 +3686,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="leave out the author's info cards (nothing is read or "
                              "downloaded for them)")
     parser.add_argument("--no-avatars", action="store_true",
-                        help="do not embed avatars (letter placeholders instead)")
+                        help="do not embed the avatars of comment authors (letter "
+                             "placeholders instead); the channel's avatar stays")
     parser.add_argument(
         "--transcript", type=transcript_spec, default=[("plain", None)], metavar="VERSIONS",
         help="transcript versions, comma-separated, shown in this order: "

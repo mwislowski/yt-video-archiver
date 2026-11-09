@@ -2,6 +2,7 @@
 count, facts, themes and the channel avatar."""
 
 import datetime as dt
+import re
 import json
 from pathlib import Path
 
@@ -183,12 +184,44 @@ def test_transcript_cues_carry_their_start(info):
     assert yt2html.cue_start({"start": 4.0}) == "4"
 
 
-def test_player_has_follow_buttons_and_the_lines_under_the_video(info):
+def test_player_has_follow_chapters_and_the_lines_under_the_video(info):
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
-    assert 'data-do="follow"' in html and 'data-do="unfollow"' in html
+    assert 'data-do="follow"' in html and 'data-do="chapters"' in html
+    assert 'data-do="unfollow"' not in html
     assert ('<div class="now-playing" title="Show in the transcript"><div class="chapter"></div>'
-            '<div class="line prev"></div><div class="line current"></div>'
-            '<div class="line translation"></div><div class="line next"></div></div>') in html
+            '<div class="line prev2"></div><div class="line prev"></div><div class="line current"></div>'
+            '<div class="line translation"></div><div class="line next"></div>'
+            '<div class="line next2"></div></div>') in html
+
+
+def test_player_buttons_repeat_and_no_pop_out(info):
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
+    row = html[html.index('<div class="buttons">'):html.index('<div class="buttons speed">')]
+    assert re.findall(r'data-do="(\w+)"', row) == ["start", "back", "repeat", "toggle", "forward", "end"]
+    assert ">↺</button>" in row and "Shift+←" in row
+    assert 'data-do="pip"' not in html and "requestPictureInPicture" not in yt2html.PLAYER_JS
+    # the browser's own picture-in-picture still switches the page's layout
+    assert "enterpictureinpicture" in yt2html.PLAYER_JS
+
+
+def test_repeat_goes_to_the_previous_sentence_or_5_seconds_back():
+    js = yt2html.PLAYER_JS
+    assert "var target = i > 0 ? source.times[i - 1] : -1;" in js
+    assert "jump(target >= 0 && t - target <= 20 ? target : t - 5);" in js
+
+
+def test_keys_of_the_player():
+    js = yt2html.PLAYER_JS
+    for key, action in (("' '", "toggle"), ("'ArrowLeft'", "back"), ("'ArrowRight'", "forward"),
+                        ("'Shift+ArrowLeft'", "repeat"), ("'Ctrl+ArrowLeft'", "start"),
+                        ("'Ctrl+ArrowRight'", "end")):
+        assert f"{key}: '{action}'" in js
+
+
+def test_follow_cycles_through_the_transcripts_and_then_off():
+    js = yt2html.PLAYER_JS
+    assert "else if (follow + 1 < lists.length) setFollow(follow + 1);" in js
+    assert "else { setFollow(-1); lastFollow = 0; }" in js
 
 
 def test_css_has_only_printable_characters():
@@ -205,23 +238,38 @@ def test_speaker_mark_is_a_grey_bubble():
     assert 'content:""' in rule and "background:currentColor" in rule and "mask:url(" in rule
 
 
-def test_subtitles_button_and_language_buttons(info):
+def test_subtitles_cycle_and_language_buttons(info):
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
-    assert ('<button type="button" data-do="subtitles" aria-pressed="false" '
-            'title="Show the current sentences under the video">Subtitles</button>'
-            '<span class="langs"></span></div>') in html
-    # the language buttons are made by the script, one per bilingual transcript
-    assert "bilinguals.map(function (list, i)" in yt2html.PLAYER_JS
-    assert "box.hidden = true;" in yt2html.PLAYER_JS          # no lines until Subtitles
+    assert ('data-do="subtitles" aria-pressed="false" title="Show the current sentence under the '
+            'video; again: with one line before and after, with two, off">Subtitles'
+            '<span class="dots"></span></button><span class="langs"></span></div>') in html
+    js = yt2html.PLAYER_JS
+    assert "subtitles: function () { setSubtitles((subtitles + 1) % 4); }" in js
+    assert "['', '<i></i>', '<i class=\"full\"></i>', '<i class=\"full\"></i><i class=\"full\"></i>'][mode]" in js
+    # the dots are drawn in CSS: hollow and filled ones have the same size
+    assert ".player .dots i{width:6px;height:6px;border-radius:50%;border:1.5px solid currentColor;" in yt2html.CSS
+    assert ".player .dots i.full{background:currentColor}" in yt2html.CSS
+    assert "bilinguals.map(function (list, i)" in js            # one language button per bilingual
+    assert "box.hidden = true;" in js                           # nothing under the video at first
     assert ".player .now-playing .line{color:var(--muted);font-size:18px;" in yt2html.CSS
+    # the translation stands out from the original lines, faintly, only through the variables
+    assert "color:color-mix(in srgb,var(--accent-text) 30%,var(--muted))" in yt2html.CSS
 
 
-def test_chapters_label_without_a_transcript_and_no_line_above_the_subtitles():
-    assert "subtitlesButton.textContent = 'Chapters';" in yt2html.PLAYER_JS
-    rule = yt2html.CSS.split(".player .now-playing{", 1)[1].split("}", 1)[0]
-    assert "border" not in rule
+def test_chapters_toggle_keeps_its_line_and_buttons_only_when_useful():
+    js = yt2html.PLAYER_JS
+    assert "boxPart.chapter.classList.toggle('off', !showChapters);" in js
+    assert ".player .now-playing .chapter.off{visibility:hidden}" in yt2html.CSS  # reserved line
     chapter = yt2html.CSS.split(".player .now-playing .chapter{", 1)[1].split("}", 1)[0]
     assert "color:var(--accent-text)" in chapter and "opacity:.75" in chapter
+    assert "white-space:nowrap" in chapter and "text-overflow:ellipsis" in chapter
+    rule = yt2html.CSS.split(".player .now-playing{", 1)[1].split("}", 1)[0]
+    assert "border" not in rule
+    assert "if (!lists.length) { followButton.remove(); subtitlesButton.remove(); langs.remove(); }" in js
+    assert "if (!chapters.length) chaptersButton.remove();" in js
+    assert "subtitlesButton.textContent = 'Chapters'" not in js   # the old label trick is gone
+    # each button its own lines: Chapters alone shows no sentence
+    assert "boxPart.current.textContent = subtitles ? cue(i) : '';" in js
 
 
 # Channel avatar: from the owner row under the video, else from an uploader's comment
@@ -281,9 +329,9 @@ def test_watch_page_gives_the_channel_avatar(info, fake_ydl):
     assert info[yt2html.CHANNEL_AVATAR_KEY] == "https://yt3.ggpht.test/o=s48"
 
 
-def test_channel_avatar_is_downloaded_small_and_not_with_no_avatars(capsys, info, tmp_path,
-                                                                    monkeypatch):
-    info["comments"] = []
+def test_channel_avatar_is_downloaded_small_also_with_no_avatars(capsys, info, tmp_path,
+                                                                 monkeypatch):
+    info["comments"] = [dict(c, author_is_uploader=False) for c in info["comments"]]
     info[yt2html.CHANNEL_AVATAR_KEY] = "https://yt3.ggpht.test/owner=s176"
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
@@ -292,6 +340,11 @@ def test_channel_avatar_is_downloaded_small_and_not_with_no_avatars(capsys, info
                         lambda url: requested.append(url) or "data:image/png;base64,AAAA")
     yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "a")])
     assert f"https://yt3.ggpht.test/owner=s{yt2html.AVATAR_SIZE}" in requested
+    assert any("@newest" in url for url in requested)
     requested.clear()
+    # --no-avatars leaves out the comment authors' avatars, not the channel's
     yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "b"), "--no-avatars"])
-    assert not any("owner" in url for url in requested)
+    avatars = [url for url in requested if "yt3.ggpht" in url]   # not the thumbnail
+    assert avatars == [f"https://yt3.ggpht.test/owner=s{yt2html.AVATAR_SIZE}"]
+    html = next((tmp_path / "b").glob("*.html")).read_text("utf-8")
+    assert 'class="avatar av0"' in html[html.index('<div class="channel">'):]
