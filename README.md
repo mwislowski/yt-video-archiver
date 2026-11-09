@@ -47,7 +47,7 @@ yt2html "https://www.youtube.com/watch?v=..."
 
 The page is saved in the current folder (e.g. the folder with your downloaded videos); `-o FOLDER` saves it elsewhere. Always put the URL in quotes: in PowerShell `&` in a URL would otherwise be treated as an operator.
 
-Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa`) or the name of a page or index made by yt2html, with or without `.html`: `"My title [Z8lf5oWKfj0].html"` stands for that video, `"Python course [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa]"` for that playlist. Handy with `--overwrite` and `--index-only`. This also works in list files.
+Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa`) or any file name with the id in square brackets, wherever it stands and whatever the extension (a page, an index, a downloaded video): `"My title [Z8lf5oWKfj0].html"` or `"My title [Z8lf5oWKfj0].mp4"` stands for that video, `"Python course [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa]"` for that playlist. Handy with `--overwrite` and `--index-only`. This also works in list files.
 
 **What to archive**
 
@@ -124,7 +124,7 @@ https://youtu.be/qyqCTMirNWg
 
 **Playlists:** a playlist URL (`https://www.youtube.com/playlist?list=...`), in the command or in a list file, archives all videos of the playlist in its order, e.g. all episodes of a podcast. A link to a video opened from a playlist (`watch?v=...&list=...`) archives only that video. Channel URLs (`@name`) are not supported: open the channel's playlist and use its URL.
 
-**Videos that already have a page are skipped**, so running the same command again only archives what is missing, and an interrupted run continues where it stopped. A page is recognised by the video id in square brackets at the end of its name, e.g. `[Z8lf5oWKfj0].html`: you may rename pages freely (`042 My title [Z8lf5oWKfj0].html`) as long as that part stays. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--from-json` always replaces the page.
+**Videos that already have a page are skipped**, so running the same command again only archives what is missing, and an interrupted run continues where it stopped. A page is any `.html` file with the video id in square brackets in its name, e.g. `[Z8lf5oWKfj0]`: you may rename pages freely (`042 My title [Z8lf5oWKfj0] (copy).html`) as long as that part stays. If several files fit, the first by name is used and a note says so. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--from-json` always replaces the page.
 
 ### Index page
 
@@ -157,12 +157,18 @@ Videos without a page have a grey title without a link, and instead of the date 
 Good to know about the index:
 
 - **It always shows the current state of the folder.** It is made at the end of the run, also after `Ctrl+C` (then it lists the whole playlist, with the videos not reached yet in grey). If the program was stopped in any other way, the next run makes it again. Nothing about earlier runs is stored elsewhere: the index itself remembers the list and the reasons, and a reason stays until the video is tried again.
-- **Renaming is safe.** Pages are found by `[video id].html` at the end of their names, so after renaming them the index links to the new names and still shows the original titles. The index of a playlist is found by `[playlist id].html` and may be renamed the same way; the index of a list file must keep its name.
+- **Renaming is safe.** Pages are found by `[video id]` in their names, so after renaming them the index links to the new names and still shows the original titles. The index of a playlist is found by `[playlist id]` and may be renamed the same way; the index of a list file must keep its name.
 - **`--index-only` downloads nothing.** It only rebuilds the index from the pages in the folder, e.g. after renaming or deleting pages. It uses the list kept in the earlier index; only if there is none yet, it reads the playlist's list from YouTube (one request, no video). New videos added to the playlist on YouTube appear only after a normal run with `--index`.
 
 ### Watching a downloaded video on the page
 
-If the video file lies **next to the page with the same name** (`Title [id].mp4` next to `Title [id].html`, as yt-dlp names it by default), the page shows a turquoise **▶ Play** tile first among the facts. It is checked each time the page is opened, so a video downloaded later works without making the page again. If you renamed the page, the video may keep yt-dlp's original name. Formats tried: `.mp4`, `.webm`, `.m4v`, `.mkv`.
+If the downloaded video lies **next to the page**, the page shows a turquoise **▶ Play** tile first among the facts. A browser cannot look into a folder, it can only try names, so the page tries, each time it is opened:
+
+1. video files with the video's id in square brackets in their name, found **when the page was made**, whatever the rest of the name (`042 renamed [id].mp4`);
+2. the page's own name (`Title [id].mp4` next to `Title [id].html`; also after renaming both the same way);
+3. yt-dlp's default name `Title [id]` (when only the page was renamed).
+
+So a video downloaded later works without making the page again if it has the page's name or yt-dlp's default name; under any other name, make the page again (`--from-json` or `--overwrite`) and it is found by its id. The same after renaming a video. Formats: `.mp4`, `.webm`, `.m4v`, `.mkv`.
 
 **▶ Play** opens a player pinned on the left, so you can watch (or listen to a podcast) while scrolling the description, chapters, transcript and comments on the right; the thumbnail is hidden meanwhile. **✕ Close** pauses the video and restores the page; *Play* continues where you stopped.
 

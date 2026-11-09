@@ -131,7 +131,7 @@ def test_from_json_explains_what_was_looked_for(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     code, out = run(capsys, "--from-json", "TESTVIDEO09", "-o", "out")
     assert code == 1
-    assert "no saved data for TESTVIDEO09 in out (looked for *[TESTVIDEO09].info.json)" in out
+    assert "no saved data for TESTVIDEO09 in out (looked for *[TESTVIDEO09]*.info.json)" in out
     code, out = run(capsys, "--from-json", "missing.json")
     assert "FAILED: missing.json: no such file: missing.json" in out
 
@@ -152,3 +152,18 @@ def test_from_json_patterns_in_a_batch_file(capsys, tmp_path, monkeypatch):
     (tmp_path / "list.txt").write_text("data/*.info.json\n", encoding="utf-8")
     code, out = run(capsys, "--from-json", "-a", "list.txt", "-o", "pages")
     assert code == 0 and len(list((tmp_path / "pages").glob("*.html"))) == 2
+
+
+def test_from_json_finds_saved_data_with_the_id_anywhere(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    saved(tmp_path / "out", "Title [TESTVIDEO01] (copy).INFO.JSON")
+    for source in ("TESTVIDEO01", "My video [TESTVIDEO01].mp4", "Renamed [TESTVIDEO01] x.html"):
+        code, out = run(capsys, "--from-json", source, "-o", "out")
+        assert code == 0, (source, out)
+
+
+def test_from_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    code, out = run(capsys, "--from-json", "Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html")
+    assert code == 1 and "no such file: Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html" in out
+

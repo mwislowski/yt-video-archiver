@@ -77,6 +77,25 @@ def test_unrecognised_playlist_is_not_extracted(monkeypatch, tmp_path, capsys):
     assert not list(tmp_path.iterdir())
 
 
+def test_existing_page_with_the_id_anywhere_and_any_case(tmp_path, capsys):
+    (tmp_path / "Title [TESTVIDEO01] (copy).HTML").write_text("x")
+    (tmp_path / "Title [TESTVIDEO01].info.json").write_text("x")      # not a page
+    (tmp_path / "Title [TESTVIDEO01].mp4").write_text("x")            # not a page
+    assert yt2html.existing_page(tmp_path, "TESTVIDEO01").name == "Title [TESTVIDEO01] (copy).HTML"
+    assert yt2html.existing_page(tmp_path, "TESTVIDEO0") is None       # the whole id in brackets
+
+
+def test_several_files_with_one_id_get_a_note_once(tmp_path, capsys):
+    (tmp_path / "A [TESTVIDEO01].html").write_text("x")
+    (tmp_path / "B [TESTVIDEO01].html").write_text("x")
+    yt2html._SEVERAL_NOTED.clear()
+    assert yt2html.existing_page(tmp_path, "TESTVIDEO01").name == "A [TESTVIDEO01].html"
+    assert yt2html.existing_page(tmp_path, "TESTVIDEO01").name == "A [TESTVIDEO01].html"
+    out = capsys.readouterr().out
+    assert out.count("Note: several pages for [TESTVIDEO01]") == 1
+    assert "A [TESTVIDEO01].html, B [TESTVIDEO01].html; using A [TESTVIDEO01].html" in out
+
+
 def test_existing_page_found_by_id_in_any_name(tmp_path):
     (tmp_path / "042 My own name [TESTVIDEO01].html").write_text("x")
     (tmp_path / "Other [TESTVIDEO02].html").write_text("x")
@@ -173,7 +192,15 @@ def test_interrupted_write_leaves_no_page(tmp_path, monkeypatch):
     ("Python nauka [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html",
      "https://www.youtube.com/playlist?list=PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa"),
     ("Notes [draft].html", "Notes [draft].html"),                     # not an id
-    ("Title [Z8lf5oWKfj0].info.json", "Title [Z8lf5oWKfj0].info.json"),
+    # any file name with the id in square brackets, wherever it is
+    ("Title [Z8lf5oWKfj0].info.json", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
+    ("Title [Z8lf5oWKfj0].mp4", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
+    ("Title [Z8lf5oWKfj0] (copy).html", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
+    ("Song [Remix] [Z8lf5oWKfj0]", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
+    ("[Z8lf5oWKfj0] Title [Remix].html", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
+    ("Old [hz6-3-7GGyI] new [Z8lf5oWKfj0].html", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),  # last
+    (r"D:\Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa]\Notes [draft].html",
+     r"D:\Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa]\Notes [draft].html"),  # folders do not count
     ("https://example.test/x [Z8lf5oWKfj0]", "https://example.test/x [Z8lf5oWKfj0]"),
     ("https://www.youtube.com/watch?v=Z8lf5oWKfj0", "https://www.youtube.com/watch?v=Z8lf5oWKfj0"),
 ])

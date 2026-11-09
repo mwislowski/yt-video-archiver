@@ -151,6 +151,26 @@ def test_player_knows_the_original_video_name(info):
     assert yt2html.esc(json.dumps(names, ensure_ascii=False)) in html
 
 
+def test_videos_with_the_id_are_found_when_the_page_is_built(capsys, info, tmp_path):
+    out = tmp_path / "pages"
+    out.mkdir()
+    (out / "042 renamed [TESTVIDEO01].MP4").write_text("x")
+    (out / "Other [TESTVIDEO02].mp4").write_text("x")
+    (out / "Notes [TESTVIDEO01].txt").write_text("x")
+    saved = tmp_path / "x.info.json"
+    saved.write_text(json.dumps(info), encoding="utf-8")
+    yt2html.main(["--from-json", str(saved), "-o", str(out)])
+    html = next(out.glob("*.html")).read_text("utf-8")
+    assert 'data-files="[&quot;042 renamed [TESTVIDEO01].MP4&quot;]"' in html
+    # the page tries them first, then its own name and yt-dlp's name with every extension
+    assert "var candidates = JSON.parse(panel.dataset.files || '[]').map(encodeURIComponent);" \
+        in yt2html.PLAYER_JS
+    (out / "Second [TESTVIDEO01].webm").write_text("x")
+    assert yt2html.video_files_for(info, out) == ["042 renamed [TESTVIDEO01].MP4",
+                                                  "Second [TESTVIDEO01].webm"]
+    assert "Note: several videos for [TESTVIDEO01]" in capsys.readouterr().out
+
+
 def test_player_is_hidden_until_a_video_is_found():
     # The tile and the panel show only after the script adds these classes.
     assert ".fact.play{display:none;" in yt2html.CSS

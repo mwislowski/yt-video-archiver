@@ -2043,13 +2043,16 @@ PLAYER_SPEEDS = ("0.5", "0.75", "1", "1.25", "1.5")
 VIDEO_EXTENSIONS = ("mp4", "webm", "m4v", "mkv")
 
 
-def render_player(video_names: list[str]) -> str:
+def render_player(video_names: list[str], video_files: list[str] | None = None) -> str:
     """The player panel; hidden until the script finds a video file next to
-    the page (the page's own name first, then `video_names`)."""
+    the page: `video_files` first (files with the video's id found next to the
+    page when it was built), then the page's own name and `video_names`, each
+    with every video extension (for videos downloaded later)."""
     speeds = "".join(f'<button type="button" data-speed="{v}" aria-pressed="{str(v == "1").lower()}">'
                      f'{v}×</button>' for v in PLAYER_SPEEDS)
     return (
         f'<aside class="player" aria-label="Local video player" '
+        f'data-files="{esc(json.dumps(video_files or [], ensure_ascii=False))}" '
         f'data-names="{esc(json.dumps(video_names, ensure_ascii=False))}" '
         f'data-extensions="{" ".join(VIDEO_EXTENSIONS)}">'
         '<video preload="metadata"></video>'
@@ -2096,7 +2099,7 @@ PLAYER_JS = r"""
   var seek = panel.querySelector('.seek input'), toggle = panel.querySelector('[data-do=toggle]');
   var page = decodeURIComponent(location.pathname.split('/').pop()).replace(/\.html?$/i, '');
   var names = [page].concat(JSON.parse(panel.dataset.names || '[]'));
-  var candidates = [];
+  var candidates = JSON.parse(panel.dataset.files || '[]').map(encodeURIComponent);
   names.forEach(function (name) {
     panel.dataset.extensions.split(' ').forEach(function (ext) {
       var file = encodeURIComponent(name + '.' + ext);
@@ -2383,6 +2386,17 @@ PLAYER_JS = r"""
   });
 })();
 """
+
+
+def video_files_for(info: dict, folder: Path) -> list[str]:
+    """Video files next to the page with the video's id in their name, found
+    when the page is built: the page tries them first, so a renamed video is
+    found too (the browser itself cannot look into the folder)."""
+    files = files_with_id(folder, info.get("id"), VIDEO_FILE_EXTENSIONS)
+    if len(files) > 1:
+        log(f"Note: several videos for [{info.get('id')}] in {folder}: "
+            + ", ".join(p.name for p in files) + f"; the page tries {files[0].name} first")
+    return [p.name for p in files]
 
 
 def video_names(info: dict) -> list[str]:
@@ -2724,7 +2738,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 transcript_spec: list | None = None,
                 extra_images: dict[str, str] | None = None,
                 theme: str = "auto", no_avatars: bool = False,
-                from_json: bool = False, built: dt.datetime | None = None) -> str:
+                from_json: bool = False, built: dt.datetime | None = None,
+                video_files: list[str] | None = None) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
     `avatar_uris` and `extra_images` ({image url: data URI}). `no_avatars`,
     `from_json` and `built` (the build time, default now) are only described
@@ -2828,7 +2843,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                              spec, theme, show_snapshot, no_avatars, from_json,
                              built or dt.datetime.now()))
     body.append("</main>")
-    body.insert(0, render_player(video_names(info)))
+    body.insert(0, render_player(video_names(info), video_files))
     body.append(f"<script>{PLAYER_JS}</script>")
 
     return "\n".join([
@@ -3248,22 +3263,32 @@ def playlist_id_from_url(url: str) -> str | None:
     return None
 
 
-PAGE_NAME_ID = re.compile(r"\[([A-Za-z0-9_-]+)\](?:\.html?)?\s*$", re.IGNORECASE)
+BRACKETED = re.compile(r"\[([A-Za-z0-9_-]+)\]")
+
+
+def id_in_name(text: str, playlists: bool = True) -> str | None:
+    """The video id (or, with `playlists`, the playlist id) a file name carries
+    in square brackets, anywhere in the name, whatever its extension: the last
+    bracketed part that is a valid id ("Song [Remix] [ID] (copy).mp4" -> ID).
+    Only the file name counts, not its folders."""
+    name = re.split(r"[\\/]", text.strip())[-1]
+    for found in reversed(BRACKETED.findall(name)):
+        if VIDEO_ID.fullmatch(found) or (playlists and playlist_id_from_url(found)):
+            return found
+    return None
 
 
 def source_from_page_name(text: str) -> str:
-    """A video page or playlist index named like yt2html names them, with or
-    without .html and a folder ("Title [VIDEO_ID].html", "Title [PLAYLIST_ID]"),
-    as the URL of that video or playlist; anything else unchanged."""
-    match = PAGE_NAME_ID.search(text)
-    if not match or "://" in text:
+    """A file name with a video or playlist id in square brackets (a page, an
+    index, a video, saved data: "Title [VIDEO_ID].html", "Title [ID].mp4",
+    "Title [PLAYLIST_ID]") as the URL of that video or playlist; anything else
+    unchanged. A bare id is already understood by yt-dlp."""
+    found = None if "://" in text else id_in_name(text)
+    if not found:
         return text
-    found = match.group(1)
     if VIDEO_ID.fullmatch(found):
         return f"{YOUTUBE}/watch?v={found}"
-    if playlist_id_from_url(found):
-        return f"{YOUTUBE}/playlist?list={found}"
-    return text
+    return f"{YOUTUBE}/playlist?list={found}"
 
 
 def is_channel_url(url: str) -> bool:
@@ -3352,17 +3377,38 @@ def playlist_context(run: Run, source: str, url: str) -> dict | None:
             "position": position, "count": len(entries)}
 
 
-def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
-    """A page for this video in the output folder (not its subfolders).
+VIDEO_FILE_EXTENSIONS = tuple(f".{ext}" for ext in VIDEO_EXTENSIONS)
+_SEVERAL_NOTED: set[tuple] = set()
 
-    A page is recognised by "[<video id>].html" at the end of its name, so it
-    may be renamed freely as long as that part stays.
-    """
-    if not video_id or not output_dir.is_dir():
-        return None
-    suffix = f"[{video_id}].html"
-    return next((p for p in sorted(output_dir.iterdir())
-                 if p.is_file() and p.name.endswith(suffix)), None)
+
+def files_with_id(folder: Path, ident: str | None, extensions: tuple[str, ...]) -> list[Path]:
+    """Files in `folder` (not its subfolders) whose name contains "[ident]"
+    anywhere and ends with one of `extensions` (any case); the rest of the name
+    does not matter. Sorted by name."""
+    if not ident or not folder.is_dir():
+        return []
+    mark = f"[{ident}]"
+    return [p for p in sorted(folder.iterdir())
+            if p.is_file() and mark in p.name and p.name.lower().endswith(extensions)]
+
+
+def file_with_id(folder: Path, ident: str | None, extensions: tuple[str, ...],
+                 what: str) -> Path | None:
+    """The first of files_with_id(); several of them get a note (once)."""
+    found = files_with_id(folder, ident, extensions)
+    key = (str(folder), ident, extensions)
+    if len(found) > 1 and key not in _SEVERAL_NOTED:
+        _SEVERAL_NOTED.add(key)
+        log(f"Note: several {what} for [{ident}] in {folder}: "
+            + ", ".join(p.name for p in found) + f"; using {found[0].name}")
+    return found[0] if found else None
+
+
+def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
+    """A page (or a playlist's index) for this id in the output folder, not its
+    subfolders: any ".html" file with "[id]" in its name, so pages may be
+    renamed freely as long as that part stays."""
+    return file_with_id(output_dir, video_id, (".html",), "pages")
 
 
 def write_atomically(path: Path, text: str) -> None:
@@ -3486,7 +3532,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None)
                        theme=args.theme,
                        transcript_spec=args.transcript,
                        extra_images=extra_images,
-                       no_avatars=args.no_avatars, from_json=args.from_json)
+                       no_avatars=args.no_avatars, from_json=args.from_json,
+                       video_files=video_files_for(info, output_dir))
     write_atomically(target, page)
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
@@ -3580,32 +3627,23 @@ def expand_pattern(source: str) -> list[str]:
     return sorted(glob.glob(pattern)) or [source]
 
 
-SAVED_DATA_NAME = re.compile(r"\[([A-Za-z0-9_-]{11})\](?:\.html?|\.info\.json)?\s*$",
-                             re.IGNORECASE)
-
-
 def saved_data_path(source: str, output_dir: Path) -> Path:
     """The .info.json file for a --from-json source: an existing file; else a
-    video id, "[ID]", or the name of a page or JSON file ending in "[ID]",
-    looked up in the output folder as "...[ID].info.json". Raises ValueError
-    with what was looked for."""
+    video id, or any file name with "[ID]" (a page, a video, saved data),
+    looked up in the output folder as a ".info.json" file with "[ID]" in its
+    name. Raises ValueError with what was looked for."""
     path = Path(source)
     if path.is_file():
         return path
     if has_wildcards(source):
         raise ValueError(f"no file matches {source}")
-    if VIDEO_ID.fullmatch(source):
-        video_id = source
-    else:
-        match = SAVED_DATA_NAME.search(source)
-        video_id = match.group(1) if match else None
+    video_id = source if VIDEO_ID.fullmatch(source) else id_in_name(source, playlists=False)
     if not video_id:
         raise ValueError(f"no such file: {source}")
-    suffix = f"[{video_id}].info.json"
-    candidates = sorted(output_dir.iterdir()) if output_dir.is_dir() else []
-    found = next((p for p in candidates if p.is_file() and p.name.endswith(suffix)), None)
+    found = file_with_id(output_dir, video_id, (".info.json",), "saved data files")
     if not found:
-        raise ValueError(f"no saved data for {video_id} in {output_dir} (looked for *{suffix})")
+        raise ValueError(f"no saved data for {video_id} in {output_dir} "
+                         f"(looked for *[{video_id}]*.info.json)")
     return found
 
 

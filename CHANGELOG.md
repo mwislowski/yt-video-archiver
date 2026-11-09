@@ -14,6 +14,7 @@ All notable changes to this project. Versions: the second number for new feature
 - Player: the translation under the video has a faint touch of turquoise, so it stands out from the original lines.
 - Player: no *Pop out* button; the browser's own picture-in-picture still works (right-click the video in Chrome or Edge, Firefox's own button).
 - `--no-avatars` leaves out only the avatars of comment authors; the channel's avatar stays.
+- Files are found by the id in square brackets anywhere in their name, whatever the rest (before: the name had to end with `[ID].html` or `[ID].info.json`): pages, indexes and saved data in the output folder, and file names given as sources, also of videos (`"Title [ID].mp4"`). Video files next to the page with the id in their name are found when the page is made, so the player plays renamed videos too. Several matching files: the first by name, with a note.
 - *About this copy*: shorter states (`at download`, `none`, `video 3 of 15 in …`) and the channel avatar apart from the comment avatars.
 
 ## [0.6.0] - 2026-11-08
