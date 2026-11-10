@@ -2783,6 +2783,13 @@ def audio_language(fmt: dict) -> str:
     return fmt.get("language") or "?"
 
 
+def is_hls(fmt: dict) -> bool:
+    """HLS: the video cut into short pieces listed in a playlist (iPhone, Safari).
+    It gives no file size, only a declared bitrate, which proved far too high
+    (12 times the real average in a test), so the row shows no size for it."""
+    return str(fmt.get("protocol") or "").startswith("m3u8")
+
+
 def is_premium(fmt: dict) -> bool:
     """Formats YouTube gives only to Premium accounts (e.g. 1080p with a higher
     bitrate); yt-dlp says "Premium" in the format note."""
@@ -2797,6 +2804,11 @@ def about_video(info: dict) -> str:
     video, audio = video_formats(info)
     if not video and not audio:
         return "no formats in the data"
+    # Sizes, the main audio and the planned default come from formats with a
+    # real size (DASH: one file each); HLS formats are only named.
+    hls = [f for f in video if is_hls(f)]
+    video = [f for f in video if not is_hls(f)]
+    audio = [f for f in audio if not is_hls(f)] or audio
     original = next((f.get("language") for f in audio if f.get("language_preference") == 10), None)
 
     def best(formats):
@@ -2812,29 +2824,40 @@ def about_video(info: dict) -> str:
     main_audio = audio_for(original or (audio_language(audio[0]) if audio else "?"), "aac") or (
         best(regular_audio) if regular_audio else None)
     audio_bytes = format_size(info, main_audio) if main_audio else 0
-    lines = []
-    image = []
-    for height in sorted({f["height"] for f in video}, reverse=True):
-        entries = []
+    known = [(codec, premium) for codec in ("h264", "av1", "vp9", "h265")
+             for premium in (False, True)]
+
+    def variants(formats, height):
+        """(label, best format) per codec and Premium, in a fixed order."""
         by_codec = {}
-        for f in video:
+        for f in formats:
             if f["height"] == height:
                 key = (codec_name(f.get("vcodec"), VIDEO_CODECS), is_premium(f))
                 by_codec.setdefault(key, []).append(f)
-        known = [(codec, premium) for codec in ("h264", "av1", "vp9", "h265")
-                 for premium in (False, True)]
+        found = []
         for key in known + [k for k in by_codec if k not in known]:
-            if key not in by_codec:
-                continue
-            f = best(by_codec[key])
-            extra = (" Premium" if key[1] else "") + (
-                f" {f['fps']:g} fps" if (f.get("fps") or 0) > 30 else "") + (
-                f" {f['dynamic_range']}" if f.get("dynamic_range") not in (None, "SDR") else "")
+            if key in by_codec:
+                f = best(by_codec[key])
+                found.append((esc(key[0]) + (" Premium" if key[1] else "") + (
+                    f" {f['fps']:g} fps" if (f.get("fps") or 0) > 30 else "") + (
+                    f" {esc(f['dynamic_range'])}" if f.get("dynamic_range") not in (None, "SDR")
+                    else ""), f))
+        return found
+
+    lines = []
+    image = []
+    for height in sorted({f["height"] for f in video + hls}, reverse=True):
+        entries = []
+        for label, f in variants(video, height):
             size = format_size(info, f)
-            entries.append(f"{esc(key[0])}{extra} "
-                           f"{human_size(size + (audio_bytes or 0) if size else None)}")
-        image.append(f"{height}p " + ", ".join(entries))
-    lines.append("image: " + (" · ".join(image) if image else "none"))  # sizes with audio
+            entries.append(f"{label} {human_size(size + (audio_bytes or 0) if size else None)}")
+        named = [label for label, _ in variants(hls, height)]
+        text = ", ".join(entries)
+        if named:
+            text += ("; " if text else "") + "HLS: " + ", ".join(named)
+        image.append(f"{height}p {text}")
+    lines.append("image: " + (" · ".join(image) if image else "none")  # sizes with audio
+                 + (" (HLS: sizes unknown)" if hls else ""))
     languages = []
     for language in dict.fromkeys(audio_language(f) for f in audio):
         role = "original" if language == original else "dubbed" if original else None

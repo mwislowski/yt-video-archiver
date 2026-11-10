@@ -678,3 +678,32 @@ def test_video_row_marks_premium_formats(info):
     lines = video_row(info)
     assert "image: 1080p h264 ~408 MB" in lines
     assert "planned default: 1080p h264 + en opus, mp4, ~408 MB" in lines
+
+
+def test_video_row_names_hls_formats_without_sizes(info):
+    """HLS gives only a declared bitrate (far too high in practice), so its
+    formats are named, never sized, and never used for sizes or the default."""
+    hls = {"protocol": "m3u8_native"}
+    info["duration"] = 4269
+    info["formats"] = [
+        vfmt("137", 1080, "avc1.640028", 147 * MB, protocol="https"),
+        vfmt("270", 1080, "avc1.640028", None, tbr=3262, **hls),
+        vfmt("614", 1080, "vp09.00.40.08", None, tbr=3189, **hls),
+        vfmt("616", 1080, "vp09.00.40.08", None, tbr=5126, format_note="Premium", **hls),
+        vfmt("625", 2160, "vp09.00.50.08", None, tbr=12000, fps=60, **hls),   # only in HLS
+        afmt("140", "mp4a.40.2", 69 * MB, protocol="https"),
+        afmt("234-24", "mp4a.40.2", None, tbr=192, **hls),
+    ]
+    lines = video_row(info)
+    assert lines.startswith("image: 2160p HLS: vp9 60 fps · 1080p h264 ~216 MB; "
+                            "HLS: h264, vp9, vp9 Premium (HLS: sizes unknown)audio:")
+    assert "audio: en (original) aac ~69 MB;" in lines
+    assert "planned default: 1080p h264 + en aac, mp4, ~216 MB" in lines
+    # no HLS: no note
+    info["formats"] = info["formats"][:1] + info["formats"][5:6]
+    assert video_row(info).startswith("image: 1080p h264 ~216 MBaudio:")
+    # only HLS audio: still listed
+    info["formats"] = [vfmt("137", 1080, "avc1.640028", 147 * MB),
+                       afmt("234-24", "mp4a.40.2", 9 * MB, **hls)]
+    assert "audio: en (original) aac ~9 MB;" in video_row(info)
+    assert yt2html.is_hls({"protocol": "m3u8"}) and not yt2html.is_hls({})
