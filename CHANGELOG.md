@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-10
+
 ### Changed
 - *About this copy*: the *Chapters* row is now *Markers*, since it covers every timestamp list YouTube shows, not only chapters; each list is named, in lower case, with its count in brackets (`chapters (47), from the description; walkthroughs (11)`, `no chapters; walkthroughs (11)`).
 
@@ -94,7 +96,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.4.0...v0.5.0
