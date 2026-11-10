@@ -190,7 +190,7 @@ def test_fetch_playlist_reads_only_the_list(monkeypatch):
     assert title == "Python course" and [i["id"] for i in items] == ["TESTVIDEO01", "TESTVIDEO02"]
     assert FakePlaylistYDL.calls == [("short", False), ("real", False)]
     assert FakePlaylistYDL.opts["extract_flat"] == "in_playlist"
-    assert FakePlaylistYDL.opts["cookiesfrombrowser"] == ("firefox",)
+    assert FakePlaylistYDL.opts["cookiesfrombrowser"] == ("firefox", None, None, None)
 
 
 def test_fetch_playlist_rejects_a_video(monkeypatch):

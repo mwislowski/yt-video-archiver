@@ -30,6 +30,7 @@ import html.parser
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import urllib.parse
@@ -40,6 +41,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yt_dlp
+from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
 
 # The program version; pyproject.toml reads it from here (single source).
 __version__ = "0.7.1"
@@ -171,13 +173,16 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         },
     }
     if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = (args.cookies_from_browser,)
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
     started = time.monotonic()
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
         info[ARCHIVED_KEY] = dt.date.today().isoformat()
         info[DOWNLOAD_KEY] = {"yt2html": __version__,
-                              "cookies_from_browser": browser_name(args.cookies_from_browser)}
+                              "cookies_from_browser": browser_name(args.cookies_from_browser),
+                              # yt-dlp needs a JavaScript runtime (by default Deno) for
+                              # YouTube's full list of formats; noted for --video
+                              "deno": shutil.which("deno") is not None}
         if not args.no_comments:
             info[LIMIT_KEY] = args.max_comments
         if info.get("_type") not in ("playlist", "multi_video"):
@@ -2423,7 +2428,44 @@ UNREAD_PAGE = "the video page could not be read"
 
 def browser_name(spec: str | None) -> str | None:
     """'firefox:profile' -> 'firefox': the browser only, no profile or path."""
-    return re.split(r"[:+]", spec)[0] if spec else None
+    return re.split(r"[:+]", spec)[0].strip().lower() if spec else None
+
+
+# BROWSER[+KEYRING][:PROFILE][::CONTAINER], as yt-dlp's own command line reads it
+COOKIES_SPEC_RE = re.compile(r"""(?x)
+    (?P<name>[^+:]+)
+    (?:\s*\+\s*(?P<keyring>[^:]+))?
+    (?:\s*:\s*(?!:)(?P<profile>.+?))?
+    (?:\s*::\s*(?P<container>.+))?""")
+
+
+def cookies_spec(spec: str) -> tuple:
+    """'firefox:fTW1hk7Y.Profile 1' -> ('firefox', 'fTW1hk7Y.Profile 1', None, None):
+    the tuple yt-dlp's library wants (browser, profile, keyring, container).
+    The library takes no text; given one, it reads all of it as the browser."""
+    match = COOKIES_SPEC_RE.fullmatch(spec.strip())
+    if not match:
+        raise ValueError(f"not a browser: {spec!r}")
+    name, keyring, profile, container = match.group("name", "keyring", "profile", "container")
+    name = name.strip().lower()
+    if name not in SUPPORTED_BROWSERS:
+        raise ValueError(f"unsupported browser {name!r}; use one of: "
+                         + ", ".join(sorted(SUPPORTED_BROWSERS)))
+    if keyring is not None:
+        keyring = keyring.strip().upper()
+        if keyring not in SUPPORTED_KEYRINGS:
+            raise ValueError(f"unsupported keyring {keyring!r}; use one of: "
+                             + ", ".join(sorted(SUPPORTED_KEYRINGS)))
+    return name, profile, keyring, container
+
+
+def cookies_argument(spec: str) -> str:
+    """Checked when the command is read, before anything is downloaded."""
+    try:
+        cookies_spec(spec)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+    return spec
 
 
 def image_size(data_uri: str | None) -> tuple[int, int] | None:
@@ -2512,7 +2554,7 @@ def format_transcript_spec(spec: list[tuple[str, str | None]]) -> str:
 
 
 def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
-                  no_avatars: bool) -> str:
+                  no_avatars: bool, video: bool = False) -> str:
     """The command that makes an equivalent copy today: the settings that
     shaped this page, from the download and (for a page built from saved
     data) from the build; defaults are left out, paths never appear."""
@@ -2527,6 +2569,8 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
         parts += ["--max-comments", str(info[LIMIT_KEY])]
     if CARDS_KEY not in info:
         parts.append("--no-cards")
+    if video:
+        parts.append("--video")
     if no_avatars:
         parts.append("--no-avatars")
     versions = format_transcript_spec(spec if TRANSCRIPT_KEY in info else [])
@@ -2689,17 +2733,160 @@ def about_software() -> str:
             "these licenses cover the programs, not the content of this copy.")
 
 
+# --------------------------------------------------------------------------
+# --video (experimental): the formats YouTube offers, described in About this copy
+# --------------------------------------------------------------------------
+
+VIDEO_CODECS = (("avc1", "h264"), ("av01", "av1"), ("vp09", "vp9"), ("vp9", "vp9"),
+                ("hev1", "h265"), ("hvc1", "h265"))
+AUDIO_CODECS = (("mp4a", "aac"), ("opus", "opus"))
+
+
+def codec_name(codec: str | None, names: tuple) -> str | None:
+    """'avc1.640028' -> 'h264'; None for 'none' or no codec."""
+    codec = (codec or "none").lower()
+    if codec == "none":
+        return None
+    return next((name for prefix, name in names if codec.startswith(prefix)), codec.split(".")[0])
+
+
+def format_size(info: dict, fmt: dict) -> int | None:
+    """Bytes: exact, YouTube's estimate, or from the bitrate and the duration."""
+    size = fmt.get("filesize") or fmt.get("filesize_approx")
+    if not size and fmt.get("tbr") and info.get("duration"):
+        size = fmt["tbr"] * 1000 / 8 * info["duration"]
+    return int(size) if size else None
+
+
+def human_size(size: int | None) -> str:
+    if not size:
+        return "size unknown"
+    return f"~{size / 1e9:.1f} GB" if size >= 1e9 else f"~{size / 1e6:.0f} MB"
+
+
+def video_formats(info: dict) -> tuple[list[dict], list[dict]]:
+    """(video-only, audio-only) formats; no DRC (quieter audio) variants.
+    Storyboards have neither codec, so they drop out. Combined formats (old
+    low-quality mp4) count only when nothing else exists. Premium formats
+    (signed in with YouTube Premium) stay; the row marks them."""
+    usable = [f for f in info.get("formats") or []
+              if "drc" not in str(f.get("format_id") or "")]
+    has = lambda f, kind: codec_name(f.get(kind), VIDEO_CODECS if kind == "vcodec" else AUDIO_CODECS)
+    video = [f for f in usable if has(f, "vcodec") and not has(f, "acodec") and f.get("height")]
+    audio = [f for f in usable if has(f, "acodec") and not has(f, "vcodec")]
+    if not video:
+        video = [f for f in usable if has(f, "vcodec") and f.get("height")]
+    return video, audio
+
+
+def audio_language(fmt: dict) -> str:
+    return fmt.get("language") or "?"
+
+
+def is_premium(fmt: dict) -> bool:
+    """Formats YouTube gives only to Premium accounts (e.g. 1080p with a higher
+    bitrate); yt-dlp says "Premium" in the format note."""
+    return "premium" in (fmt.get("format_note") or "").lower()
+
+
+def about_video(info: dict) -> str:
+    """The formats YouTube offers for this video, for deciding how --video will
+    download: image by height and codec, audio by language, subtitles, and
+    what the planned defaults (H.264, original audio, mp4) would take, and
+    whether yt-dlp had Deno (a JavaScript runtime) for the full list."""
+    video, audio = video_formats(info)
+    if not video and not audio:
+        return "no formats in the data"
+    original = next((f.get("language") for f in audio if f.get("language_preference") == 10), None)
+
+    def best(formats):
+        return max(formats, key=lambda f: (f.get("fps") or 0, format_size(info, f) or 0))
+
+    def audio_for(language, codec=None, premium=False):
+        pool = [f for f in audio if audio_language(f) == language and is_premium(f) == premium
+                and (codec is None or codec_name(f.get("acodec"), AUDIO_CODECS) == codec)]
+        return best(pool) if pool else None
+
+    # the main audio and the planned default leave Premium formats out
+    regular_audio = [f for f in audio if not is_premium(f)]
+    main_audio = audio_for(original or (audio_language(audio[0]) if audio else "?"), "aac") or (
+        best(regular_audio) if regular_audio else None)
+    audio_bytes = format_size(info, main_audio) if main_audio else 0
+    lines = []
+    image = []
+    for height in sorted({f["height"] for f in video}, reverse=True):
+        entries = []
+        by_codec = {}
+        for f in video:
+            if f["height"] == height:
+                key = (codec_name(f.get("vcodec"), VIDEO_CODECS), is_premium(f))
+                by_codec.setdefault(key, []).append(f)
+        known = [(codec, premium) for codec in ("h264", "av1", "vp9", "h265")
+                 for premium in (False, True)]
+        for key in known + [k for k in by_codec if k not in known]:
+            if key not in by_codec:
+                continue
+            f = best(by_codec[key])
+            extra = (" Premium" if key[1] else "") + (
+                f" {f['fps']:g} fps" if (f.get("fps") or 0) > 30 else "") + (
+                f" {f['dynamic_range']}" if f.get("dynamic_range") not in (None, "SDR") else "")
+            size = format_size(info, f)
+            entries.append(f"{esc(key[0])}{extra} "
+                           f"{human_size(size + (audio_bytes or 0) if size else None)}")
+        image.append(f"{height}p " + ", ".join(entries))
+    lines.append("image: " + (" · ".join(image) if image else "none"))  # sizes with audio
+    languages = []
+    for language in dict.fromkeys(audio_language(f) for f in audio):
+        role = "original" if language == original else "dubbed" if original else None
+        codecs = ", ".join(
+            f"{codec}{' Premium' if premium else ''} "
+            f"{human_size(format_size(info, audio_for(language, codec, premium)))}"
+            for premium in (False, True) for codec in ("aac", "opus")
+            if audio_for(language, codec, premium))
+        languages.append(f"{esc(language)}{f' ({role})' if role else ''} {codecs}".strip())
+    lines.append("audio: " + (" · ".join(languages) if languages else "none")
+                 + ("; sizes of the image include this audio: " + esc(audio_language(main_audio))
+                    if main_audio and image else ""))
+    manual = [lang for lang, fmts in (info.get("subtitles") or {}).items() if fmts and lang != "live_chat"]
+    auto = [lang for lang, fmts in (info.get("automatic_captions") or {}).items() if fmts]
+    origs = [lang.removesuffix("-orig") for lang in auto if lang.endswith("-orig")]
+    translated = len([lang for lang in auto if not lang.endswith("-orig")]) - len(origs)
+    subs = [f"by the author: {esc(', '.join(manual))}" if manual else "none by the author"]
+    if origs:
+        subs.append(f"auto-generated: {esc(', '.join(origs))}")
+    if translated > 0:
+        subs.append(f"auto-translated: {translated} languages")
+    lines.append("subtitles: " + " · ".join(subs))
+    h264 = [f for f in video if codec_name(f.get("vcodec"), VIDEO_CODECS) == "h264"
+            and not is_premium(f)]
+    if h264 and main_audio:
+        pick = max(h264, key=lambda f: (f["height"], f.get("fps") or 0, format_size(info, f) or 0))
+        size = format_size(info, pick)
+        lines.append(f"planned default: {pick['height']}p h264 + "
+                     f"{esc(audio_language(main_audio))} "
+                     f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}, mp4, "
+                     f"{human_size(size + (audio_bytes or 0) if size else None)}")
+    else:
+        lines.append("planned default: nothing (no h264 image with audio)")
+    deno = (info.get(DOWNLOAD_KEY) or {}).get("deno")
+    lines.append("Deno at download: " + (
+        "yes" if deno else
+        "unknown (data saved by an older version)" if deno is None else
+        "no, so YouTube may have offered more formats than listed"))
+    return "<br>".join(lines)
+
+
 def render_about(info: dict, archived: dt.date, thumbnail: str | None,
                  avatar_uris: dict[str, str], extra_images: dict[str, str], spec: list,
                  theme: str, show_snapshot: bool, no_avatars: bool, from_json: bool,
-                 built: dt.datetime) -> str:
+                 built: dt.datetime, video: bool = False) -> str:
     """"About this copy": how this copy was made, what worked and what did not.
     Every row is always there, in a fixed order (see docs/DEVELOPMENT.md)."""
     rows = [
         ("Downloaded", about_downloaded(info, archived)),
         ("Page built", about_page_built(from_json, built)),
         ("Playlist", about_playlist(info)),
-        ("Command", about_command(info, spec, theme, show_snapshot, no_avatars)),
+        ("Command", about_command(info, spec, theme, show_snapshot, no_avatars, video)),
         ("Video page", about_video_page(info)),
         ("Markers", about_markers(info)),
         ("Info cards", about_cards(info)),
@@ -2709,6 +2896,8 @@ def render_about(info: dict, archived: dt.date, thumbnail: str | None,
         ("Software", about_software()),
         ("Disclaimer", esc(DISCLAIMER)),
     ]
+    if video:  # experimental, only with --video
+        rows.append(("Video (experimental)", about_video(info)))
     items = "\n".join(f"<dt>{name}</dt><dd>{value}</dd>" for name, value in rows)
     return ('<details class="copy-info"><summary>About this copy<span class="rest"> · '
             f'Snapshot {archived.strftime(DATE_FORMAT)} · made with yt2html</span></summary>\n'
@@ -2742,7 +2931,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 extra_images: dict[str, str] | None = None,
                 theme: str = "auto", no_avatars: bool = False,
                 from_json: bool = False, built: dt.datetime | None = None,
-                video_files: list[str] | None = None) -> str:
+                video_files: list[str] | None = None, video: bool = False) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
     `avatar_uris` and `extra_images` ({image url: data URI}). `no_avatars`,
     `from_json` and `built` (the build time, default now) are only described
@@ -2844,7 +3033,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
 
     body.append(render_about(info, archived, thumbnail, avatar_uris, extra_images or {},
                              spec, theme, show_snapshot, no_avatars, from_json,
-                             built or dt.datetime.now()))
+                             built or dt.datetime.now(), video))
     body.append("</main>")
     body.insert(0, render_player(video_names(info), video_files))
     body.append(f"<script>{PLAYER_JS}</script>")
@@ -3320,7 +3509,7 @@ def fetch_playlist(url: str, args: argparse.Namespace) -> tuple[str, list[dict]]
     playlist order, none of them extracted (one request per ~100 videos)."""
     opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True}
     if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = (args.cookies_from_browser,)
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
     with yt_dlp.YoutubeDL(opts) as ydl:
         # process=False: the entries are read as they are, without yt-dlp's
         # "Downloading item N of M" line for each of them.
@@ -3536,7 +3725,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None)
                        transcript_spec=args.transcript,
                        extra_images=extra_images,
                        no_avatars=args.no_avatars, from_json=args.from_json,
-                       video_files=video_files_for(info, output_dir))
+                       video_files=video_files_for(info, output_dir), video=args.video)
     write_atomically(target, page)
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
@@ -3726,6 +3915,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--no-cards", action="store_true",
                         help="leave out the author's info cards (nothing is read or "
                              "downloaded for them)")
+    parser.add_argument("--video", action="store_true",
+                        help="experimental: describe the video's formats (quality, codecs, "
+                             "sizes, audio languages, subtitles) at the end of 'About this "
+                             "copy'; nothing is downloaded yet")
     parser.add_argument("--no-avatars", action="store_true",
                         help="do not embed the avatars of comment authors (letter "
                              "placeholders instead); the channel's avatar stays")
@@ -3743,9 +3936,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--no-snapshot", action="store_true",
                         help="leave out the grey 'Snapshot' date tile "
                              "(the date stays in 'About this copy' at the bottom)")
-    parser.add_argument("--cookies-from-browser", metavar="BROWSER",
+    parser.add_argument("--cookies-from-browser", metavar="BROWSER", type=cookies_argument,
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
-                             "when YouTube asks to sign in")
+                             "when YouTube asks to sign in; a profile after a colon: "
+                             "\"firefox:PROFILE_FOLDER\" (its folder name or path)")
     parser.add_argument("--save-json", action="store_true",
                         help="also save the raw yt-dlp metadata next to the page")
     parser.add_argument("--overwrite", action="store_true",

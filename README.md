@@ -37,7 +37,7 @@ uv tool update-shell
 | Update the program and yt-dlp | `uv tool upgrade yt-video-archiver` |
 | Remove the program | `uv tool uninstall yt-video-archiver` |
 
-Optional: a JavaScript runtime recommended by yt-dlp for YouTube, e.g. Deno (`winget install DenoLand.Deno`). Without it yt-dlp prints warnings about video formats; they are harmless here, because the video is not downloaded.
+Optional: a JavaScript runtime recommended by yt-dlp for YouTube, e.g. Deno (`winget install DenoLand.Deno`). Without it yt-dlp prints warnings about video formats; they are harmless for the page, but YouTube may then offer fewer video formats (relevant for the experimental `--video`).
 
 ## Usage
 
@@ -59,7 +59,8 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Videos listed in a text file (see below) | `yt2html -a list.txt` |
 | Save into another folder | `yt2html "URL" -o "D:\Videos\Channel"` |
 | Make a page again although the video already has one (e.g. for newer comments); also works for a whole playlist or list | `yt2html "URL" --overwrite` |
-| When YouTube asks to sign in or to confirm you are not a bot | `yt2html "URL" --cookies-from-browser firefox` |
+| When YouTube asks to sign in or to confirm you are not a bot (the browser need not be open; without a profile, the one used most recently) | `yt2html "URL" --cookies-from-browser firefox` |
+| The same with a given browser profile: its folder name (Firefox: `about:support`, *Profile Folder*) or path | `yt2html "URL" --cookies-from-browser "firefox:fTW1hk7Y.Profile 1"` |
 
 **Index page** (see below)
 
@@ -87,6 +88,7 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Task | Command |
 |---|---|
 | Download the video so that the page can play it (mp4 that every browser plays) | `yt-dlp -f "bv*[vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 "URL"` |
+| Experimental: list the video's formats (quality, codecs, sizes, audio languages, subtitles) at the end of *About this copy*; nothing is downloaded yet | `yt2html "URL" --video` |
 | Also keep the raw data | `yt2html "URL" --save-json` |
 | Rebuild a page from saved data (no download; keeps the snapshot date) | `yt2html --from-json "Title [id].info.json"` |
 | The same, by the video id: the saved data is looked up in the folder given with `-o` (default: the current folder) | `yt2html --from-json VIDEO_ID -o "D:\Videos"` |
@@ -198,7 +200,7 @@ With the player closed, timestamps open YouTube as before; `Ctrl`+click always o
 
 ### About this copy
 
-At the bottom of every page, *About this copy* is folded to a single grey line with the snapshot date, which is there in any case, also with `--no-snapshot`. Opened, it describes this particular copy in rows that are always the same: *Downloaded*, *Page built*, *Playlist*, *Command*, *Video page*, *Markers* (chapters and other timestamp lists such as Walkthroughs), *Info cards*, *Transcript*, *Comments*, *Images*, *Software* and *Disclaimer*. They tell when and with which versions the copy was made, give the command that makes an equivalent copy again, and say what was left out or did not work, so two copies of the same video can be compared row by row.
+At the bottom of every page, *About this copy* is folded to a single grey line with the snapshot date, which is there in any case, also with `--no-snapshot`. Opened, it describes this particular copy in rows that are always the same: *Downloaded*, *Page built*, *Playlist*, *Command*, *Video page*, *Markers* (chapters and other timestamp lists such as Walkthroughs), *Info cards*, *Transcript*, *Comments*, *Images*, *Software* and *Disclaimer* (with the experimental `--video`, a last row *Video (experimental)* lists the formats YouTube offers). They tell when and with which versions the copy was made, give the command that makes an equivalent copy again, and say what was left out or did not work, so two copies of the same video can be compared row by row.
 
 ## Good to know
 

@@ -4,6 +4,15 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+
+- Experimental `--video`: describes the formats YouTube offers for the video at the end of *About this copy*, in a row *Video (experimental)*: image by height and codec (h264, av1, vp9, h265; frame rate above 30, HDR; formats for YouTube Premium accounts marked *Premium*) with approximate sizes including the audio, audio by language (original or dubbed, aac and opus), subtitles (by the author, auto-generated, number of auto-translated languages), what the planned default (h264 with the original audio, mp4) would take, and whether a JavaScript runtime (Deno) was there at download (yes, no, or unknown for data saved by an older version). Nothing is downloaded yet; the option may change or go away. Works with `--from-json`, since the formats are in the saved data.
+- The download settings in the data note whether Deno was available (`yt2html_download.deno`).
+
+### Fixed
+
+- `--cookies-from-browser` with a profile, keyring or container (`"firefox:PROFILE_FOLDER"`, the syntax of yt-dlp's command line) failed with `unsupported browser`: the whole text went to yt-dlp as the browser name. It is now split as yt-dlp does, and a wrong browser or keyring is reported before anything is downloaded.
+
 ## [0.7.1] - 2026-11-10
 
 ### Changed

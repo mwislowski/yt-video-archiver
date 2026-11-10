@@ -117,11 +117,15 @@ def test_fetch_info_keeps_the_download_settings(monkeypatch, info):
         def sanitize_info(self, i): return i
 
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", Fake)
+    monkeypatch.setattr(yt2html.shutil, "which", lambda name: None)  # whatever this computer has
     args = yt2html.parse_args(["u", "--transcript", "none",
                                "--cookies-from-browser", "firefox:/home/me/profile"])
     fetched = yt2html.fetch_info("u", args)
     assert fetched[yt2html.DOWNLOAD_KEY] == {"yt2html": yt2html.__version__,
-                                             "cookies_from_browser": "firefox"}
+                                             "cookies_from_browser": "firefox",
+                                             "deno": False}
+    monkeypatch.setattr(yt2html.shutil, "which", lambda name: name == "deno" and "/bin/deno")
+    assert yt2html.fetch_info("u", args)[yt2html.DOWNLOAD_KEY]["deno"] is True
 
 
 # --------------------------------------------------------------------------
@@ -176,9 +180,46 @@ def test_command_of_a_page_built_from_saved_data(capsys, tmp_path, info):
     assert "--from-json" not in html and str(tmp_path) not in html
 
 
+@pytest.mark.parametrize("spec, expected", [
+    ("firefox", ("firefox", None, None, None)),
+    ("Firefox", ("firefox", None, None, None)),
+    ("firefox:fTW1hk7Y.Profile 1", ("firefox", "fTW1hk7Y.Profile 1", None, None)),
+    (r"firefox:C:\Users\me\Profiles\x.default", ("firefox", r"C:\Users\me\Profiles\x.default", None, None)),
+    ("firefox::Personal", ("firefox", None, None, "Personal")),
+    ("chrome+gnomekeyring:Profile 2", ("chrome", "Profile 2", "GNOMEKEYRING", None)),
+])
+def test_cookies_spec_is_split_like_yt_dlp_does(spec, expected):
+    assert yt2html.cookies_spec(spec) == expected
+
+
+def test_cookies_spec_errors_come_before_any_download(capsys):
+    for bad in ("netscape", "firefox+wallet", ":x"):
+        with pytest.raises(SystemExit):
+            yt2html.parse_args(["u", "--cookies-from-browser", bad])
+    assert "unsupported browser 'netscape'" in capsys.readouterr().err
+
+
+def test_fetch_info_gives_yt_dlp_the_split_spec(monkeypatch, info):
+    monkeypatch.setattr(yt2html, "add_watch_page_data", lambda ydl, i, cards=True: None)
+    seen = {}
+
+    class Fake:
+        def __init__(self, opts): seen.update(opts)
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download): return dict(info)
+        def sanitize_info(self, i): return i
+
+    monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", Fake)
+    yt2html.fetch_info("u", yt2html.parse_args(["u", "--cookies-from-browser",
+                                                 "firefox:fTW1hk7Y.Profile 1"]))
+    assert seen["cookiesfrombrowser"] == ("firefox", "fTW1hk7Y.Profile 1", None, None)
+
+
 def test_browser_name_has_no_profile():
     assert yt2html.browser_name("firefox") == "firefox"
     assert yt2html.browser_name("chrome:Profile 1") == "chrome"
+    assert yt2html.browser_name("Firefox :fTW1hk7Y.Profile 1") == "firefox"
     assert yt2html.browser_name("firefox+gnomekeyring:/p::c") == "firefox"
     assert yt2html.browser_name(None) is None
 
@@ -415,7 +456,8 @@ def test_software_and_disclaimer(info):
 @pytest.mark.parametrize("theme", ["auto", "dark", "light"])
 def test_no_option_names_outside_the_command(info, theme):
     info[yt2html.LIMIT_KEY] = 5
-    html = render(info, theme=theme, no_avatars=True, show_snapshot=False)
+    info["formats"] = video_formats_example()
+    html = render(info, theme=theme, no_avatars=True, show_snapshot=False, video=True)
     rest = re.sub(r'<code class="command">.*?</code>', "", html)
     rest = re.sub(r"<style>.*?</style>|<script>.*?</script>", "", rest, flags=re.S)
     rest = re.sub(r'style="[^"]*"', "", rest)  # CSS variables such as --hue
@@ -480,3 +522,159 @@ def test_cookies_have_no_effect_when_building(capsys, tmp_path, info):
     _, out, _ = rebuild(capsys, tmp_path, info, "--cookies-from-browser", "firefox")
     assert "Note: --cookies-from-browser has no effect with --from-json" in out
 
+
+
+# --------------------------------------------------------------------------
+# Video (experimental, --video): the formats YouTube offers
+# --------------------------------------------------------------------------
+
+MB = 1_000_000
+
+
+def vfmt(fid, height, vcodec, size, fps=25, **extra):
+    return {"format_id": fid, "ext": "mp4", "height": height, "vcodec": vcodec,
+            "acodec": "none", "fps": fps, "filesize": size, **extra}
+
+
+def afmt(fid, acodec, size, language="en", preference=10, **extra):
+    return {"format_id": fid, "ext": "m4a" if acodec.startswith("mp4a") else "webm",
+            "vcodec": "none", "acodec": acodec, "filesize": size, "language": language,
+            "language_preference": preference, **extra}
+
+
+def video_formats_example():
+    return [
+        {"format_id": "sb0", "ext": "mhtml", "format_note": "storyboard", "vcodec": "none",
+         "acodec": "none", "height": 90},
+        vfmt("18", 360, "avc1.42001E", 30 * MB, acodec="mp4a.40.2"),   # combined, old
+        vfmt("134", 360, "avc1.4D401E", 20 * MB),
+        vfmt("243", 360, "vp9", 15 * MB),
+        vfmt("137", 1080, "avc1.640028", 400 * MB),
+        vfmt("299", 1080, "avc1.64002A", 600 * MB, fps=50),
+        vfmt("399", 1080, "av01.0.08M.08", 300 * MB),
+        vfmt("616", 1080, "vp09.00.40.08", 900 * MB, format_note="Premium"),
+        vfmt("337", 2160, "vp09.02.51.10", 2_500 * MB, dynamic_range="HDR10"),
+        afmt("140", "mp4a.40.2", 9 * MB),
+        afmt("251", "opus", 8 * MB),
+        afmt("251-drc", "opus", 12 * MB),
+        afmt("140-1", "mp4a.40.2", 9 * MB, language="pl", preference=-1),
+    ]
+
+
+def video_row(info, **options):
+    return row(render(info, video=True, **options), r"Video \(experimental\)")
+
+
+def test_video_row_only_with_the_option(info):
+    info["formats"] = video_formats_example()
+    assert "Video (experimental)" not in render(info)
+    html = render(info, video=True)
+    names = re.findall(r"<dt>(.*?)</dt>", about(html))
+    assert names == ROWS + ["Video (experimental)"]
+    assert command(html).endswith(" --video")
+    assert command(render(info, video=True, no_avatars=True)).endswith("--video --no-avatars")
+
+
+def test_video_row_describes_image_audio_subtitles_and_the_default(info):
+    info["formats"] = video_formats_example()
+    info["subtitles"] = {"en": [{"ext": "vtt"}], "live_chat": [{"ext": "json"}], "de": []}
+    info["automatic_captions"] = {"en-orig": [{}], "en": [{}], "pl": [{}], "fr": [{}]}
+    html = render(info, video=True)
+    lines = re.search(r"<dt>Video \(experimental\)</dt><dd>(.*?)</dd>", html).group(1).split("<br>")
+    assert lines == [
+        "image: 2160p vp9 HDR10 ~2.5 GB · 1080p h264 50 fps ~609 MB, av1 ~309 MB,"
+        " vp9 Premium ~909 MB · 360p h264 ~29 MB, vp9 ~24 MB",
+        "audio: en (original) aac ~9 MB, opus ~8 MB · pl (dubbed) aac ~9 MB;"
+        " sizes of the image include this audio: en",
+        "subtitles: by the author: en · auto-generated: en · auto-translated: 2 languages",
+        "planned default: 1080p h264 + en aac, mp4, ~609 MB",
+        "Deno at download: unknown (data saved by an older version)",
+    ]
+
+
+def test_video_row_without_an_original_language_or_runtime(info):
+    info["formats"] = [vfmt("137", 1080, "avc1.640028", None, tbr=1000),   # size from bitrate
+                       afmt("140", "mp4a.40.2", 5 * MB, language=None, preference=None)]
+    info["duration"] = 600   # 1000 kbit/s * 600 s = 75 MB
+    info[yt2html.DOWNLOAD_KEY] = {"deno": False}
+    lines = video_row(info)
+    assert "image: 1080p h264 ~80 MB" in lines
+    assert "audio: ? aac ~5 MB" in lines
+    assert "(original)" not in lines and "(dubbed)" not in lines
+    assert "subtitles: none by the author" in lines
+    assert "planned default: 1080p h264 + ? aac, mp4, ~80 MB" in lines
+    assert lines.endswith("Deno at download: no, so YouTube may have offered more formats "
+                          "than listed")
+    info[yt2html.DOWNLOAD_KEY] = {"deno": True}
+    assert video_row(info).endswith("Deno at download: yes")
+    info[yt2html.DOWNLOAD_KEY] = {"yt2html": "0.6.0"}   # saved before the field existed
+    assert video_row(info).endswith("Deno at download: unknown (data saved by an older version)")
+    del info[yt2html.DOWNLOAD_KEY]
+    assert video_row(info).endswith("Deno at download: unknown (data saved by an older version)")
+    info["automatic_captions"] = {"en-orig": [{}], "en": [{}]}   # en = en-orig, no translation
+    assert "subtitles: none by the author · auto-generated: en<br>" in render(info, video=True)
+
+
+def test_video_row_edge_cases(info):
+    info.pop("formats", None)
+    assert video_row(info) == "no formats in the data"
+    # only combined formats (old videos): they count; no audio-only, no default
+    info["formats"] = [vfmt("18", 360, "avc1.42001E", 30 * MB, acodec="mp4a.40.2")]
+    lines = video_row(info)
+    assert lines.startswith("image: 360p h264 ~30 MB")
+    assert "audio: none" in lines
+    assert "planned default: nothing (no h264 image with audio)" in lines
+    # unknown size and an unknown codec
+    info["formats"] = [vfmt("1", 720, "xyz1.2", None), afmt("2", "opus", None)]
+    info.pop("duration", None)
+    lines = video_row(info)
+    assert "720p xyz1 size unknown" in lines
+    assert "en (original) opus size unknown" in lines
+    assert "planned default: nothing" in lines
+
+
+def test_sizes_and_codec_names():
+    assert yt2html.human_size(None) == "size unknown"
+    assert yt2html.human_size(999_999_999) == "~1000 MB"
+    assert yt2html.human_size(1_000_000_000) == "~1.0 GB"
+    assert yt2html.codec_name("hvc1.2.4", yt2html.VIDEO_CODECS) == "h265"
+    assert yt2html.codec_name("none", yt2html.VIDEO_CODECS) is None
+    assert yt2html.codec_name(None, yt2html.AUDIO_CODECS) is None
+    assert yt2html.format_size({}, {"filesize_approx": 7}) == 7
+    assert yt2html.format_size({"duration": 8}, {"filesize": 5, "tbr": 1}) == 5
+    assert yt2html.format_size({"duration": 8}, {"tbr": 1}) == 1000
+
+
+def test_video_option_with_saved_data(capsys, tmp_path, info):
+    info["formats"] = video_formats_example()
+    code, out, html = rebuild(capsys, tmp_path, info, "--video")
+    assert code == 0
+    assert "planned default: 1080p h264" in html
+    assert command(html).endswith("--video")
+
+
+def test_video_row_marks_premium_formats(info):
+    """Signed in with YouTube Premium, yt-dlp gets formats marked "Premium":
+    shown after the ordinary format of the same codec, never in the default."""
+    info["formats"] = [
+        vfmt("137", 1080, "avc1.640028", 400 * MB),
+        vfmt("9137", 1080, "avc1.640028", 800 * MB, format_note="1080p Premium"),
+        vfmt("248", 1080, "vp9", 300 * MB),
+        vfmt("616", 1080, "vp09.00.40.08", 900 * MB, format_note="1080p Premium"),
+        vfmt("9720", 720, "avc1.4d401f", 100 * MB, format_note="Premium"),   # only Premium
+        afmt("140", "mp4a.40.2", 9 * MB),
+        afmt("141", "mp4a.40.2", 18 * MB, format_note="English original (default), Premium"),
+        afmt("774", "opus", 17 * MB, format_note="English original (default), Premium"),
+    ]
+    lines = video_row(info)
+    assert ("image: 1080p h264 ~409 MB, h264 Premium ~809 MB, vp9 ~309 MB, vp9 Premium ~909 MB"
+            " · 720p h264 Premium ~109 MB") in lines
+    assert "audio: en (original) aac ~9 MB, aac Premium ~18 MB, opus Premium ~17 MB;" in lines
+    assert "planned default: 1080p h264 + en aac, mp4, ~409 MB" in lines
+    # with Premium audio only, the main audio is still an ordinary one
+    info["formats"] = [vfmt("137", 1080, "avc1.640028", 400 * MB),
+                       afmt("141", "mp4a.40.2", 18 * MB, format_note="Premium"),
+                       afmt("251", "opus", 8 * MB)]
+    lines = video_row(info)
+    assert "image: 1080p h264 ~408 MB" in lines
+    assert "planned default: 1080p h264 + en opus, mp4, ~408 MB" in lines
