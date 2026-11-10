@@ -2843,9 +2843,11 @@ def video_overview(info: dict) -> dict | None:
     def label(key):
         return esc(key[0]) + (" Premium" if key[1] else "")
 
-    def extras(f):
-        return [f"{f['fps']:g} fps"] * ((f.get("fps") or 0) > 30) + (
-            [esc(f["dynamic_range"])] if f.get("dynamic_range") not in (None, "SDR") else [])
+    def hdr(f):
+        return [esc(f["dynamic_range"])] if f.get("dynamic_range") not in (None, "SDR") else []
+
+    def extras(f):  # HLS names: no rows of their own, so the frame rate goes with the name
+        return [f"{f['fps']:g} fps"] * ((f.get("fps") or 0) > 30) + hdr(f)
 
     def ordered(keys):
         return [k for k in known if k in keys] + [k for k in keys if k not in known]
@@ -2853,23 +2855,30 @@ def video_overview(info: dict) -> dict | None:
     columns = ordered(list(dict.fromkeys(key_of(f) for f in video)))
     rows = []
     for height in sorted({f["height"] for f in video + hls}, reverse=True):
-        cells = []
-        for key in columns:
-            pool = [f for f in video if f["height"] == height and key_of(f) == key]
-            if not pool:
-                cells.append(None)
-                continue
-            f = best(pool)
-            size = format_size(info, f)
-            cells.append(", ".join([human_size(size + (audio_bytes or 0) if size else None)]
-                                   + extras(f)))
-        if hls:
-            named = []
-            for key in ordered(list(dict.fromkeys(key_of(f) for f in hls if f["height"] == height))):
-                f = best([g for g in hls if g["height"] == height and key_of(g) == key])
-                named.append(" ".join([label(key)] + extras(f)))
-            cells.append(", ".join(named) or None)
-        rows.append((f"{height}p", cells))
+        # one row per frame rate at this height (most often just one)
+        rates = sorted({f.get("fps") or 0 for f in video if f["height"] == height},
+                       reverse=True) or [None]
+        for i, fps in enumerate(rates):
+            cells = []
+            for key in columns:
+                pool = [f for f in video if f["height"] == height and key_of(f) == key
+                        and (f.get("fps") or 0) == fps]
+                if not pool:
+                    cells.append(None)
+                    continue
+                f = best(pool)
+                size = format_size(info, f)
+                cells.append(", ".join([human_size(size + (audio_bytes or 0) if size else None)]
+                                       + hdr(f)))
+            if hls:
+                named = []
+                for key in ordered(list(dict.fromkeys(
+                        key_of(f) for f in hls if f["height"] == height))):
+                    f = best([g for g in hls if g["height"] == height and key_of(g) == key])
+                    named.append(" ".join([label(key)] + extras(f)))
+                # HLS once per height, in its first row
+                cells.append((", ".join(named) or None) if i == 0 else None)
+            rows.append((f"{height}p" + (f", {fps:g} fps" if fps else ""), cells))
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
              "rows": rows,
              "audio": (f"{esc(audio_language(main_audio))} "
