@@ -1503,6 +1503,15 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .copy-info dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:10px 0 0 14px}
 .copy-info dt{font-weight:600}
 .copy-info dd{margin:0;overflow-wrap:anywhere}
+/* --video (experimental): tables of formats, scrolled sideways on narrow screens */
+.copy-info dd{min-width:0}
+.copy-info .formats{overflow-x:auto;max-width:100%;margin:0 0 10px}
+.copy-info .formats table{border-collapse:collapse}
+.copy-info .formats caption{caption-side:top;text-align:left;font-weight:600;padding-bottom:2px}
+.copy-info .formats th,.copy-info .formats td{border:1px solid var(--line);padding:1px 8px;
+  text-align:left;vertical-align:top;font-weight:400}
+.copy-info .formats th{font-weight:600;white-space:nowrap}
+.copy-info .formats .size{text-align:right;white-space:nowrap}
 .copy-info a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .copy-info .command{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:12px;
   background:var(--chip);border-radius:4px;padding:1px 6px;
@@ -2796,14 +2805,15 @@ def is_premium(fmt: dict) -> bool:
     return "premium" in (fmt.get("format_note") or "").lower()
 
 
-def about_video(info: dict) -> str:
+def video_overview(info: dict) -> dict | None:
     """The formats YouTube offers for this video, for deciding how --video will
-    download: image by height and codec, audio by language, subtitles, and
-    what the planned defaults (H.264, original audio, mp4) would take, and
-    whether yt-dlp had Deno (a JavaScript runtime) for the full list."""
+    download, as tables: image (heights × codecs, sizes with the main audio),
+    audio (languages × codecs), subtitles; then what the planned defaults
+    (H.264, original audio, mp4) would take and whether yt-dlp had Deno (a
+    JavaScript runtime) for the full list. None when there are no formats."""
     video, audio = video_formats(info)
     if not video and not audio:
-        return "no formats in the data"
+        return None
     # Sizes, the main audio and the planned default come from formats with a
     # real size (DASH: one file each); HLS formats are only named.
     hls = [f for f in video if is_hls(f)]
@@ -2827,76 +2837,128 @@ def about_video(info: dict) -> str:
     known = [(codec, premium) for codec in ("h264", "av1", "vp9", "h265")
              for premium in (False, True)]
 
-    def variants(formats, height):
-        """(label, best format) per codec and Premium, in a fixed order."""
-        by_codec = {}
-        for f in formats:
-            if f["height"] == height:
-                key = (codec_name(f.get("vcodec"), VIDEO_CODECS), is_premium(f))
-                by_codec.setdefault(key, []).append(f)
-        found = []
-        for key in known + [k for k in by_codec if k not in known]:
-            if key in by_codec:
-                f = best(by_codec[key])
-                found.append((esc(key[0]) + (" Premium" if key[1] else "") + (
-                    f" {f['fps']:g} fps" if (f.get("fps") or 0) > 30 else "") + (
-                    f" {esc(f['dynamic_range'])}" if f.get("dynamic_range") not in (None, "SDR")
-                    else ""), f))
-        return found
+    def key_of(f):
+        return codec_name(f.get("vcodec"), VIDEO_CODECS), is_premium(f)
 
-    lines = []
-    image = []
+    def label(key):
+        return esc(key[0]) + (" Premium" if key[1] else "")
+
+    def extras(f):
+        return [f"{f['fps']:g} fps"] * ((f.get("fps") or 0) > 30) + (
+            [esc(f["dynamic_range"])] if f.get("dynamic_range") not in (None, "SDR") else [])
+
+    def ordered(keys):
+        return [k for k in known if k in keys] + [k for k in keys if k not in known]
+
+    columns = ordered(list(dict.fromkeys(key_of(f) for f in video)))
+    rows = []
     for height in sorted({f["height"] for f in video + hls}, reverse=True):
-        entries = []
-        for label, f in variants(video, height):
+        cells = []
+        for key in columns:
+            pool = [f for f in video if f["height"] == height and key_of(f) == key]
+            if not pool:
+                cells.append(None)
+                continue
+            f = best(pool)
             size = format_size(info, f)
-            entries.append(f"{label} {human_size(size + (audio_bytes or 0) if size else None)}")
-        named = [label for label, _ in variants(hls, height)]
-        text = ", ".join(entries)
-        if named:
-            text += ("; " if text else "") + "HLS: " + ", ".join(named)
-        image.append(f"{height}p {text}")
-    lines.append("image: " + (" · ".join(image) if image else "none")  # sizes with audio
-                 + (" (HLS: sizes unknown)" if hls else ""))
-    languages = []
-    for language in dict.fromkeys(audio_language(f) for f in audio):
+            cells.append(", ".join([human_size(size + (audio_bytes or 0) if size else None)]
+                                   + extras(f)))
+        if hls:
+            named = []
+            for key in ordered(list(dict.fromkeys(key_of(f) for f in hls if f["height"] == height))):
+                f = best([g for g in hls if g["height"] == height and key_of(g) == key])
+                named.append(" ".join([label(key)] + extras(f)))
+            cells.append(", ".join(named) or None)
+        rows.append((f"{height}p", cells))
+    image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
+             "rows": rows,
+             "audio": (f"{esc(audio_language(main_audio))} "
+                       f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}"
+                       if main_audio else None)}
+
+    audio_keys = [(codec, premium) for premium in (False, True) for codec in ("aac", "opus")
+                  if any(audio_for(language, codec, premium)
+                         for language in {audio_language(f) for f in audio})]
+    languages = list(dict.fromkeys(audio_language(f) for f in audio))
+    if original in languages:  # the original first
+        languages.remove(original)
+        languages.insert(0, original)
+    audio_rows = []
+    for language in languages:
         role = "original" if language == original else "dubbed" if original else None
-        codecs = ", ".join(
-            f"{codec}{' Premium' if premium else ''} "
-            f"{human_size(format_size(info, audio_for(language, codec, premium)))}"
-            for premium in (False, True) for codec in ("aac", "opus")
-            if audio_for(language, codec, premium))
-        languages.append(f"{esc(language)}{f' ({role})' if role else ''} {codecs}".strip())
-    lines.append("audio: " + (" · ".join(languages) if languages else "none")
-                 + ("; sizes of the image include this audio: " + esc(audio_language(main_audio))
-                    if main_audio and image else ""))
-    manual = [lang for lang, fmts in (info.get("subtitles") or {}).items() if fmts and lang != "live_chat"]
+        cells = [human_size(format_size(info, audio_for(language, codec, premium)))
+                 if audio_for(language, codec, premium) else None
+                 for codec, premium in audio_keys]
+        audio_rows.append((esc(language), role, cells))
+    audio_table = {"columns": [codec + (" Premium" if premium else "")
+                               for codec, premium in audio_keys], "rows": audio_rows}
+
+    manual = [lang for lang, fmts in (info.get("subtitles") or {}).items()
+              if fmts and lang != "live_chat"]
     auto = [lang for lang, fmts in (info.get("automatic_captions") or {}).items() if fmts]
     origs = [lang.removesuffix("-orig") for lang in auto if lang.endswith("-orig")]
     translated = len([lang for lang in auto if not lang.endswith("-orig")]) - len(origs)
-    subs = [f"by the author: {esc(', '.join(manual))}" if manual else "none by the author"]
-    if origs:
-        subs.append(f"auto-generated: {esc(', '.join(origs))}")
-    if translated > 0:
-        subs.append(f"auto-translated: {translated} languages")
-    lines.append("subtitles: " + " · ".join(subs))
+    subtitles = [("by the author", esc(", ".join(manual)) if manual else "none"),
+                 ("auto-generated", esc(", ".join(origs)) if origs else "none"),
+                 ("auto-translated", f"{translated} languages" if translated > 0 else "none")]
+
     h264 = [f for f in video if codec_name(f.get("vcodec"), VIDEO_CODECS) == "h264"
             and not is_premium(f)]
     if h264 and main_audio:
         pick = max(h264, key=lambda f: (f["height"], f.get("fps") or 0, format_size(info, f) or 0))
         size = format_size(info, pick)
-        lines.append(f"planned default: {pick['height']}p h264 + "
-                     f"{esc(audio_language(main_audio))} "
-                     f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}, mp4, "
-                     f"{human_size(size + (audio_bytes or 0) if size else None)}")
+        default = (f"{pick['height']}p h264 + {esc(audio_language(main_audio))} "
+                   f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}, mp4, "
+                   f"{human_size(size + (audio_bytes or 0) if size else None)}")
     else:
-        lines.append("planned default: nothing (no h264 image with audio)")
+        default = "nothing (no h264 image with audio)"
     deno = (info.get(DOWNLOAD_KEY) or {}).get("deno")
-    lines.append("Deno at download: " + (
-        "yes" if deno else
-        "unknown (data saved by an older version)" if deno is None else
-        "no, so YouTube may have offered more formats than listed"))
-    return "<br>".join(lines)
+    return {"image": image, "audio": audio_table, "subtitles": subtitles, "default": default,
+            "deno": ("yes" if deno else
+                     "unknown (data saved by an older version)" if deno is None else
+                     "no, so YouTube may have offered more formats than listed")}
+
+
+def formats_table(title: str, head: list[str], rows: list[list], sizes: range = range(0)) -> str:
+    """A small table of the --video overview; an empty cell is a dash. Columns
+    in `sizes` hold sizes: right-aligned, never wrapped; the rest wraps."""
+    def cell(tag, i, value):
+        size = ' class="size"' if i in sizes else ""
+        return f"<{tag}{size}>{value if value is not None else '–'}</{tag}>"
+    return (f'<div class="formats"><table><caption>{title}</caption>'
+            "<tr>" + "".join(cell("th", i, h) for i, h in enumerate(head)) + "</tr>"
+            + "".join("<tr>" + "".join(cell("td", i, v) for i, v in enumerate(row)) + "</tr>"
+                      for row in rows)
+            + "</table></div>")
+
+
+def about_video(info: dict) -> str:
+    """The Video (experimental) row: the overview as tables (temporary)."""
+    overview = video_overview(info)
+    if overview is None:
+        return "no formats in the data"
+    image, audio = overview["image"], overview["audio"]
+    parts = []
+    if image["rows"]:
+        title = "image" + (f" (sizes include the audio: {image['audio']})" if image["audio"] else "")
+        sized = len(image["columns"]) - image["columns"][-1:].count("HLS (sizes unknown)")
+        parts.append(formats_table(title, ["height"] + image["columns"],
+                                   [[height, *cells] for height, cells in image["rows"]],
+                                   range(1, 1 + sized)))
+    else:
+        parts.append("image: none")
+    if audio["rows"]:
+        parts.append(formats_table("audio", ["language", "role"] + audio["columns"],
+                                   [[language, role, *cells]
+                                    for language, role, cells in audio["rows"]],
+                                   range(2, 2 + len(audio["columns"]))))
+    else:
+        parts.append("audio: none")
+    parts.append(formats_table("subtitles", ["kind", "languages"],
+                               [list(row) for row in overview["subtitles"]]))
+    parts.append(f"planned default: {overview['default']}<br>"
+                 f"Deno at download: {overview['deno']}")
+    return "".join(parts)
 
 
 def render_about(info: dict, archived: dt.date, thumbnail: str | None,
