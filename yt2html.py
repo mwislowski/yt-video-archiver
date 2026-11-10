@@ -3959,7 +3959,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--no-snapshot", action="store_true",
                         help="leave out the grey 'Snapshot' date tile "
                              "(the date stays in 'About this copy' at the bottom)")
-    parser.add_argument("--cookies-from-browser", metavar="BROWSER", type=cookies_argument,
+    # --cookies: the short name; the long one stays (yt-dlp's name, and the
+    # Command row of existing pages uses it)
+    parser.add_argument("--cookies-from-browser", "--cookies", dest="cookies_from_browser",
+                        metavar="BROWSER", type=cookies_argument,
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in; a profile after a colon: "
                              "\"firefox:PROFILE_FOLDER\" (its folder name or path)")

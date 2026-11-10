@@ -37,7 +37,18 @@ uv tool update-shell
 | Update the program and yt-dlp | `uv tool upgrade yt-video-archiver` |
 | Remove the program | `uv tool uninstall yt-video-archiver` |
 
-Optional: a JavaScript runtime recommended by yt-dlp for YouTube, e.g. Deno (`winget install DenoLand.Deno`). Without it yt-dlp prints warnings about video formats; they are harmless for the page, but YouTube may then offer fewer video formats (relevant for the experimental `--video`).
+Optional: a JavaScript runtime recommended by yt-dlp for YouTube, e.g. Deno (`winget install DenoLand.Deno`; macOS `brew install deno`). Without it yt-dlp prints warnings about video formats; they are harmless for the page, but YouTube may then offer fewer video formats (relevant for the experimental `--video`).
+
+### macOS and Linux
+
+The program and its commands are the same; only uv is installed differently (then run the two commands above):
+
+```sh
+brew install uv                                    # macOS with Homebrew
+curl -LsSf https://astral.sh/uv/install.sh | sh    # Linux, or macOS without Homebrew
+```
+
+Differences from Windows: put page names in quotes (`'Title [ID].html'`: square brackets are pattern characters in bash and zsh); a colon in a title stays `:` in file names (Windows gets `：`), so the same video has a slightly different file name on each system; browser cookies work with Chrome and other Chromium-based browsers too (macOS asks for Keychain access; Safari needs Full Disk Access for the terminal). The program is tested on Linux; macOS has not been tried yet.
 
 ## Usage
 
@@ -59,8 +70,8 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Videos listed in a text file (see below) | `yt2html -a list.txt` |
 | Save into another folder | `yt2html "URL" -o "D:\Videos\Channel"` |
 | Make a page again although the video already has one (e.g. for newer comments); also works for a whole playlist or list | `yt2html "URL" --overwrite` |
-| When YouTube asks to sign in or to confirm you are not a bot (the browser need not be open; without a profile, the one used most recently) | `yt2html "URL" --cookies-from-browser firefox` |
-| The same with a given browser profile: its folder name (Firefox: `about:support`, *Profile Folder*) or path | `yt2html "URL" --cookies-from-browser "firefox:fTW1hk7Y.Profile 1"` |
+| When YouTube asks to sign in or to confirm you are not a bot (`--cookies` is short for `--cookies-from-browser`; the browser need not be open; without a profile, the one used most recently) | `yt2html "URL" --cookies firefox` |
+| The same with a given browser profile: its folder name (Firefox: `about:support`, *Profile Folder*) or path | `yt2html "URL" --cookies "firefox:fTW1hk7Y.Profile 1"` |
 
 **Index page** (see below)
 
@@ -152,7 +163,7 @@ Videos without a page have a grey title without a link, and instead of the date 
 | Reason | Meaning |
 |---|---|
 | `Unavailable` | YouTube marks the video as private or deleted |
-| `Failed` | the last attempt to archive it failed, e.g. `Sign in to confirm your age` (then try `--cookies-from-browser firefox`) |
+| `Failed` | the last attempt to archive it failed, e.g. `Sign in to confirm your age` (then try `--cookies firefox`) |
 | `Not archived yet` | not tried yet, e.g. because the run was stopped with `Ctrl+C`, or its page was deleted |
 | `Not a video` | only in a list file: a line with a channel or an unknown URL |
 
@@ -212,12 +223,13 @@ At the bottom of every page, *About this copy* is folded to a single grey line w
 - `bilingual:LANG` uses YouTube's machine translation, so its quality varies. YouTube refuses translations requested within about a minute of opening the video, so the program may wait up to a minute (shown on screen) and retries after `HTTP 429`.
 - A chapter list in a video description becomes real chapters on YouTube only if it starts at `0:00`, has at least three timestamps in ascending order and each chapter is at least 10 seconds long.
 - Typical page size: a few hundred KB up to a few MB for thousands of comments.
+- Browser cookies on Windows: Firefox works reliably; Chrome and other Chromium-based browsers encrypt their cookies in a way yt-dlp usually cannot read there.
 
 ## Troubleshooting
 
 - **Fetching fails after it used to work:** YouTube changes often and yt-dlp follows within days; update first with `uv tool upgrade yt-video-archiver`. `yt2html --version` shows the yt-dlp version in use.
-- **`Sign in to confirm you're not a bot`, age-restricted video:** use `--cookies-from-browser firefox`. Firefox works best on Windows; Chrome and Edge encrypt their cookies in a way yt-dlp often cannot read.
-- **A translation keeps failing with `HTTP 429`:** try again later, or open the video in Firefox with auto-translated subtitles on and use `--cookies-from-browser firefox`.
+- **`Sign in to confirm you're not a bot`, age-restricted video:** use `--cookies firefox`. Firefox works best on Windows; Chrome and Edge encrypt their cookies in a way yt-dlp often cannot read.
+- **A translation keeps failing with `HTTP 429`:** try again later, or open the video in Firefox with auto-translated subtitles on and use `--cookies firefox`.
 - **`No transcript: ...` although YouTube shows *Show transcript*:** look for a yt-dlp warning about subtitles and a missing PO token; updating yt-dlp usually helps.
 - **`Could not read them ...; using yt-dlp chapters instead`:** the page is made, but without the AI summary, People mentioned and similar sections, and with chapters under a plain `Chapters` heading (*About this copy* says so in its *Video page* row). Usually temporary; run again with `--overwrite`.
 - **`Chapter source unclear: ...`:** the chapters are on the page, only without the grey origin note. Please report the video: YouTube has probably changed something.

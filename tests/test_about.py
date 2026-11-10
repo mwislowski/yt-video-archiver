@@ -216,6 +216,21 @@ def test_fetch_info_gives_yt_dlp_the_split_spec(monkeypatch, info):
     assert seen["cookiesfrombrowser"] == ("firefox", "fTW1hk7Y.Profile 1", None, None)
 
 
+def test_cookies_is_the_short_name(info, capsys):
+    # a real second name, not only argparse's prefix matching
+    with pytest.raises(SystemExit):
+        yt2html.parse_args(["--help"])
+    assert "--cookies-from-browser, --cookies BROWSER" in capsys.readouterr().out
+    long = yt2html.parse_args(["u", "--cookies-from-browser", "firefox:fTW1hk7Y.Profile 1"])
+    short = yt2html.parse_args(["u", "--cookies", "firefox:fTW1hk7Y.Profile 1"])
+    assert short.cookies_from_browser == long.cookies_from_browser == "firefox:fTW1hk7Y.Profile 1"
+    with pytest.raises(SystemExit):
+        yt2html.parse_args(["u", "--cookies", "netscape"])
+    # the Command row keeps the full name, the same for old and new pages
+    info[yt2html.DOWNLOAD_KEY] = {"cookies_from_browser": yt2html.browser_name("firefox:x")}
+    assert command(render(info)).endswith("--cookies-from-browser firefox")
+
+
 def test_browser_name_has_no_profile():
     assert yt2html.browser_name("firefox") == "firefox"
     assert yt2html.browser_name("chrome:Profile 1") == "chrome"
