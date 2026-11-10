@@ -4,6 +4,9 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+- *About this copy*: the *Chapters* row is now *Markers*, since it covers every timestamp list YouTube shows, not only chapters; each list is named, in lower case, with its count in brackets (`chapters (47), from the description; walkthroughs (11)`, `no chapters; walkthroughs (11)`).
+
 ## [0.7.0] - 2026-11-09
 
 ### Added

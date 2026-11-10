@@ -198,7 +198,7 @@ With the player closed, timestamps open YouTube as before; `Ctrl`+click always o
 
 ### About this copy
 
-At the bottom of every page, *About this copy* is folded to a single grey line with the snapshot date, which is there in any case, also with `--no-snapshot`. Opened, it describes this particular copy in rows that are always the same: *Downloaded*, *Page built*, *Playlist*, *Command*, *Video page*, *Chapters*, *Info cards*, *Transcript*, *Comments*, *Images*, *Software* and *Disclaimer*. They tell when and with which versions the copy was made, give the command that makes an equivalent copy again, and say what was left out or did not work, so two copies of the same video can be compared row by row.
+At the bottom of every page, *About this copy* is folded to a single grey line with the snapshot date, which is there in any case, also with `--no-snapshot`. Opened, it describes this particular copy in rows that are always the same: *Downloaded*, *Page built*, *Playlist*, *Command*, *Video page*, *Markers* (chapters and other timestamp lists such as Walkthroughs), *Info cards*, *Transcript*, *Comments*, *Images*, *Software* and *Disclaimer*. They tell when and with which versions the copy was made, give the command that makes an equivalent copy again, and say what was left out or did not work, so two copies of the same video can be compared row by row.
 
 ## Good to know
 
