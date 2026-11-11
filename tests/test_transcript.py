@@ -130,13 +130,23 @@ class TestSpec:
         ("timestamps,plain", [("timestamps", None), ("plain", None)]),
         (" plain , bilingual:pl,bilingual:pt-BR ",
          [("plain", None), ("bilingual", "pl"), ("bilingual", "pt-BR")]),
+        # any case of letters; codes in the usual notation, as YouTube writes them
+        ("Plain,TIMESTAMPS,Bilingual:PL,bilingual:pt-br,bilingual:ZH-HANS,bilingual:es-419",
+         [("plain", None), ("timestamps", None), ("bilingual", "pl"), ("bilingual", "pt-BR"),
+          ("bilingual", "zh-Hans"), ("bilingual", "es-419")]),
+        ("None", []),
     ])
     def test_valid(self, value, expected):
         assert yt2html.transcript_spec(value) == expected
 
+    def test_standard_code(self):
+        # for --transcript now, for the codes of --video later
+        assert [yt2html.standard_code(c) for c in ("PL", "PT-br", "ZH-HANS", "es-419", "fil")] == [
+            "pl", "pt-BR", "zh-Hans", "es-419", "fil"]
+
     @pytest.mark.parametrize("value", [
         "", "plain,", "plain,plain", "none,plain", "bilingual", "bilingual:",
-        "bilingual:polish!", "plain:pl", "block", "bilingual:pl,bilingual:pl",
+        "bilingual:polish!", "plain:pl", "block", "bilingual:pl,bilingual:pl", "bilingual:pl,bilingual:PL",
     ])
     def test_invalid(self, value):
         with pytest.raises(argparse.ArgumentTypeError):

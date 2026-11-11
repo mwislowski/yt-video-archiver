@@ -206,7 +206,7 @@ def test_video_twice_in_the_playlist_has_two_rows(tmp_path, youtube):
 
 
 def test_theme(tmp_path, youtube):
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index", "--theme", "light"])
+    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index", "--theme", "Light"])   # any case of letters
     html = index_file(tmp_path).read_text(encoding="utf-8")
     assert '<meta name="color-scheme" content="light">' in html
 

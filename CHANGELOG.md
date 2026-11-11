@@ -14,6 +14,7 @@ All notable changes to this project. Versions: the second number for new feature
 
 ### Changed
 
+- Option values ignore the case of letters: `--transcript Plain,bilingual:PL`, `--theme Dark` (the browser in `--cookies-from-browser` already did). A language code is written the usual way, as YouTube does (`bilingual:PT-br` → `pt-BR`), so it matches YouTube's list and the Command row in *About this copy* shows it that way; before, `bilingual:PL` stopped with "no translation into 'PL'".
 - Player: the tile names the video file under *Play* instead of `Player`: its quality as YouTube names it and the language of its audio (`1080p · en-US`; a code that does not fit is shortened to the language, `en`). The label never widens the tile.
 
 ### Fixed

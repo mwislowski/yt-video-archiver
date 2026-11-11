@@ -109,7 +109,7 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Versions of the program and yt-dlp | `yt2html --version` |
 | All options | `yt2html --help` |
 
-Options can be combined, e.g. `yt2html -a list.txt -o "D:\Videos" --max-comments 500 --index`.
+Options can be combined, e.g. `yt2html -a list.txt -o "D:\Videos" --max-comments 500 --index`. In option values the case of letters does not matter (`--theme Dark`, `--transcript Plain,bilingual:PL`); paths, addresses and browser profile names stay as typed.
 
 ### Transcript versions
 

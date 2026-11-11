@@ -4280,6 +4280,15 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None)
 
 
 LANGUAGE_CODE = re.compile(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?")
+
+
+def standard_code(code: str) -> str:
+    """A language code in the usual notation, as YouTube writes it: "PT-br"
+    -> "pt-BR", "zh-hans" -> "zh-Hans" (language lower case, region upper
+    case, script capitalised). Option values ignore the case of letters."""
+    language, *rest = code.split("-")
+    return "-".join([language.lower()] + [part.upper() if len(part) == 2 else
+                                          part.capitalize() for part in rest])
 TRANSCRIPT_VERSIONS = ("plain", "timestamps", "bilingual")
 
 
@@ -4287,11 +4296,11 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
     """Parse --transcript: "plain,timestamps,bilingual:pl" or "none".
 
     Returns the versions in the given order as (version, language) pairs;
-    [] means no transcript. Raises ArgumentTypeError for unknown versions,
+    [] means no transcript. Any case of letters ("Plain", "bilingual:PT-br"). Raises ArgumentTypeError for unknown versions,
     a bilingual version without a valid language code, a language on any
     other version, repeated versions and "none" combined with anything.
     """
-    items = [item.strip() for item in value.split(",")]
+    items = [item.strip().lower() for item in value.split(",")]
     if any(not item for item in items):
         raise argparse.ArgumentTypeError(f"empty item in '{value}' (check the commas)")
     if "none" in items:
@@ -4313,7 +4322,7 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
                     f"'{language}' is not a language code (e.g. pl, en, pt-BR)")
         elif language or ":" in item:
             raise argparse.ArgumentTypeError(f"'{version}' takes no language ('{item}')")
-        entry = (version, language or None)
+        entry = (version, standard_code(language) if language else None)
         if entry in spec:
             raise argparse.ArgumentTypeError(f"'{item}' is given more than once")
         spec.append(entry)
@@ -4467,7 +4476,7 @@ def parse_args(argv=None) -> argparse.Namespace:
              "bilingual:LANG (timestamps with YouTube's translation into LANG in a "
              "second column, e.g. bilingual:pl; stops with an error if not available), "
              "or none. Example: --transcript plain,bilingual:pl")
-    parser.add_argument("--theme", choices=THEMES, default="auto",
+    parser.add_argument("--theme", choices=THEMES, default="auto", type=str.lower,
                         help="colour theme of the page: auto (default; follows the light/dark "
                              "setting of the device it is opened on, like YouTube's "
                              "'Use device theme'), dark or light")
