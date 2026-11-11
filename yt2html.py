@@ -152,8 +152,11 @@ PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TR
 def fetch_formats(url: str, args: argparse.Namespace) -> dict:
     """Only the video's data, for --video-formats: no comments, no watch page.
     Notes, like fetch_info(), whether Deno was there and whether signed in."""
+    # A single-format choice: yt-dlp then does not warn about a missing ffmpeg,
+    # which only matters for a download (merging image and sound).
     opts = {"skip_download": True, "noplaylist": True, "extract_flat": "in_playlist",
-            "ignore_no_formats_error": True, "noprogress": True, "quiet": True}
+            "ignore_no_formats_error": True, "noprogress": True, "quiet": True,
+            "format": "bv*/b/ba"}
     if args.cookies_from_browser:
         opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -2865,7 +2868,9 @@ def video_overview(info: dict) -> dict | None:
     audio = [f for f in audio if not is_hls(f)] or audio
     # Audio tracks: (language, role). The role is YouTube's kind of track;
     # without it, yt-dlp's language preference: 10 the original, -10 an
-    # audio description, the rest dubbed when an original is known.
+    # audio description, the rest dubbed when an original is known. A video
+    # with a single language has nothing to mark it by: that is the original.
+    single = len({audio_language(f) for f in audio}) == 1
     has_original = any(audio_kind(f) == "original" or f.get("language_preference") == 10
                        for f in audio)
 
@@ -2877,6 +2882,8 @@ def video_overview(info: dict) -> dict | None:
             return "original"
         if f.get("language_preference") == -10:
             return "descriptive"
+        if single:
+            return "original"
         return "dubbed" if has_original else None
 
     def track(f):
@@ -3162,8 +3169,9 @@ def about_video_file(info: dict, video_files: list[str] | None = None,
 def format_list(info: dict, saved: bool = False) -> list[str]:
     """The lines --video-formats prints for one video: the qualities a
     download can choose (one per line: quality, parameter, codec, size with
-    the original audio, the default marked), then the audio tracks it can add
-    (m4a, aac), by role. `saved`: the data comes from a saved file."""
+    the original audio, the default marked), then the audio: the track in
+    the video and those a download can add (m4a, aac), by role. `saved`: the
+    data comes from a saved file."""
     head = f"{info.get('title') or info.get('id')} [{info.get('id')}]"
     if saved and info.get(ARCHIVED_KEY):
         head += f" · saved data of {dt.date.fromisoformat(info[ARCHIVED_KEY]).strftime(DATE_FORMAT)}"
@@ -3183,27 +3191,21 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
     else:
         lines.append("image: nothing a download can take (no av1 or h264 up to 1080p)")
     in_video, extra, sizes = overview["in_video"], overview["extra_audio"], overview["extra_sizes"]
-    # the track in the video: "original: en (in the video)", else "in the video: pl"
-    main = None
-    if in_video:
-        main = (f"original: {in_video[0]} (in the video)" if in_video[1] == "original"
-                else f"in the video: {in_video[0]}")
-    if not extra:
-        lines.append(f"audio: {main}, no other tracks" if main else "audio: none")
-        return lines
+    if not in_video and not extra:
+        return lines + ["audio: none"]
     each = None
     if sizes:  # one size, or a range: "~60–70 MB", "~900 MB–1.1 GB"
         low, high = sizes[0], sizes[-1]
         same_unit = low.split()[-1] == high.split()[-1]
         each = low if low == high else (
             f"{low.split()[0] if same_unit else low}–{high.lstrip('~')}")
-    lines.append("audio (m4a, aac" + (f", {each} each" if each else "") + "; add with audio:CODE):")
-    if main:
-        lines.append(f"  {main}")
+    # m4a and aac only when there is something a download can add
+    lines.append("audio" + (" (m4a, aac" + (f", {each} each" if each else "") + ")") * bool(extra)
+                 + ":")
+    if in_video:
+        lines.append(f"  in the video: {in_video[0]}" + (f" ({in_video[1]})" if in_video[1] else ""))
     for role in dict.fromkeys(role for _, role in extra):
-        codes = [f"{code} (audio:{code}.descriptive)" if role == "descriptive" else code
-                 for code, r in extra if r == role]
-        lines.append(f"  {role or 'tracks'}: {', '.join(codes)}")
+        lines.append(f"  {role or 'tracks'}: {', '.join(code for code, r in extra if r == role)}")
     return lines
 
 

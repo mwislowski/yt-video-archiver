@@ -222,12 +222,12 @@ image (mp4; AV1, else H.264; sizes with the original audio):
   1080p, 30 fps  (1080p30)  av1  ~293 MB  (default)
   720p, 30 fps   (720p30)   av1  ~214 MB
   ...
-audio (m4a, aac, ~69 MB each; add with audio:CODE):
-  original: en-US (in the video)
+audio (m4a, aac, ~69 MB each):
+  in the video: en-US (original)
   auto-dubbed: ar, bn, de-DE, es-US, fr-FR, hi, id, it, iw, ja, ko, ml, nl-NL, pa, pl, pt-BR, ru, ta, te, uk
 ```
 
-The parameters in brackets and `audio:CODE` are meant for a later version of yt2html that downloads the video itself.
+The audio lines show the track in the video and, by role, the dubs a download can add as separate m4a files (`audio:CODE`, e.g. `audio:pl`; an audio description as `audio:CODE.descriptive`). The parameters in brackets and `audio:CODE` are meant for a later version of yt2html that downloads the video itself.
 
 ### About this copy
 

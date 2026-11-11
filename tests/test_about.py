@@ -668,10 +668,10 @@ def test_video_formats_without_an_original_language_or_runtime(info):
     assert tables["image"] == ("image (sizes include the audio: ? aac); "
                                "marked: the planned default",
                                [["quality", "h264"], ["1080p, 25 fps (1080p25)", "~80 MB"]])
-    assert tables["audio"][1][1] == ["?", "?", "–", "~5 MB"]          # no role without an original
+    assert tables["audio"][1][1] == ["?", "?", "original", "~5 MB"]   # a single track: the original
     assert tables["subtitles"][1][1:] == [["by the author", "none"], ["auto-generated", "none"],
                                           ["auto-translated", "none"]]
-    assert summary(info) == "Video formats · up to 1080p, 25 fps · 1 audio track · no subtitles"
+    assert summary(info) == "Video formats · up to 1080p, 25 fps · audio: ? original · no subtitles"
     assert rest == ("not downloaded; planned default: 1080p, 25 fps (1080p25) h264 + ? aac, "
                     "mp4, ~80 MB; Deno at download: "
                     "no, so YouTube may have offered more formats than listed")
@@ -747,6 +747,10 @@ def test_video_formats_order_audio_by_role_then_language(info):
                         ["pl", "–", "~5 MB"]]
     assert picked(info)["audio"] == ["~5 MB"]           # the first track in the data
     assert "· 3 audio tracks ·" in summary(info)
+    # a single track of another kind: not the original
+    info["formats"] = [vfmt("137", 1080, "avc1.640028", 100 * MB),
+                       afmt("140", "mp4a.40.2", 5 * MB, "pl", -1, **kind("secondary", "pl"))]
+    assert "· 1 audio track ·" in summary(info)
 
 
 def test_video_formats_main_audio_avoids_audio_descriptions(info):
@@ -1035,8 +1039,8 @@ def test_format_list_of_a_video(info):
         "  1080p, 50 fps  (1080p50)  h264  ~609 MB  (default)",
         "  1080p, 25 fps  (1080p25)  av1   ~309 MB",
         "  360p, 25 fps   (360p25)   h264   ~29 MB",
-        "audio (m4a, aac, ~9 MB each; add with audio:CODE):",
-        "  original: en (in the video)",
+        "audio (m4a, aac, ~9 MB each):",
+        "  in the video: en (original)",
         "  dubbed: pl"]
     assert yt2html.format_list(info, saved=True)[0].endswith(" · saved data of 05.11.2026")
 
@@ -1051,28 +1055,27 @@ def test_format_list_audio_lines(info):
         afmt("140-4", "mp4a.40.2", 65 * MB, "en", -1, **kind("descriptive")),
         afmt("140-5", "mp4a.40.2", None, "ja", -1, **kind("dubbed", "ja"))]
     assert yt2html.format_list(info)[3:] == [
-        "audio (m4a, aac, ~60–70 MB each; add with audio:CODE):",
-        "  original: en (in the video)",
-        "  dubbed: de, ja", "  auto-dubbed: pl",
-        "  descriptive: en (audio:en.descriptive)"]
+        "audio (m4a, aac, ~60–70 MB each):",
+        "  in the video: en (original)",
+        "  dubbed: de, ja", "  auto-dubbed: pl", "  descriptive: en"]
     info.pop("duration", None)
     info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB),
                               afmt("140-1", "mp4a.40.2", None, "pl", -1)]
-    assert yt2html.format_list(info)[3] == "audio (m4a, aac; add with audio:CODE):"
+    assert yt2html.format_list(info)[3] == "audio (m4a, aac):"   # sizes unknown
     info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB),
                               afmt("140-1", "mp4a.40.2", 900 * MB, "pl", -1),
                               afmt("140-2", "mp4a.40.2", 1_100 * MB, "de", -1)]
-    assert yt2html.format_list(info)[3] == ("audio (m4a, aac, ~900 MB–1.1 GB each; "
-                                            "add with audio:CODE):")
+    assert yt2html.format_list(info)[3] == "audio (m4a, aac, ~900 MB–1.1 GB each):"
     info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB)]
-    assert yt2html.format_list(info)[3:] == ["audio: original: en (in the video), no other tracks"]
+    assert yt2html.format_list(info)[3:] == ["audio:", "  in the video: en (original)"]
     info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB, "pl", -1),
                               afmt("140-1", "mp4a.40.2", 5 * MB, "de", -1)]   # no original known
-    assert yt2html.format_list(info)[3:] == ["audio (m4a, aac, ~5 MB each; add with audio:CODE):",
+    assert yt2html.format_list(info)[3:] == ["audio (m4a, aac, ~5 MB each):",
                                              "  in the video: pl",   # the first: the main audio
                                              "  tracks: de"]
+    # a single track has nothing to mark it by: the original
     info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB, "pl", -1)]
-    assert yt2html.format_list(info)[3:] == ["audio: in the video: pl, no other tracks"]
+    assert yt2html.format_list(info)[3:] == ["audio:", "  in the video: pl (original)"]
     info["formats"] = base
     assert yt2html.format_list(info)[1:] == [
         "image (mp4; AV1, else H.264; sizes with the original audio):",
@@ -1135,6 +1138,7 @@ def test_video_formats_option_fetches_only_the_video_data(capsys, monkeypatch, i
     out = capsys.readouterr().out
     assert code == 1
     assert "getcomments" not in seen["opts"] and seen["opts"]["cookiesfrombrowser"][0] == "firefox"
+    assert "+" not in seen["opts"]["format"]   # one format, no merging: no warning about ffmpeg
     assert "FAILED: TESTVIDEO02" in out and "  dubbed: pl" in out
     assert "FAILED: PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa: --video-formats lists single videos" in out
     assert "Note: no JavaScript runtime (Deno) found" in out
