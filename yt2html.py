@@ -149,6 +149,21 @@ PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TR
 # Fetching data
 # --------------------------------------------------------------------------
 
+def fetch_formats(url: str, args: argparse.Namespace) -> dict:
+    """Only the video's data, for --video-formats: no comments, no watch page.
+    Notes, like fetch_info(), whether Deno was there and whether signed in."""
+    opts = {"skip_download": True, "noplaylist": True, "extract_flat": "in_playlist",
+            "ignore_no_formats_error": True, "noprogress": True, "quiet": True}
+    if args.cookies_from_browser:
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.sanitize_info(ydl.extract_info(url, download=False))
+    info[DOWNLOAD_KEY] = {"yt2html": __version__,
+                          "cookies_from_browser": browser_name(args.cookies_from_browser),
+                          "deno": shutil.which("deno") is not None}
+    return info
+
+
 def fetch_info(url: str, args: argparse.Namespace) -> dict:
     """Extract metadata and comments with yt-dlp (no video download)."""
     max_comments = "all" if args.max_comments is None else str(args.max_comments)
@@ -2806,8 +2821,10 @@ def is_hls(fmt: dict) -> bool:
 AUDIO_KINDS = {"original": "original", "dubbed": "dubbed", "dubbed-auto": "auto-dubbed",
                "descriptive": "descriptive"}
 AUDIO_ROLES = tuple(AUDIO_KINDS.values())
-# The planned default goes up to this height (higher only when chosen).
+# A download goes up to this height; the planned default is the best quality
+# up to it. Codecs a download takes, in this order (not Premium).
 DEFAULT_MAX_HEIGHT = 1080
+RULE = (("av1", False), ("h264", False))
 
 
 def audio_kind(fmt: dict) -> str | None:
@@ -2929,19 +2946,25 @@ def video_overview(info: dict) -> dict | None:
                     named.append(" ".join([label(key)] + extras(f)))
                 # HLS once per height, in its first row
                 cells.append((", ".join(named) or None) if i == 0 else None)
-            rows.append((quality_label(height, fps), cells))
-            chosen.append((height, formats))
+            selectable = height <= DEFAULT_MAX_HEIGHT and any(k in formats for k in RULE)
+            rows.append((quality_label(height, fps, selectable), cells))
+            chosen.append((height, fps, formats))
     # The planned default: the best quality up to 1080p that has AV1 or H.264
     # (the quality first), then AV1 there, else H.264; Premium never.
+    # The qualities a download can choose (up to 1080p, with AV1 or H.264),
+    # best first, each with the codec the rule takes; the first is the default.
+    variants = []
+    for r, (height, fps, formats) in enumerate(chosen):
+        key = next((k for k in RULE if k in formats), None)
+        if key and height <= DEFAULT_MAX_HEIGHT:
+            variants.append({"row": r, "column": columns.index(key), "format": formats[key],
+                             "quality": quality_label(height, fps),
+                             "parameter": quality_parameter(height, fps),
+                             "codec": key[0], "size": with_audio(formats[key])})
     picks, pick = [], None
-    for r, (height, formats) in enumerate(chosen if main_audio else []):
-        if height > DEFAULT_MAX_HEIGHT:
-            continue
-        key = next((k for k in (("av1", False), ("h264", False)) if k in formats), None)
-        if key:
-            picks.append((r, columns.index(key)))
-            pick = formats[key]
-            break
+    if variants and main_audio:
+        picks.append((variants[0]["row"], variants[0]["column"]))
+        pick = variants[0]["format"]
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
              "rows": rows, "picks": picks,
              "audio": (f"{esc(audio_language(main_audio))} "
@@ -2964,7 +2987,9 @@ def video_overview(info: dict) -> dict | None:
         cells = [human_size(format_size(info, audio_for(key, codec, premium)))
                  if audio_for(key, codec, premium) else None
                  for codec, premium in audio_keys]
-        audio_rows.append((esc(key[0]), esc(key[1]) if key[1] else None, cells))
+        audio_rows.append((esc(key[0]), esc(language_name(info, [f for f in audio
+                                                                  if track(f) == key], key[0])),
+                           esc(key[1]) if key[1] else None, cells))
     audio_picks = []
     if main_audio:
         key = (codec_name(main_audio.get("acodec"), AUDIO_CODECS), False)
@@ -3012,7 +3037,15 @@ def video_overview(info: dict) -> dict | None:
 
     download = info.get(DOWNLOAD_KEY) or {}
     deno = download.get("deno")
+    # The track in the video (the main audio) and the ones a download can add
+    # (aac, m4a), by role, for the console list.
+    in_video = track(main_audio) if main_audio else None
+    extra = [key for key in tracks if key != in_video and audio_for(key, "aac")]
+    known = sorted(filter(None, (format_size(info, audio_for(key, "aac")) for key in extra)))
+    extra_sizes = list(dict.fromkeys(map(human_size, known)))   # smallest to largest
     return {"image": image, "audio": audio_table, "subtitles": subtitles, "default": default,
+            "variants": variants, "in_video": in_video,
+            "extra_audio": [(key[0], key[1]) for key in extra], "extra_sizes": extra_sizes,
             "summary": " · ".join(summary),
             "deno": ("yes" if deno else
                      "unknown (data saved by an older version)" if deno is None else
@@ -3020,14 +3053,39 @@ def video_overview(info: dict) -> dict | None:
             "signed_in": bool(download.get("cookies_from_browser"))}
 
 
-def quality_label(height: int, fps: float | None) -> str:
-    """The quality of a row of the image table, with the parameter that will
-    choose it ("1080p, 30 fps (1080p30)"); a height offered only as HLS
-    (fps None) has no parameter, since only single-file formats are chosen."""
-    if fps is None:
-        return f"{height}p"
-    name = f"{height}p" + (f"{fps:g}" if fps else "")
-    return f"{height}p" + (f", {fps:g} fps" if fps else "") + f" ({name})"
+def quality_parameter(height: int, fps: float | None) -> str:
+    """The parameter that will choose a quality: "1080p30" ("720p" without
+    a frame rate in the data)."""
+    return f"{height}p" + (f"{fps:g}" if fps else "")
+
+
+def quality_label(height: int, fps: float | None, selectable: bool = False) -> str:
+    """The quality of a row of the image table ("1080p, 30 fps"), with the
+    parameter that will choose it when a download can ("1080p, 30 fps
+    (1080p30)"): up to 1080p, with AV1 or H.264. A height offered only as
+    HLS (fps None, never selectable) shows alone."""
+    label = f"{height}p" + (f", {fps:g} fps" if fps else "")
+    return label + (f" ({quality_parameter(height, fps)})" if selectable else "")
+
+
+QUALITY_WORDS = {"ultralow", "low", "medium", "high"}
+
+
+def language_name(info: dict, formats: list[dict], code: str) -> str:
+    """The English name of an audio track's language: from yt-dlp's format
+    note of a single-file format ("English (US) original (default), medium"
+    -> "English (US)"; HLS notes are in the track's own language, so not
+    used), else from YouTube's list of translation languages (full code,
+    then the language alone), else the code."""
+    for f in formats:
+        if is_hls(f):
+            continue
+        name = re.sub(r"\s+(original|descriptive)\b.*$|\s+\(default\)$", "",
+                      (f.get("format_note") or "").split(",")[0]).strip()
+        if name and name != code and name.lower() not in QUALITY_WORDS:
+            return name
+    names = info.get(TRANSLATIONS_KEY) or {}
+    return names.get(code) or names.get(code.split("-")[0]) or code
 
 
 def formats_table(title: str, head: list[str], rows: list[list], sizes: range = range(0),
@@ -3069,35 +3127,124 @@ def render_video_formats(info: dict) -> str:
                                    {(r, 1 + c) for r, c in image["picks"]}))
     if audio["rows"]:
         parts.append(formats_table("audio" + ("; " + MARKED) * bool(audio["picks"]),
-                                   ["language", "role"] + audio["columns"],
-                                   [[language, role, *cells]
-                                    for language, role, cells in audio["rows"]],
-                                   range(2, 2 + len(audio["columns"])),
-                                   {(r, 2 + c) for r, c in audio["picks"]}))
+                                   ["code", "language", "role"] + audio["columns"],
+                                   [[code, name, role, *cells]
+                                    for code, name, role, cells in audio["rows"]],
+                                   range(3, 3 + len(audio["columns"])),
+                                   {(r, 3 + c) for r, c in audio["picks"]}))
     parts.append(formats_table("subtitles", ["kind", "languages"],
                                [list(row) for row in overview["subtitles"]]))
     return ('<details class="formats-info"><summary>Video formats<span class="rest"> · '
             f'{overview["summary"]}</span></summary>\n' + "".join(parts) + "</details>")
 
 
-def about_video_file(info: dict) -> str:
-    """The "Video file" row: whether the video was downloaded (not yet: the
-    page alone), what the planned default would take, and how the list of
-    formats came about (Deno, signed in)."""
+def about_video_file(info: dict, video_files: list[str] | None = None,
+                     video_size: int | None = None) -> str:
+    """The "Video file" row: a video file found next to the page when it was
+    built (the first one, with its size), else "not downloaded" with what
+    the planned default would take; then how the list of formats came about
+    (Deno, signed in)."""
     overview = video_overview(info)
+    if video_files:
+        found = (f"a video file next to the page: {esc(video_files[0])}"
+                 + (f", {human_size(video_size).lstrip('~')}" if video_size else ""))
+    else:
+        found = "not downloaded"
     if overview is None:
-        return "not downloaded; no formats in the data"
-    text = (f"not downloaded; planned default: {overview['default']}; "
-            f"Deno at download: {overview['deno']}")
+        return f"{found}; no formats in the data"
+    text = found + ("" if video_files else f"; planned default: {overview['default']}")
+    text += f"; Deno at download: {overview['deno']}"
     if overview["signed_in"]:
         text += "; signed in, so YouTube offered no HLS formats"
     return text
 
 
+def format_list(info: dict, saved: bool = False) -> list[str]:
+    """The lines --video-formats prints for one video: the qualities a
+    download can choose (one per line: quality, parameter, codec, size with
+    the original audio, the default marked), then the audio tracks it can add
+    (m4a, aac), by role. `saved`: the data comes from a saved file."""
+    head = f"{info.get('title') or info.get('id')} [{info.get('id')}]"
+    if saved and info.get(ARCHIVED_KEY):
+        head += f" · saved data of {dt.date.fromisoformat(info[ARCHIVED_KEY]).strftime(DATE_FORMAT)}"
+    lines = [head]
+    overview = video_overview(info)
+    if overview is None:
+        return lines + ["no formats in the data"]
+    variants = overview["variants"]
+    if variants:
+        lines.append("image (mp4; AV1, else H.264; sizes with the original audio):")
+        widths = [max(len(v[key]) for v in variants) for key in ("quality", "parameter",
+                                                                  "codec", "size")]
+        for i, v in enumerate(variants):
+            default = "  (default)" if i == 0 and overview["image"]["picks"] else ""
+            lines.append(f"  {v['quality']:<{widths[0]}}  {'(' + v['parameter'] + ')':<{widths[1] + 2}}"
+                         f"  {v['codec']:<{widths[2]}}  {v['size']:>{widths[3]}}{default}")
+    else:
+        lines.append("image: nothing a download can take (no av1 or h264 up to 1080p)")
+    in_video, extra, sizes = overview["in_video"], overview["extra_audio"], overview["extra_sizes"]
+    # the track in the video: "original: en (in the video)", else "in the video: pl"
+    main = None
+    if in_video:
+        main = (f"original: {in_video[0]} (in the video)" if in_video[1] == "original"
+                else f"in the video: {in_video[0]}")
+    if not extra:
+        lines.append(f"audio: {main}, no other tracks" if main else "audio: none")
+        return lines
+    each = None
+    if sizes:  # one size, or a range: "~60–70 MB", "~900 MB–1.1 GB"
+        low, high = sizes[0], sizes[-1]
+        same_unit = low.split()[-1] == high.split()[-1]
+        each = low if low == high else (
+            f"{low.split()[0] if same_unit else low}–{high.lstrip('~')}")
+    lines.append("audio (m4a, aac" + (f", {each} each" if each else "") + "; add with audio:CODE):")
+    if main:
+        lines.append(f"  {main}")
+    for role in dict.fromkeys(role for _, role in extra):
+        codes = [f"{code} (audio:{code}.descriptive)" if role == "descriptive" else code
+                 for code, r in extra if r == role]
+        lines.append(f"  {role or 'tracks'}: {', '.join(codes)}")
+    return lines
+
+
+def list_formats(args: argparse.Namespace) -> int:
+    """--video-formats: for each source, the formats a download can take,
+    printed; no page is made. Playlists and channels are not listed."""
+    failed = 0
+    for n, source in enumerate(args.sources):
+        if n:
+            print()
+        try:
+            if args.from_json:
+                info = json.loads(saved_data_path(source, Path(args.output_dir))
+                                  .read_text(encoding="utf-8"))
+            elif is_channel_url(source) or playlist_id_from_url(source):
+                raise ValueError("--video-formats lists single videos, not playlists or "
+                                 "channels")
+            else:
+                info = fetch_formats(source, args)
+            if info.get("_type") in ("playlist", "multi_video"):
+                raise ValueError("--video-formats lists single videos, not playlists")
+        except yt_dlp.utils.DownloadError:
+            log(f"FAILED: {source}")  # yt-dlp has already printed the reason
+            failed += 1
+            continue
+        except Exception as error:
+            log(f"FAILED: {source}: {error}")
+            failed += 1
+            continue
+        print("\n".join(format_list(info, saved=args.from_json)), flush=True)
+        if not args.from_json and not info[DOWNLOAD_KEY]["deno"]:
+            log("Note: no JavaScript runtime (Deno) found, so YouTube may have offered "
+                "more formats than listed.")
+    return 1 if failed else 0
+
+
 def render_about(info: dict, archived: dt.date, thumbnail: str | None,
                  avatar_uris: dict[str, str], extra_images: dict[str, str], spec: list,
                  theme: str, show_snapshot: bool, no_avatars: bool, from_json: bool,
-                 built: dt.datetime) -> str:
+                 built: dt.datetime, video_files: list[str] | None = None,
+                 video_size: int | None = None) -> str:
     """"About this copy": how this copy was made, what worked and what did not.
     Every row is always there, in a fixed order (see docs/DEVELOPMENT.md)."""
     rows = [
@@ -3111,7 +3258,7 @@ def render_about(info: dict, archived: dt.date, thumbnail: str | None,
         ("Transcript", about_transcript(info, spec)),
         ("Comments", about_comments(info)),
         ("Images", about_images(info, thumbnail, avatar_uris, extra_images, no_avatars)),
-        ("Video file", about_video_file(info)),
+        ("Video file", about_video_file(info, video_files, video_size)),
         ("Software", about_software()),
         ("Disclaimer", esc(DISCLAIMER)),
     ]
@@ -3148,7 +3295,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 extra_images: dict[str, str] | None = None,
                 theme: str = "auto", no_avatars: bool = False,
                 from_json: bool = False, built: dt.datetime | None = None,
-                video_files: list[str] | None = None) -> str:
+                video_files: list[str] | None = None, video_size: int | None = None) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
     `avatar_uris` and `extra_images` ({image url: data URI}). `no_avatars`,
     `from_json` and `built` (the build time, default now) are only described
@@ -3251,7 +3398,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     body.append(render_video_formats(info))
     body.append(render_about(info, archived, thumbnail, avatar_uris, extra_images or {},
                              spec, theme, show_snapshot, no_avatars, from_json,
-                             built or dt.datetime.now()))
+                             built or dt.datetime.now(), video_files, video_size))
     body.append("</main>")
     body.insert(0, render_player(video_names(info), video_files))
     body.append(f"<script>{PLAYER_JS}</script>")
@@ -3937,13 +4084,15 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None)
         archived = dt.date.fromisoformat(info.get(ARCHIVED_KEY) or "")
     except ValueError:
         archived = dt.date.today()  # older JSON files without the date
+    video_files = video_files_for(info, output_dir)
+    video_size = (output_dir / video_files[0]).stat().st_size if video_files else None
     page = render_page(info, thumbnail, avatar_uris, archived,
                        show_snapshot=not args.no_snapshot,
                        theme=args.theme,
                        transcript_spec=args.transcript,
                        extra_images=extra_images,
                        no_avatars=args.no_avatars, from_json=args.from_json,
-                       video_files=video_files_for(info, output_dir))
+                       video_files=video_files, video_size=video_size)
     write_atomically(target, page)
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
@@ -4172,10 +4321,25 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="only rebuild the index pages from the pages in the output "
                              "folder, without downloading videos (the list comes from the "
                              "earlier index; without one, only the playlist's list is read)")
+    parser.add_argument("--video-formats", action="store_true",
+                        help="only list, for each video, the qualities a download can take "
+                             "(with the parameter that chooses each, the codec and the size) "
+                             "and the audio tracks it can add; no page is made")
     parser.add_argument("--from-json", action="store_true",
                         help="build pages from saved .info.json files instead of URLs "
                              "(existing pages are always replaced)")
     args = parser.parse_args(argv)
+    if args.video_formats:
+        used = [name for name, on in (
+            ("--overwrite", args.overwrite), ("--index", args.index),
+            ("--index-only", args.index_only), ("--save-json", args.save_json),
+            ("--no-comments", args.no_comments), ("--max-comments", args.max_comments is not None),
+            ("--no-cards", args.no_cards), ("--no-avatars", args.no_avatars),
+            ("--transcript", args.transcript != [("plain", None)]),
+            ("--theme", args.theme != "auto"), ("--no-snapshot", args.no_snapshot)) if on]
+        if used:
+            parser.error(f"--video-formats makes no page, so it cannot be used with "
+                         f"{', '.join(used)}")
     if args.from_json and (args.index or args.index_only):
         parser.error("--index and --index-only cannot be used with --from-json")
     if args.from_json and args.cookies_from_browser:
@@ -4228,6 +4392,8 @@ def main(argv=None) -> int:
         if result:
             counts["skipped" if result == "skipped" else "saved"] += 1
 
+    if args.video_formats:
+        return list_formats(args)
     seen = set()  # video ids handled in this run
     playlists = 0
     interrupted = False

@@ -635,14 +635,14 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
     assert tables["image"] == ("image (sizes include the audio: en aac); "
                                "marked: the planned default", [
         ["quality", "h264", "av1", "vp9", "vp9 Premium"],
-        ["2160p, 25 fps (2160p25)", "–", "–", "~2.5 GB, HDR10", "–"],
+        ["2160p, 25 fps", "–", "–", "~2.5 GB, HDR10", "–"],
         ["1080p, 50 fps (1080p50)", "~609 MB", "–", "–", "–"],    # one row per frame rate
         ["1080p, 25 fps (1080p25)", "~409 MB", "~309 MB", "–", "~909 MB"],
         ["360p, 25 fps (360p25)", "~29 MB", "–", "~24 MB", "–"],
     ])
     assert tables["audio"] == ("audio; marked: the planned default", [
-        ["language", "role", "aac", "opus"],
-        ["en", "original", "~9 MB", "~8 MB"], ["pl", "dubbed", "~9 MB", "–"]])
+        ["code", "language", "role", "aac", "opus"],
+        ["en", "en", "original", "~9 MB", "~8 MB"], ["pl", "pl", "dubbed", "~9 MB", "–"]])
     assert tables["subtitles"][1] == [["kind", "languages"], ["by the author", "en"],
                                       ["auto-generated", "en"],
                                       ["auto-translated", "2 languages"]]
@@ -668,7 +668,7 @@ def test_video_formats_without_an_original_language_or_runtime(info):
     assert tables["image"] == ("image (sizes include the audio: ? aac); "
                                "marked: the planned default",
                                [["quality", "h264"], ["1080p, 25 fps (1080p25)", "~80 MB"]])
-    assert tables["audio"][1][1] == ["?", "–", "~5 MB"]          # no role without an original
+    assert tables["audio"][1][1] == ["?", "?", "–", "~5 MB"]          # no role without an original
     assert tables["subtitles"][1][1:] == [["by the author", "none"], ["auto-generated", "none"],
                                           ["auto-translated", "none"]]
     assert summary(info) == "Video formats · up to 1080p, 25 fps · 1 audio track · no subtitles"
@@ -725,8 +725,8 @@ def test_video_formats_order_audio_by_role_then_language(info):
         afmt("251", "opus", 8 * MB, preference=-1, **kind("original")),   # larger, still aac
     ]
     tables, rest = video_tables(info)
-    assert [r[:3] for r in tables["audio"][1]] == [
-        ["language", "role", "aac"], ["en", "original", "~7 MB"],
+    assert [[r[0], r[2], r[3]] for r in tables["audio"][1]] == [
+        ["code", "role", "aac"], ["en", "original", "~7 MB"],
         ["de", "dubbed", "~9 MB"], ["es", "dubbed", "~9 MB"], ["it", "dubbed", "~9 MB"],
         ["ar", "auto-dubbed", "~9 MB"], ["pl", "auto-dubbed", "~9 MB"],
         ["de", "descriptive", "~9 MB"], ["en", "descriptive", "~12 MB"],
@@ -743,7 +743,7 @@ def test_video_formats_order_audio_by_role_then_language(info):
                        afmt("140-1", "mp4a.40.2", 9 * MB, "es", -1, **kind("secondary", "es")),
                        afmt("140-2", "mp4a.40.2", 8 * MB, "de", -1, **kind("dubbed", "de"))]
     rows = video_tables(info)[0]["audio"][1]
-    assert rows[1:] == [["de", "dubbed", "~8 MB"], ["es", "secondary", "~9 MB"],
+    assert [[r[0], r[2], r[3]] for r in rows[1:]] == [["de", "dubbed", "~8 MB"], ["es", "secondary", "~9 MB"],
                         ["pl", "–", "~5 MB"]]
     assert picked(info)["audio"] == ["~5 MB"]           # the first track in the data
     assert "· 3 audio tracks ·" in summary(info)
@@ -793,8 +793,8 @@ def test_video_formats_edge_cases(info):
     info["formats"] = [vfmt("1", 720, "xyz1.2", None), afmt("2", "opus", None)]
     info.pop("duration", None)
     tables, rest = video_tables(info)
-    assert tables["image"][1] == [["quality", "xyz1"], ["720p, 25 fps (720p25)", "size unknown"]]
-    assert tables["audio"][1][1] == ["en", "original", "size unknown"]
+    assert tables["image"][1] == [["quality", "xyz1"], ["720p, 25 fps", "size unknown"]]
+    assert tables["audio"][1][1] == ["en", "en", "original", "size unknown"]
     assert "planned default: nothing" in rest
     # no frame rate in the data: the height alone
     info["formats"] = [vfmt("1", 720, "avc1.4d401f", 10 * MB, fps=None)]
@@ -838,9 +838,10 @@ def test_video_formats_mark_premium_formats(info):
     assert tables["image"][1] == [["quality", "h264", "h264 Premium", "vp9", "vp9 Premium"],
                                   ["1080p, 25 fps (1080p25)", "~409 MB", "~809 MB", "~309 MB",
                                    "~909 MB"],
-                                  ["720p, 25 fps (720p25)", "–", "~109 MB", "–", "–"]]
-    assert tables["audio"][1] == [["language", "role", "aac", "aac Premium", "opus Premium"],
-                                  ["en", "original", "~9 MB", "~18 MB", "~17 MB"]]
+                                  ["720p, 25 fps", "–", "~109 MB", "–", "–"]]
+    assert tables["audio"][1] == [["code", "language", "role", "aac", "aac Premium", "opus Premium"],
+                                  # the name from yt-dlp's note of the Premium formats
+                                  ["en", "English", "original", "~9 MB", "~18 MB", "~17 MB"]]
     assert "planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~409 MB" in rest
     # with Premium audio only, the main audio is still an ordinary one
     info["formats"] = [vfmt("137", 1080, "avc1.640028", 400 * MB),
@@ -876,7 +877,7 @@ def test_video_formats_name_hls_formats_without_sizes(info):
                                   ["2160p", "–", "vp9 60 fps"],   # only HLS: no parameter
                                   ["1080p, 25 fps (1080p25)", "~216 MB",
                                    "h264, vp9, vp9 Premium"]]
-    assert tables["audio"][1][1] == ["en", "original", "~69 MB"]
+    assert tables["audio"][1][1] == ["en", "en", "original", "~69 MB"]
     assert "planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~216 MB" in rest
     assert summary(info).startswith("Video formats · up to 2160p, 60 fps · ")   # HLS counts
     html = render(info)   # the HLS column is text: not right-aligned
@@ -903,7 +904,7 @@ def test_video_formats_name_hls_formats_without_sizes(info):
     # only HLS audio: still listed
     info["formats"] = [vfmt("137", 1080, "avc1.640028", 147 * MB),
                        afmt("234-24", "mp4a.40.2", 9 * MB, **hls)]
-    assert video_tables(info)[0]["audio"][1][1] == ["en", "original", "~9 MB"]
+    assert video_tables(info)[0]["audio"][1][1] == ["en", "en", "original", "~9 MB"]
     assert yt2html.is_hls({"protocol": "m3u8"}) and not yt2html.is_hls({})
 
 
@@ -915,7 +916,7 @@ def test_video_formats_take_the_larger_of_two_alike_formats(info):
                        afmt("140", "mp4a.40.2", 5 * MB), afmt("140-1", "mp4a.40.2", 9 * MB)]
     tables, rest = video_tables(info)
     assert tables["image"][1][1] == ["1080p, 25 fps (1080p25)", "~159 MB"]
-    assert tables["audio"][1][1] == ["en", "original", "~9 MB"]
+    assert tables["audio"][1][1] == ["en", "en", "original", "~9 MB"]
 
 
 def test_video_formats_mark_the_planned_default(info):
@@ -956,10 +957,14 @@ def test_video_formats_mark_the_planned_default(info):
                        vfmt("137", 1080, "avc1.640028", 400 * MB), afmt("140", "mp4a.40.2", 9 * MB)]
     assert ("planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~409 MB"
             in video_tables(info)[1])
+    assert [r[0] for r in video_tables(info)[0]["image"][1][1:]] == [   # above 1080p: no parameter
+        "2160p, 25 fps", "1440p, 25 fps", "1080p, 25 fps (1080p25)"]
     # a quality with only vp9 is skipped; nothing up to 1080p: nothing marked
     info["formats"] = [vfmt("248", 1080, "vp9", 300 * MB), vfmt("135", 480, "avc1.4d401f", 70 * MB),
                        afmt("140", "mp4a.40.2", 9 * MB)]
     assert picked(info)["image"] == ["~79 MB"]
+    assert [r[0] for r in video_tables(info)[0]["image"][1][1:]] == [   # vp9 only: no parameter
+        "1080p, 25 fps", "480p, 25 fps (480p25)"]
     info["formats"] = [vfmt("401", 2160, "av01.0.12M.08", 900 * MB),
                        vfmt("244", 480, "vp9", 50 * MB), afmt("251", "opus", 8 * MB)]
     tables, rest = video_tables(info)
@@ -967,3 +972,176 @@ def test_video_formats_mark_the_planned_default(info):
     assert tables["audio"][0] == "audio; marked: the planned default"
     assert "planned default: nothing (no av1 or h264 image up to 1080p with audio)" in rest
     assert picked(info) == {"audio": ["~8 MB"]}
+
+
+def test_video_formats_name_the_audio_languages(info):
+    """The language column: yt-dlp's English note of a single-file format,
+    else YouTube's list of translation languages, else the code."""
+    hls = {"protocol": "m3u8_native"}
+    info[yt2html.TRANSLATIONS_KEY] = {"pt-BR": "Portuguese (Brazil)", "de": "German",
+                                      "iw": "Hebrew", "fr": "French"}
+    info["formats"] = [
+        vfmt("137", 1080, "avc1.640028", 100 * MB),
+        afmt("140", "mp4a.40.2", 9 * MB, "en-US", format_note="English (US) original (default), medium"),
+        afmt("140-1", "mp4a.40.2", 9 * MB, "ar", -1, format_note="Arabic, low"),
+        afmt("140-2", "mp4a.40.2", 9 * MB, "pt-BR", -1, format_note="medium"),   # no name in it
+        afmt("140-3", "mp4a.40.2", 9 * MB, "de-DE", -1),                         # the language alone
+        afmt("140-4", "mp4a.40.2", 9 * MB, "iw", -1, format_note="iw, low"),     # just the code
+        afmt("140-5", "mp4a.40.2", 9 * MB, "xx", -1),                            # nothing: the code
+        afmt("140-6", "mp4a.40.2", 9 * MB, "ko", -1, format_note="K<o>rean, low"),
+        afmt("140-7", "mp4a.40.2", 9 * MB, "en", -10, format_note="English descriptive, low"),
+    ]
+    rows = video_tables(info)[0]["audio"][1]
+    assert [r[:3] for r in rows] == [
+        ["code", "language", "role"], ["en-US", "English (US)", "original"],
+        ["ar", "Arabic", "dubbed"], ["de-DE", "German", "dubbed"], ["iw", "Hebrew", "dubbed"],
+        ["ko", "K&lt;o&gt;rean", "dubbed"], ["pt-BR", "Portuguese (Brazil)", "dubbed"],
+        ["xx", "xx", "dubbed"], ["en", "English", "descriptive"]]
+    # HLS notes are in the track's own language: not used
+    assert yt2html.language_name(info, [afmt("234", "mp4a.40.2", None, "fr", format_note=
+                                             "Français - dubbed-auto", **hls)], "fr") == "French"
+    assert yt2html.language_name({}, [], "pl") == "pl"
+
+
+def test_video_file_row_with_a_video_next_to_the_page(capsys, tmp_path, info):
+    info["formats"] = video_formats_example()
+    html = render(info, video_files=["My title [TESTVIDEO01].mp4"], video_size=293_000_000)
+    assert row(html, "Video file") == ("a video file next to the page: My title [TESTVIDEO01].mp4, "
+                                       "293 MB; Deno at download: unknown (data saved by an older "
+                                       "version)")
+    del info["formats"]
+    assert row(render(info, video_files=["a&b [TESTVIDEO01].webm"]), "Video file") == (
+        "a video file next to the page: a&amp;b [TESTVIDEO01].webm; no formats in the data")
+    # when the page is made, the file is found by the id and measured
+    info["formats"] = video_formats_example()
+    saved = tmp_path / "x.info.json"
+    saved.write_text(json.dumps(info), encoding="utf-8")
+    (tmp_path / "Renamed [TESTVIDEO01].mp4").write_bytes(b"x" * 2_500_000)
+    assert yt2html.main(["--from-json", str(saved), "-o", str(tmp_path)]) == 0
+    html = next(tmp_path.glob("*.html")).read_text("utf-8")
+    assert row(html, "Video file").startswith(
+        "a video file next to the page: Renamed [TESTVIDEO01].mp4, 2 MB; Deno at download:")
+
+
+# --------------------------------------------------------------------------
+# --video-formats: the list on the screen, no page
+# --------------------------------------------------------------------------
+
+def test_format_list_of_a_video(info):
+    info["formats"] = video_formats_example()
+    assert yt2html.format_list(info) == [
+        'Test: "video" | part 1 / <2>? [TESTVIDEO01]',
+        "image (mp4; AV1, else H.264; sizes with the original audio):",
+        "  1080p, 50 fps  (1080p50)  h264  ~609 MB  (default)",
+        "  1080p, 25 fps  (1080p25)  av1   ~309 MB",
+        "  360p, 25 fps   (360p25)   h264   ~29 MB",
+        "audio (m4a, aac, ~9 MB each; add with audio:CODE):",
+        "  original: en (in the video)",
+        "  dubbed: pl"]
+    assert yt2html.format_list(info, saved=True)[0].endswith(" · saved data of 05.11.2026")
+
+
+def test_format_list_audio_lines(info):
+    base = [vfmt("399", 1080, "av01.0.08M.08", 300 * MB)]
+    info["formats"] = base + [
+        afmt("140", "mp4a.40.2", 9 * MB, **kind("original")),
+        afmt("140-1", "mp4a.40.2", 60 * MB, "pl", -1, **kind("dubbed-auto", "pl")),
+        afmt("140-2", "mp4a.40.2", 70 * MB, "de", -1, **kind("dubbed", "de")),
+        afmt("251-3", "opus", 8 * MB, "fr", -1, **kind("dubbed", "fr")),     # no aac: not offered
+        afmt("140-4", "mp4a.40.2", 65 * MB, "en", -1, **kind("descriptive")),
+        afmt("140-5", "mp4a.40.2", None, "ja", -1, **kind("dubbed", "ja"))]
+    assert yt2html.format_list(info)[3:] == [
+        "audio (m4a, aac, ~60–70 MB each; add with audio:CODE):",
+        "  original: en (in the video)",
+        "  dubbed: de, ja", "  auto-dubbed: pl",
+        "  descriptive: en (audio:en.descriptive)"]
+    info.pop("duration", None)
+    info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB),
+                              afmt("140-1", "mp4a.40.2", None, "pl", -1)]
+    assert yt2html.format_list(info)[3] == "audio (m4a, aac; add with audio:CODE):"
+    info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB),
+                              afmt("140-1", "mp4a.40.2", 900 * MB, "pl", -1),
+                              afmt("140-2", "mp4a.40.2", 1_100 * MB, "de", -1)]
+    assert yt2html.format_list(info)[3] == ("audio (m4a, aac, ~900 MB–1.1 GB each; "
+                                            "add with audio:CODE):")
+    info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB)]
+    assert yt2html.format_list(info)[3:] == ["audio: original: en (in the video), no other tracks"]
+    info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB, "pl", -1),
+                              afmt("140-1", "mp4a.40.2", 5 * MB, "de", -1)]   # no original known
+    assert yt2html.format_list(info)[3:] == ["audio (m4a, aac, ~5 MB each; add with audio:CODE):",
+                                             "  in the video: pl",   # the first: the main audio
+                                             "  tracks: de"]
+    info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB, "pl", -1)]
+    assert yt2html.format_list(info)[3:] == ["audio: in the video: pl, no other tracks"]
+    info["formats"] = base
+    assert yt2html.format_list(info)[1:] == [
+        "image (mp4; AV1, else H.264; sizes with the original audio):",
+        "  1080p, 25 fps  (1080p25)  av1  ~300 MB", "audio: none"]   # no audio: no default
+    info["formats"] = [vfmt("244", 480, "vp9", 50 * MB)]
+    assert yt2html.format_list(info)[1] == ("image: nothing a download can take "
+                                            "(no av1 or h264 up to 1080p)")
+    del info["formats"]
+    assert yt2html.format_list(info)[1:] == ["no formats in the data"]
+
+
+def test_video_formats_option_prints_and_makes_no_page(capsys, tmp_path, info):
+    info["formats"] = video_formats_example()
+    saved = tmp_path / "x.info.json"
+    saved.write_text(json.dumps(info), encoding="utf-8")
+    code = yt2html.main(["--video-formats", "--from-json", str(saved), str(saved),
+                         "-o", str(tmp_path / "out")])
+    out = capsys.readouterr().out
+    assert code == 0 and not (tmp_path / "out").exists()
+    assert out.count("  1080p, 50 fps  (1080p50)  h264  ~609 MB  (default)") == 1  # one source
+    code = yt2html.main(["--video-formats", "--from-json", str(saved), str(saved.with_name("y.json")),
+                         "-o", str(tmp_path / "out")])
+    out = capsys.readouterr().out
+    assert code == 1 and "  dubbed: pl\n\n[yt2html] FAILED: " in out   # a blank line between videos
+    assert "Deno" not in out   # saved data: nothing fetched
+
+
+def test_video_formats_option_excludes_page_options(capsys):
+    with pytest.raises(SystemExit):
+        yt2html.main(["u", "--video-formats", "--theme", "dark", "--no-cards"])
+    assert ("--video-formats makes no page, so it cannot be used with --no-cards, --theme"
+            in capsys.readouterr().err)
+    for option in (["--overwrite"], ["--index"], ["--index-only"], ["--save-json"],
+                   ["--no-comments"], ["--max-comments", "5"], ["--no-avatars"],
+                   ["--transcript", "timestamps"], ["--no-snapshot"]):
+        with pytest.raises(SystemExit):
+            yt2html.parse_args(["u", "--video-formats", *option])
+        assert option[0] in capsys.readouterr().err
+    assert yt2html.parse_args(["u", "--video-formats", "--cookies", "firefox", "-o", "x"])
+
+
+def test_video_formats_option_fetches_only_the_video_data(capsys, monkeypatch, info):
+    info["formats"] = video_formats_example()
+    seen = {}
+
+    class Fake:
+        def __init__(self, opts): seen["opts"] = opts
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download):
+            if url == "TESTVIDEO02":
+                raise yt2html.yt_dlp.utils.DownloadError("Video unavailable")
+            return dict(info)
+        def sanitize_info(self, i): return i
+
+    monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", Fake)
+    monkeypatch.setattr(yt2html.shutil, "which", lambda name: None)
+    code = yt2html.main(["--video-formats", "TESTVIDEO02", "TESTVIDEO01",
+                         "PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa", "--cookies", "firefox"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "getcomments" not in seen["opts"] and seen["opts"]["cookiesfrombrowser"][0] == "firefox"
+    assert "FAILED: TESTVIDEO02" in out and "  dubbed: pl" in out
+    assert "FAILED: PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa: --video-formats lists single videos" in out
+    assert "Note: no JavaScript runtime (Deno) found" in out
+    assert yt2html.main(["--video-formats", "TESTVIDEO02"]) == 1   # only the failed one
+    capsys.readouterr()
+    # yt-dlp answers with a playlist: not listed either
+    monkeypatch.setattr(Fake, "extract_info", lambda self, url, download: {"_type": "playlist"})
+    assert yt2html.main(["--video-formats", "TESTVIDEO01"]) == 1
+    assert "lists single videos, not playlists" in capsys.readouterr().out
+
