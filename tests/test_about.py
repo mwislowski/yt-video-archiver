@@ -634,11 +634,11 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
     assert list(tables) == ["image", "audio", "subtitles"]
     assert tables["image"] == ("image (sizes include the audio: en aac); "
                                "marked: the planned default", [
-        ["quality", "h264", "av1", "vp9", "vp9 Premium"],
-        ["2160p, 25 fps", "–", "–", "~2.5 GB, HDR10", "–"],
-        ["1080p, 50 fps (1080p50)", "~609 MB", "–", "–", "–"],    # one row per frame rate
-        ["1080p, 25 fps (1080p25)", "~409 MB", "~309 MB", "–", "~909 MB"],
-        ["360p, 25 fps (360p25)", "~29 MB", "–", "~24 MB", "–"],
+        ["quality", "resolution", "h264", "av1", "vp9", "vp9 Premium"],
+        ["2160p, 25 fps", "–", "–", "–", "~2.5 GB, HDR10", "–"],
+        ["1080p, 50 fps (1080p50)", "–", "~609 MB", "–", "–", "–"],    # one row per frame rate
+        ["1080p, 25 fps (1080p25)", "–", "~409 MB", "~309 MB", "–", "~909 MB"],
+        ["360p, 25 fps (360p25)", "–", "~29 MB", "–", "~24 MB", "–"],
     ])
     assert tables["audio"] == ("audio; marked: the planned default", [
         ["code", "language", "role", "aac", "opus"],
@@ -667,7 +667,7 @@ def test_video_formats_without_an_original_language_or_runtime(info):
     tables, rest = video_tables(info)
     assert tables["image"] == ("image (sizes include the audio: ? aac); "
                                "marked: the planned default",
-                               [["quality", "h264"], ["1080p, 25 fps (1080p25)", "~80 MB"]])
+                               [["quality", "resolution", "h264"], ["1080p, 25 fps (1080p25)", "–", "~80 MB"]])
     assert tables["audio"][1][1] == ["?", "?", "original", "~5 MB"]   # a single track: the original
     assert tables["subtitles"][1][1:] == [["by the author", "none"], ["auto-generated", "none"],
                                           ["auto-translated", "none"]]
@@ -783,7 +783,7 @@ def test_video_formats_edge_cases(info):
     # only combined formats (old videos): they count; no audio-only, nothing marked
     info["formats"] = [vfmt("18", 360, "avc1.42001E", 30 * MB, acodec="mp4a.40.2")]
     tables, rest = video_tables(info)
-    assert tables["image"] == ("image", [["quality", "h264"], ["360p, 25 fps (360p25)", "~30 MB"]])
+    assert tables["image"] == ("image", [["quality", "resolution", "h264"], ["360p, 25 fps (360p25)", "–", "~30 MB"]])
     assert "audio" not in tables and picked(info) == {}
     assert rest.startswith("not downloaded; planned default: nothing (no av1 or h264 image "
                            "up to 1080p with audio); ")
@@ -797,12 +797,12 @@ def test_video_formats_edge_cases(info):
     info["formats"] = [vfmt("1", 720, "xyz1.2", None), afmt("2", "opus", None)]
     info.pop("duration", None)
     tables, rest = video_tables(info)
-    assert tables["image"][1] == [["quality", "xyz1"], ["720p, 25 fps", "size unknown"]]
+    assert tables["image"][1] == [["quality", "resolution", "xyz1"], ["720p, 25 fps", "–", "size unknown"]]
     assert tables["audio"][1][1] == ["en", "en", "original", "size unknown"]
     assert "planned default: nothing" in rest
     # no frame rate in the data: the height alone
     info["formats"] = [vfmt("1", 720, "avc1.4d401f", 10 * MB, fps=None)]
-    assert video_tables(info)[0]["image"][1][1] == ["720p (720p)", "~10 MB"]
+    assert video_tables(info)[0]["image"][1][1] == ["720p (720p)", "–", "~10 MB"]
     assert summary(info) == "Video formats · up to 720p · no subtitles"
 
 
@@ -839,10 +839,10 @@ def test_video_formats_mark_premium_formats(info):
         afmt("774", "opus", 17 * MB, format_note="English original (default), Premium"),
     ]
     tables, rest = video_tables(info)
-    assert tables["image"][1] == [["quality", "h264", "h264 Premium", "vp9", "vp9 Premium"],
-                                  ["1080p, 25 fps (1080p25)", "~409 MB", "~809 MB", "~309 MB",
+    assert tables["image"][1] == [["quality", "resolution", "h264", "h264 Premium", "vp9", "vp9 Premium"],
+                                  ["1080p, 25 fps (1080p25)", "–", "~409 MB", "~809 MB", "~309 MB",
                                    "~909 MB"],
-                                  ["720p, 25 fps", "–", "~109 MB", "–", "–"]]
+                                  ["720p, 25 fps", "–", "–", "~109 MB", "–", "–"]]
     assert tables["audio"][1] == [["code", "language", "role", "aac", "aac Premium", "opus Premium"],
                                   # the name from yt-dlp's note of the Premium formats
                                   ["en", "English", "original", "~9 MB", "~18 MB", "~17 MB"]]
@@ -852,7 +852,7 @@ def test_video_formats_mark_premium_formats(info):
                        afmt("141", "mp4a.40.2", 18 * MB, format_note="Premium"),
                        afmt("251", "opus", 8 * MB)]
     tables, rest = video_tables(info)
-    assert tables["image"][1][1] == ["1080p, 25 fps (1080p25)", "~408 MB"]
+    assert tables["image"][1][1] == ["1080p, 25 fps (1080p25)", "–", "~408 MB"]
     assert "planned default: 1080p, 25 fps (1080p25) h264 + en opus, mp4, ~408 MB" in rest
     # the original only in Premium: an ordinary dub is the main audio, never Premium
     info["formats"] = [vfmt("137", 1080, "avc1.640028", 400 * MB),
@@ -877,9 +877,9 @@ def test_video_formats_name_hls_formats_without_sizes(info):
         afmt("234-24", "mp4a.40.2", None, tbr=192, **hls),
     ]
     tables, rest = video_tables(info)
-    assert tables["image"][1] == [["quality", "h264", "HLS (sizes unknown)"],
-                                  ["2160p", "–", "vp9 60 fps"],   # only HLS: no parameter
-                                  ["1080p, 25 fps (1080p25)", "~216 MB",
+    assert tables["image"][1] == [["quality", "resolution", "h264", "HLS (sizes unknown)"],
+                                  ["2160p", "–", "–", "vp9 60 fps"],   # only HLS: no parameter
+                                  ["1080p, 25 fps (1080p25)", "–", "~216 MB",
                                    "h264, vp9, vp9 Premium"]]
     assert tables["audio"][1][1] == ["en", "en", "original", "~69 MB"]
     assert "planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~216 MB" in rest
@@ -888,19 +888,19 @@ def test_video_formats_name_hls_formats_without_sizes(info):
     assert "<th>HLS (sizes unknown)</th>" in html and "<td>vp9 60 fps</td>" in html
     # no HLS: no column
     info["formats"] = info["formats"][:1] + info["formats"][5:6]
-    assert video_tables(info)[0]["image"][1] == [["quality", "h264"],
-                                                 ["1080p, 25 fps (1080p25)", "~216 MB"]]
+    assert video_tables(info)[0]["image"][1] == [["quality", "resolution", "h264"],
+                                                 ["1080p, 25 fps (1080p25)", "–", "~216 MB"]]
     # HLS heights without one at some height: an empty cell
     info["formats"].append(vfmt("229", 360, "avc1.4d401e", None, **hls))
     info["formats"].append(vfmt("134", 360, "avc1.4d401e", 20 * MB))
     info["formats"].append(vfmt("135", 480, "avc1.4d401f", 30 * MB))
-    assert video_tables(info)[0]["image"][1][1:] == [["1080p, 25 fps (1080p25)", "~216 MB", "–"],
-                                                     ["480p, 25 fps (480p25)", "~99 MB", "–"],
-                                                     ["360p, 25 fps (360p25)", "~89 MB", "h264"]]
+    assert video_tables(info)[0]["image"][1][1:] == [["1080p, 25 fps (1080p25)", "–", "~216 MB", "–"],
+                                                     ["480p, 25 fps (480p25)", "–", "~99 MB", "–"],
+                                                     ["360p, 25 fps (360p25)", "–", "~89 MB", "h264"]]
     # two frame rates at one height: HLS only in the first row
     info["formats"].append(vfmt("298", 360, "avc1.4d401f", 40 * MB, fps=50))
-    assert video_tables(info)[0]["image"][1][3:] == [["360p, 50 fps (360p50)", "~109 MB", "h264"],
-                                                     ["360p, 25 fps (360p25)", "~89 MB", "–"]]
+    assert video_tables(info)[0]["image"][1][3:] == [["360p, 50 fps (360p50)", "–", "~109 MB", "h264"],
+                                                     ["360p, 25 fps (360p25)", "–", "~89 MB", "–"]]
     # only HLS image: no sizes, nothing marked, but the summary has its quality
     info["formats"] = [vfmt("270", 1080, "avc1.640028", None, tbr=3262, **hls),
                        afmt("140", "mp4a.40.2", 69 * MB)]
@@ -919,7 +919,7 @@ def test_video_formats_take_the_larger_of_two_alike_formats(info):
                        vfmt("137-1", 1080, "avc1.640028", 150 * MB),
                        afmt("140", "mp4a.40.2", 5 * MB), afmt("140-1", "mp4a.40.2", 9 * MB)]
     tables, rest = video_tables(info)
-    assert tables["image"][1][1] == ["1080p, 25 fps (1080p25)", "~159 MB"]
+    assert tables["image"][1][1] == ["1080p, 25 fps (1080p25)", "–", "~159 MB"]
     assert tables["audio"][1][1] == ["en", "en", "original", "~9 MB"]
 
 
@@ -1151,4 +1151,48 @@ def test_video_formats_option_fetches_only_the_video_data(capsys, monkeypatch, i
     monkeypatch.setattr(Fake, "extract_info", lambda self, url, download: {"_type": "playlist"})
     assert yt2html.main(["--video-formats", "TESTVIDEO01"]) == 1
     assert "lists single videos, not playlists" in capsys.readouterr().out
+
+
+def test_video_formats_name_qualities_as_youtube(info):
+    """Quality is YouTube's name: from the format note, else from a format of
+    the same size, else from the size; the resolution column has the size."""
+    hls = {"protocol": "m3u8_native"}
+    info["formats"] = [
+        vfmt("137", 1920, "avc1.640028", 100 * MB, width=1080, format_note="1080p"),  # a Short
+        vfmt("136", 1280, "avc1.4d401f", 50 * MB, width=720),                         # no note
+        vfmt("270", 1920, "avc1.640028", None, width=1080, **hls),
+        afmt("140", "mp4a.40.2", 9 * MB)]
+    tables, rest = video_tables(info)
+    assert tables["image"][1] == [["quality", "resolution", "h264", "HLS (sizes unknown)"],
+                                  ["1080p, 25 fps (1080p25)", "1080×1920", "~109 MB", "h264"],
+                                  ["720p, 25 fps (720p25)", "720×1280", "~59 MB", "–"]]
+    assert "planned default: 1080p, 25 fps (1080p25) h264" in rest   # a Short can be taken
+    assert summary(info).startswith("Video formats · up to 1080p, 25 fps · ")
+    # a wide frame: named after its width; two sizes in one row
+    info["formats"] = [vfmt("137", 804, "avc1.640028", 100 * MB, width=1920),
+                       vfmt("399", 800, "av01.0.08M.08", 90 * MB, width=1920)]
+    assert video_tables(info)[0]["image"][1][1][:2] == ["1080p, 25 fps (1080p25)",
+                                                        "1920×804, 1920×800"]
+    # only HLS at a quality: its size
+    info["formats"] = [vfmt("625", 2160, "vp09.00.50.08", None, width=3840, fps=60, **hls),
+                       vfmt("137", 1080, "avc1.640028", 100 * MB, width=1920)]
+    assert video_tables(info)[0]["image"][1][1][:2] == ["2160p", "3840×2160"]
+
+
+def test_youtube_quality_names():
+    q = yt2html.quality_from_size
+    assert [q(1920, 1080), q(1920, 804), q(1080, 1920), q(3440, 1440), q(1440, 1080),
+            q(640, 360), q(256, 144), q(1080, 1350)] == [1080, 1080, 1080, 2160, 1080, 360,
+                                                         144, 1080]
+    formats = [{"width": 1920, "height": 1080, "format_note": "1080p60"},
+               {"width": 1920, "height": 1080, "format_note": "Premium"},   # the same size
+               {"width": 1920, "height": 1080},
+               {"width": 2560, "height": 1072},                             # from the size
+               {"height": 480}]                                             # no size: the height
+    assert list(yt2html.youtube_qualities(formats).values()) == [1080, 1080, 1080, 1440, 480]
+    # YouTube's name wins over the size rule (which would give 720p for 1000x640),
+    # also for a format of the same size without a name
+    formats = [{"width": 1000, "height": 640, "format_note": "480p"}, {"width": 1000, "height": 640}]
+    assert list(yt2html.youtube_qualities(formats).values()) == [480, 480]
+    assert yt2html.quality_from_size(1000, 640) == 720
 

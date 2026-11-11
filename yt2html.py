@@ -1567,7 +1567,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
   background:var(--accent);color:var(--on-accent)}
 .has-video .fact.play{display:block}
 .fact.play .value,.fact.play .label{color:var(--on-accent)}
-.fact.play .label{opacity:.85}
+.fact.play .label{opacity:.85;width:0;min-width:100%;overflow:hidden;white-space:nowrap}
 .fact.play:hover{filter:var(--hover)}
 .fact.play:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .player{display:none}
@@ -2078,17 +2078,21 @@ PLAYER_SPEEDS = ("0.5", "0.75", "1", "1.25", "1.5")
 VIDEO_EXTENSIONS = ("mp4", "webm", "m4v", "mkv")
 
 
-def render_player(video_names: list[str], video_files: list[str] | None = None) -> str:
+def render_player(video_names: list[str], video_files: list[str] | None = None,
+                  qualities: dict[str, str] | None = None, language: str | None = None) -> str:
     """The player panel; hidden until the script finds a video file next to
     the page: `video_files` first (files with the video's id found next to the
     page when it was built), then the page's own name and `video_names`, each
-    with every video extension (for videos downloaded later)."""
+    with every video extension (for videos downloaded later). `qualities`
+    ({"1920x1080": "1080p"}) and `language` (of the audio in the video) give
+    the tile its label once the file's size is known."""
     speeds = "".join(f'<button type="button" data-speed="{v}" aria-pressed="{str(v == "1").lower()}">'
                      f'{v}×</button>' for v in PLAYER_SPEEDS)
     return (
         f'<aside class="player" aria-label="Local video player" '
         f'data-files="{esc(json.dumps(video_files or [], ensure_ascii=False))}" '
         f'data-names="{esc(json.dumps(video_names, ensure_ascii=False))}" '
+        f'data-qualities="{esc(json.dumps(qualities or {}))}" data-language="{esc(language or "")}" '
         f'data-extensions="{" ".join(VIDEO_EXTENSIONS)}">'
         '<video preload="metadata"></video>'
         '<div class="seek"><span class="now">0:00</span>'
@@ -2151,9 +2155,32 @@ PLAYER_JS = r"""
     video.onerror = function () { probe(i + 1); };
     video.src = candidates[i];
   }
+  // The tile's label: the video's quality as YouTube names it (from the data
+  // by the file's size, else from the size as YouTube does) and the language
+  // of its audio; the full code only if "1080p · CODE" fits, so a code looks
+  // the same at any quality; what still does not fit is cut off.
+  var tileLabel = tile.querySelector('.label');
+  var qualities = JSON.parse(panel.dataset.qualities || '{}');
+  var audioLanguage = panel.dataset.language;
+  var LADDER = [144, 240, 360, 480, 720, 1080, 1440, 2160, 4320];
+  function qualityOf(w, h) {
+    if (qualities[w + 'x' + h]) return qualities[w + 'x' + h];
+    var size = Math.max(Math.min(w, h), Math.max(w, h) * 9 / 16), step = LADDER[0];
+    LADDER.forEach(function (s) { if (Math.abs(s - size) < Math.abs(step - size)) step = s; });
+    return step + 'p';
+  }
+  function labelTile() {
+    var code = audioLanguage;
+    if (code) {
+      tileLabel.textContent = '1080p · ' + code;
+      if (tileLabel.scrollWidth > tileLabel.clientWidth) code = code.split('-')[0];
+    }
+    tileLabel.textContent = qualityOf(video.videoWidth, video.videoHeight) + (code ? ' · ' + code : '');
+  }
   video.addEventListener('loadedmetadata', function () {
     video.onerror = null;
     body.classList.add('has-video');
+    if (video.videoWidth) labelTile();
     seek.max = video.duration;
     panel.querySelector('.total').textContent = clock(video.duration);
   });
@@ -2929,16 +2956,22 @@ def video_overview(info: dict) -> dict | None:
         size = format_size(info, f)
         return human_size(size + (audio_bytes or 0) if size else None)
 
+    # The quality as YouTube names it ("1080p" also for 1920x804 or 1080x1920)
+    qualities = youtube_qualities(video + hls)
+
+    def quality(f):
+        return qualities[id(f)]
+
     columns = ordered(list(dict.fromkeys(key_of(f) for f in video)))
-    rows, chosen = [], []   # chosen: per row (height, {column key: format}), DASH only
-    for height in sorted({f["height"] for f in video + hls}, reverse=True):
-        # one row per frame rate at this height (most often just one)
-        rates = sorted({f.get("fps") or 0 for f in video if f["height"] == height},
+    rows, chosen = [], []   # chosen: per row (quality, fps, {column key: format}), DASH only
+    for height in sorted({quality(f) for f in video + hls}, reverse=True):
+        # one row per frame rate at this quality (most often just one)
+        rates = sorted({f.get("fps") or 0 for f in video if quality(f) == height},
                        reverse=True) or [None]
         for i, fps in enumerate(rates):
             cells, formats = [], {}
             for key in columns:
-                pool = [f for f in video if f["height"] == height and key_of(f) == key
+                pool = [f for f in video if quality(f) == height and key_of(f) == key
                         and (f.get("fps") or 0) == fps]
                 if not pool:
                     cells.append(None)
@@ -2948,16 +2981,19 @@ def video_overview(info: dict) -> dict | None:
             if hls:
                 named = []
                 for key in ordered(list(dict.fromkeys(
-                        key_of(f) for f in hls if f["height"] == height))):
-                    f = best([g for g in hls if g["height"] == height and key_of(g) == key])
+                        key_of(f) for f in hls if quality(f) == height))):
+                    f = best([g for g in hls if quality(g) == height and key_of(g) == key])
                     named.append(" ".join([label(key)] + extras(f)))
                 # HLS once per height, in its first row
                 cells.append((", ".join(named) or None) if i == 0 else None)
+            # the real size of the image: of the row's single-file formats, else HLS
+            sized = [f for f in video if quality(f) == height and (f.get("fps") or 0) == fps
+                     ] or [f for f in hls if quality(f) == height]
+            resolution = ", ".join(dict.fromkeys(f"{f['width']}×{f['height']}" for f in sized
+                                                 if f.get("width"))) or None
             selectable = height <= DEFAULT_MAX_HEIGHT and any(k in formats for k in RULE)
-            rows.append((quality_label(height, fps, selectable), cells))
+            rows.append((quality_label(height, fps, selectable), resolution, cells))
             chosen.append((height, fps, formats))
-    # The planned default: the best quality up to 1080p that has AV1 or H.264
-    # (the quality first), then AV1 there, else H.264; Premium never.
     # The qualities a download can choose (up to 1080p, with AV1 or H.264),
     # best first, each with the codec the rule takes; the first is the default.
     variants = []
@@ -3026,8 +3062,8 @@ def video_overview(info: dict) -> dict | None:
     # The summary: the top quality, the audio tracks by role, the subtitles.
     summary = []
     if video or hls:
-        top = max(f["height"] for f in video + hls)
-        fps = max((f.get("fps") or 0 for f in video + hls if f["height"] == top), default=0)
+        top = max(map(quality, video + hls))
+        fps = max((f.get("fps") or 0 for f in video + hls if quality(f) == top), default=0)
         summary.append(f"up to {top}p" + (f", {fps:g} fps" if fps else ""))
     if original:  # then every other track has a role
         roles = [role for _, role in tracks if role != "original"]
@@ -3060,6 +3096,45 @@ def video_overview(info: dict) -> dict | None:
                      "unknown (data saved by an older version)" if deno is None else
                      "no, so YouTube may have offered more formats than listed"),
             "signed_in": bool(download.get("cookies_from_browser"))}
+
+
+QUALITY_LADDER = (144, 240, 360, 480, 720, 1080, 1440, 2160, 4320)
+
+
+def quality_from_size(width: int, height: int) -> int:
+    """YouTube's name for an image size when no format says it: the shorter
+    side, or 9/16 of the longer one when that is more (a frame wider than
+    16:9 is named after its width, as YouTube does: 1920x804 is "1080p", and
+    so is 1080x1920), to the nearest step of the ladder."""
+    size = max(min(width, height), max(width, height) * 9 / 16)
+    return min(QUALITY_LADDER, key=lambda step: abs(step - size))
+
+
+def youtube_qualities(formats: list[dict]) -> dict[int, int]:
+    """{id(format): quality}: YouTube's own name from the format note
+    ("1080p", "720p60", "1080p Premium"), else the name another format of the
+    same size has (HLS formats have no note), else from the size, else the
+    height."""
+    def noted(f):
+        found = re.match(r"(\d{3,4})p", f.get("format_note") or "")
+        return int(found.group(1)) if found else None
+
+    by_size = {(f.get("width"), f.get("height")): noted(f) for f in formats if noted(f)}
+    result = {}
+    for f in formats:
+        size = (f.get("width"), f.get("height"))
+        result[id(f)] = (noted(f) or by_size.get(size)
+                         or (quality_from_size(*size) if all(size) else f["height"]))
+    return result
+
+
+def player_qualities(info: dict) -> dict[str, str]:
+    """{"1920x1080": "1080p", ...}: YouTube's names of the image sizes in the
+    data, for the player tile (the script reads the size of the video file)."""
+    video, _ = video_formats(info)
+    qualities = youtube_qualities(video)
+    return {f"{f['width']}x{f['height']}": f"{qualities[id(f)]}p"
+            for f in video if f.get("width")}   # video formats always have a height
 
 
 def quality_parameter(height: int, fps: float | None) -> str:
@@ -3130,10 +3205,11 @@ def render_video_formats(info: dict) -> str:
         if image["picks"]:
             title += "; " + MARKED
         sized = len(image["columns"]) - image["columns"][-1:].count("HLS (sizes unknown)")
-        parts.append(formats_table(title, ["quality"] + image["columns"],
-                                   [[quality, *cells] for quality, cells in image["rows"]],
-                                   range(1, 1 + sized),
-                                   {(r, 1 + c) for r, c in image["picks"]}))
+        parts.append(formats_table(title, ["quality", "resolution"] + image["columns"],
+                                   [[quality, resolution, *cells]
+                                    for quality, resolution, cells in image["rows"]],
+                                   range(2, 2 + sized),
+                                   {(r, 2 + c) for r, c in image["picks"]}))
     if audio["rows"]:
         parts.append(formats_table("audio" + ("; " + MARKED) * bool(audio["picks"]),
                                    ["code", "language", "role"] + audio["columns"],
@@ -3407,7 +3483,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                              spec, theme, show_snapshot, no_avatars, from_json,
                              built or dt.datetime.now(), video_files, video_size))
     body.append("</main>")
-    body.insert(0, render_player(video_names(info), video_files))
+    overview = video_overview(info)
+    in_video = overview["in_video"] if overview else None
+    body.insert(0, render_player(video_names(info), video_files, player_qualities(info),
+                                 in_video[0] if in_video else None))
     body.append(f"<script>{PLAYER_JS}</script>")
 
     return "\n".join([

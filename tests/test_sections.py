@@ -172,6 +172,35 @@ def test_videos_with_the_id_are_found_when_the_page_is_built(capsys, info, tmp_p
     assert "Note: several videos for [TESTVIDEO01]" in capsys.readouterr().out
 
 
+def test_player_tile_label_gets_the_quality_and_the_language(info):
+    """The tile says "Player" until the script knows the file's size; then
+    YouTube's quality name and the language of the audio in the video."""
+    info["formats"] = [
+        {"format_id": "137", "vcodec": "avc1.640028", "acodec": "none", "width": 1920,
+         "height": 804, "format_note": "1080p", "filesize": 9},
+        {"format_id": "136", "vcodec": "avc1.4d401f", "acodec": "none", "width": 1280,
+         "height": 536, "filesize": 5},
+        {"format_id": "140", "vcodec": "none", "acodec": "mp4a.40.2", "language": "en-US",
+         "language_preference": 10, "filesize": 3}]
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
+    assert ('data-qualities="{&quot;1920x804&quot;: &quot;1080p&quot;, '
+            '&quot;1280x536&quot;: &quot;720p&quot;}" data-language="en-US"') in html
+    del info["formats"]
+    assert 'data-qualities="{}" data-language=""' in yt2html.render_page(info, None, {},
+                                                                        dt.date(2026, 11, 6))
+    js = yt2html.PLAYER_JS
+    # the full code only if "1080p · CODE" fits, else the language alone; the
+    # same size rule as quality_from_size()
+    assert "tileLabel.textContent = '1080p · ' + code;" in js
+    assert "if (tileLabel.scrollWidth > tileLabel.clientWidth) code = code.split('-')[0];" in js
+    assert "Math.max(Math.min(w, h), Math.max(w, h) * 9 / 16)" in js
+    assert f"var LADDER = {list(yt2html.QUALITY_LADDER)};" in js
+    assert "if (video.videoWidth) labelTile();" in js
+    # the label never widens the tile; what does not fit is cut off
+    assert ".fact.play .label{opacity:.85;width:0;min-width:100%;overflow:hidden;" \
+           "white-space:nowrap}" in yt2html.CSS
+
+
 def test_player_is_hidden_until_a_video_is_found():
     # The tile and the panel show only after the script adds these classes.
     assert ".fact.play{display:none;" in yt2html.CSS
