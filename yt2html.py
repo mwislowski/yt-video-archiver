@@ -1533,6 +1533,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .formats-info .formats th{font-weight:600;white-space:nowrap}
 .formats-info .formats .size{text-align:right;white-space:nowrap}
 .formats-info .formats .pick{color:var(--pick)}
+.formats-info .translation{margin:4px 0 0 14px}
 .copy-info a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .copy-info .command{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:12px;
   background:var(--chip);border-radius:4px;padding:1px 6px;
@@ -3037,33 +3038,86 @@ def video_overview(info: dict) -> dict | None:
         return rank, role or "", language
 
     tracks = sorted(tracks, key=track_order)
-    audio_rows = []
-    for key in tracks:
-        cells = [esc(human_size(format_size(info, audio_for(key, codec, premium))))
-                 if audio_for(key, codec, premium) else None
-                 for codec, premium in audio_keys]
-        known = key[0] != UNKNOWN_LANGUAGE   # unknown: no code, the name "unknown"
-        audio_rows.append((esc(key[0]) if known else None,
-                           esc(language_name(info, [f for f in audio if track(f) == key], key[0]))
-                           if known else "unknown",
-                           esc(key[1]) if key[1] else None, cells))
-    audio_picks = []
-    if main_audio:
-        key = (codec_name(main_audio.get("acodec"), AUDIO_CODECS), False)
-        if key in audio_keys:
-            audio_picks.append((tracks.index(track(main_audio)), audio_keys.index(key)))
-    audio_table = {"columns": [codec + (" Premium" if premium else "")
-                               for codec, premium in audio_keys], "rows": audio_rows,
-                   "picks": audio_picks}
 
+    # The languages table: one row per audio track, with the subtitles joined
+    # to it by language; subtitles without a matching audio track get rows of
+    # their own. The author's subtitles belong to the video: the row of the
+    # same code, else the only row of the same language (an audio description
+    # only when nothing else). Automatic ones are made from one audio track's
+    # speech ("-orig"): its row by language, the only track of an unknown
+    # language, else a row of their own.
     manual = [lang for lang, fmts in (info.get("subtitles") or {}).items()
               if fmts and lang != "live_chat"]
     auto = [lang for lang, fmts in (info.get("automatic_captions") or {}).items() if fmts]
     origs = [lang.removesuffix("-orig") for lang in auto if lang.endswith("-orig")]
-    translated = len([lang for lang in auto if not lang.endswith("-orig")]) - len(origs)
-    subtitles = [("by the author", esc(", ".join(manual)) if manual else "none"),
-                 ("auto-generated", esc(", ".join(origs)) if origs else "none"),
-                 ("auto-translated", f"{translated} languages" if translated > 0 else "none")]
+    rows_of = [{"key": key, "author": [], "auto": []} for key in tracks]
+
+    def joined(code, unknown_too=False):
+        exact = [r for r in rows_of if r["key"][0].lower() == code.lower()]
+        same = exact or [r for r in rows_of if base_language(r["key"][0]) == base_language(code)]
+        found = [r for r in same if r["key"][1] != "descriptive"] or same
+        if not found and unknown_too and [r["key"][0] for r in rows_of] == [UNKNOWN_LANGUAGE]:
+            found = rows_of
+        return found[0] if len(found) == 1 else None
+
+    alone = {}   # subtitle code -> its own row
+    for kind, codes in (("author", manual), ("auto", origs)):
+        for code in codes:
+            row = joined(code, unknown_too=kind == "auto") or alone.setdefault(
+                code, {"key": (code, None), "author": [], "auto": [], "alone": True})
+            row[kind].append(code)
+    with_audio_languages = {base_language(r["key"][0]) for r in rows_of}
+    original_base = base_language(original[0]) if original else None
+
+    def language_order(row):  # languages with audio first (the original's first), then without
+        code, role = row["key"]
+        base = base_language(code)
+        rank = (len(AUDIO_ROLES) + 2 if row.get("alone") else
+                AUDIO_ROLES.index(role) if role in AUDIO_ROLES else len(AUDIO_ROLES) + (role is None))
+        return base not in with_audio_languages, base != original_base, base, rank, code
+
+    table_rows = sorted(rows_of + list(alone.values()), key=language_order)
+    picked = choose_caption_track(info)   # the subtitles the transcript takes
+    picked = (("author" if picked[0] == "manual" else "auto"), picked[1]) if picked else None
+
+    def codes_cell(row, kind):
+        return ", ".join(f'<span class="pick">{esc(code)}</span>' if (kind, code) == picked
+                         else esc(code) for code in row[kind]) or None
+
+    language_rows = []
+    for row in table_rows:
+        code, role = row["key"]
+        known = code != UNKNOWN_LANGUAGE   # unknown: no code, the name "unknown"
+        if row.get("alone"):
+            cells = [None] * len(audio_keys)
+            names = info.get(TRANSLATIONS_KEY) or {}
+            name = names.get(code) or names.get(code.split("-")[0]) or code
+        else:
+            cells = [esc(human_size(format_size(info, audio_for(row["key"], codec, premium))))
+                     if audio_for(row["key"], codec, premium) else None
+                     for codec, premium in audio_keys]
+            name = (language_name(info, [f for f in audio if track(f) == row["key"]], code)
+                    if known else "unknown")
+        language_rows.append([esc(code) if known else None, esc(name),
+                              esc(role) if role else None, *cells,
+                              codes_cell(row, "author"), codes_cell(row, "auto")])
+    audio_picks = []
+    if main_audio:
+        key = (codec_name(main_audio.get("acodec"), AUDIO_CODECS), False)
+        if key in audio_keys:
+            audio_picks.append((table_rows.index(rows_of[tracks.index(track(main_audio))]),
+                                audio_keys.index(key)))
+    # Machine translation: YouTube's list of target languages (given only when
+    # the video has subtitles), but the source language.
+    targets = len(info.get(TRANSLATIONS_KEY) or [lang for lang in auto
+                                                 if not lang.endswith("-orig")])
+    translated = max(targets - 1, 0)
+    languages_table = {"columns": [codec + (" Premium" if premium else "")
+                                   for codec, premium in audio_keys],
+                       "rows": language_rows, "picks": audio_picks,
+                       "subtitles_marked": bool(picked),
+                       "translation": (f"machine translation into {translated} languages"
+                                       if translated else "machine translation: none")}
 
     if pick:
         default = (f"{rows[picks[0][0]][0]} {key_of(pick)[0]} + "
@@ -3088,7 +3142,7 @@ def video_overview(info: dict) -> dict | None:
     def named(languages, what):
         return f"{esc(', '.join(languages)) if len(languages) <= 3 else len(languages)} {what}"
     parts = ([named(manual, "by the author")] * bool(manual) + [named(origs, "auto-generated")]
-             * bool(origs) + [f"{translated} auto-translated"] * (translated > 0))
+             * bool(origs) + [f"machine translation into {translated} languages"] * bool(translated))
     summary.append("subtitles: " + " + ".join(parts) if parts else "no subtitles")
 
     download = info.get(DOWNLOAD_KEY) or {}
@@ -3099,7 +3153,7 @@ def video_overview(info: dict) -> dict | None:
     extra = [key for key in tracks if key != in_video and audio_for(key, "aac")]
     known = sorted(filter(None, (format_size(info, audio_for(key, "aac")) for key in extra)))
     extra_sizes = list(dict.fromkeys(map(human_size, known)))   # smallest to largest
-    return {"image": image, "audio": audio_table, "subtitles": subtitles, "default": default,
+    return {"image": image, "languages": languages_table, "default": default,
             "variants": variants, "in_video": in_video,
             "in_video_codec": codec_name(main_audio.get("acodec"), AUDIO_CODECS) if main_audio
             else None,
@@ -3211,7 +3265,7 @@ def render_video_formats(info: dict) -> str:
     overview = video_overview(info)
     if overview is None:
         return ""
-    image, audio = overview["image"], overview["audio"]
+    image, languages = overview["image"], overview["languages"]
     parts = []
     if image["rows"]:
         title = "image" + (f" (sizes include the audio: {image['audio']})" if image["audio"] else "")
@@ -3223,15 +3277,15 @@ def render_video_formats(info: dict) -> str:
                                     for quality, resolution, cells in image["rows"]],
                                    range(2, 2 + sized),
                                    {(r, 2 + c) for r, c in image["picks"]}))
-    if audio["rows"]:
-        parts.append(formats_table("audio" + ("; " + MARKED) * bool(audio["picks"]),
-                                   ["code", "language", "role"] + audio["columns"],
-                                   [[code, name, role, *cells]
-                                    for code, name, role, cells in audio["rows"]],
-                                   range(3, 3 + len(audio["columns"])),
-                                   {(r, 3 + c) for r, c in audio["picks"]}))
-    parts.append(formats_table("subtitles", ["kind", "languages"],
-                               [list(row) for row in overview["subtitles"]]))
+    if languages["rows"]:
+        marks = (["the planned default"] * bool(languages["picks"])
+                 + ["the transcript's subtitles"] * languages["subtitles_marked"])
+        parts.append(formats_table("languages" + ("; marked: " + " and ".join(marks)) * bool(marks),
+                                   ["code", "language", "audio"] + languages["columns"]
+                                   + ["subtitles by the author", "auto-generated subtitles"],
+                                   languages["rows"], range(3, 3 + len(languages["columns"])),
+                                   {(r, 3 + c) for r, c in languages["picks"]}))
+    parts.append(f'<div class="translation">{languages["translation"]}</div>')
     return ('<details class="formats-info"><summary>Video formats<span class="rest"> · '
             f'{overview["summary"]}</span></summary>\n' + "".join(parts) + "</details>")
 
