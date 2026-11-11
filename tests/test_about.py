@@ -662,14 +662,14 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
         ["pl", "pl", "dubbed", "~9 MB", "–", "–", "–"]])
     # the transcript takes the author's English: marked in its cell
     assert '<td><span class="planned">en</span></td><td>en</td>' in render(info)
-    assert translation(info) == "machine translation into 2 languages"   # pl, fr
+    assert translation(info) == ("machine translation: each subtitles track can be translated "
+                                 "into 2 other languages")   # pl, fr
     # the best quality up to 1080p first (here 50 fps, only in h264), then its codec
     assert rest == ("not downloaded; planned default: 1080p, 50 fps (1080p50) h264 + en aac, "
                     "mp4, ~609 MB; Deno at download: unknown (data saved by an older version)")
     assert picked(info) == {"image": ["~609 MB"], "languages": ["~9 MB"]}
     assert summary(info) == ("Video formats · up to 2160p, 25 fps · audio: en original + "
-                             "1 dubbed · subtitles: en by the author + en auto-generated + "
-                             "machine translation into 2 languages")
+                             "1 dubbed · subtitles: en by the author + en auto-generated")
     html = render(info)   # sizes right-aligned, the rest wraps
     assert '<th class="size">h264</th>' in html and "<th>quality</th>" in html
     assert '<td class="size">~909 MB</td>' in html and "<td>dubbed</td>" in html
@@ -1279,13 +1279,15 @@ def test_languages_table_joins_subtitles_to_audio(info):
         ["de", "German", "–", "de", "–"],
         ["pl", "Polish", "–", "pl", "–"]]
     assert rows[0][3] == "aac" and all(r[3] == "–" for r in rows if r[2] == "–")   # no size
-    assert translation(info) == "machine translation into 5 languages"
+    assert translation(info) == ("machine translation: each subtitles track can be translated "
+                                 "into 5 other languages")
     # automatic captions as the transcript's track: marked in their cell
     info[yt2html.CAPTION_KEY] = {"language": "en", "kind": "asr"}
     assert '<td><span class="planned">en</span></td></tr>' in render(info)
     # only the author's subtitles: still translated
     del info["automatic_captions"]
-    assert translation(info) == "machine translation into 5 languages"
+    assert translation(info) == ("machine translation: each subtitles track can be translated "
+                                 "into 5 other languages")
     info[yt2html.TRANSLATIONS_KEY] = {}
     assert translation(info) == "machine translation: none"
 

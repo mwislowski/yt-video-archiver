@@ -3116,7 +3116,8 @@ def video_overview(info: dict) -> dict | None:
                                    for codec, premium in audio_keys],
                        "rows": language_rows, "picks": audio_picks,
                        "subtitles_marked": bool(picked),
-                       "translation": (f"machine translation into {translated} languages"
+                       "translation": (f"machine translation: each subtitles track can be translated "
+                                       f"into {translated} other languages"
                                        if translated else "machine translation: none")}
 
     if pick:
@@ -3141,8 +3142,10 @@ def video_overview(info: dict) -> dict | None:
 
     def named(languages, what):
         return f"{esc(', '.join(languages)) if len(languages) <= 3 else len(languages)} {what}"
+    # No machine translation here: it comes with any subtitles, and after a "+"
+    # it read as more languages; the line under the languages table explains it.
     parts = ([named(manual, "by the author")] * bool(manual) + [named(origs, "auto-generated")]
-             * bool(origs) + [f"machine translation into {translated} languages"] * bool(translated))
+             * bool(origs))
     summary.append("subtitles: " + " + ".join(parts) if parts else "no subtitles")
 
     download = info.get(DOWNLOAD_KEY) or {}
