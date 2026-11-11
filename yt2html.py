@@ -3052,6 +3052,8 @@ def video_overview(info: dict) -> dict | None:
     extra_sizes = list(dict.fromkeys(map(human_size, known)))   # smallest to largest
     return {"image": image, "audio": audio_table, "subtitles": subtitles, "default": default,
             "variants": variants, "in_video": in_video,
+            "in_video_codec": codec_name(main_audio.get("acodec"), AUDIO_CODECS) if main_audio
+            else None,
             "extra_audio": [(key[0], key[1]) for key in extra], "extra_sizes": extra_sizes,
             "summary": " · ".join(summary),
             "deno": ("yes" if deno else
@@ -3181,7 +3183,7 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
         return lines + ["no formats in the data"]
     variants = overview["variants"]
     if variants:
-        lines.append("image (mp4; AV1, else H.264; sizes with the original audio):")
+        lines.append("image (mp4, AV1 else H.264; sizes with the original audio):")
         widths = [max(len(v[key]) for v in variants) for key in ("quality", "parameter",
                                                                   "codec", "size")]
         for i, v in enumerate(variants):
@@ -3191,7 +3193,7 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
     else:
         lines.append("image: nothing a download can take (no av1 or h264 up to 1080p)")
     in_video, extra, sizes = overview["in_video"], overview["extra_audio"], overview["extra_sizes"]
-    if not in_video and not extra:
+    if not in_video:  # no main audio: then no ordinary track to add either
         return lines + ["audio: none"]
     each = None
     if sizes:  # one size, or a range: "~60–70 MB", "~900 MB–1.1 GB"
@@ -3199,11 +3201,14 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
         same_unit = low.split()[-1] == high.split()[-1]
         each = low if low == high else (
             f"{low.split()[0] if same_unit else low}–{high.lstrip('~')}")
-    # m4a and aac only when there is something a download can add
-    lines.append("audio" + (" (m4a, aac" + (f", {each} each" if each else "") + ")") * bool(extra)
-                 + ":")
-    if in_video:
-        lines.append(f"  in the video: {in_video[0]}" + (f" ({in_video[1]})" if in_video[1] else ""))
+    # Like the image: container and codec of what is in the video, then after
+    # a semicolon the extra tracks a download can add (m4a, aac), if any. A
+    # track a download can add is an ordinary one, so there is a main audio.
+    header = f"mp4, {overview['in_video_codec']}"
+    if extra:
+        header += "; extra tracks m4a, aac" + (f", {each} each" if each else "")
+    lines.append(f"audio ({header}):")
+    lines.append(f"  in the video: {in_video[0]}" + (f" ({in_video[1]})" if in_video[1] else ""))
     for role in dict.fromkeys(role for _, role in extra):
         lines.append(f"  {role or 'tracks'}: {', '.join(code for code, r in extra if r == role)}")
     return lines

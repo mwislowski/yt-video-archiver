@@ -218,16 +218,16 @@ Above *About this copy*, *Video formats* is folded to a grey line with a summary
 
 ```
 Give Me 1 Hour, I Will Make Artificial Intelligence Click Forever [fCEvvkAbJOs]
-image (mp4; AV1, else H.264; sizes with the original audio):
+image (mp4, AV1 else H.264; sizes with the original audio):
   1080p, 30 fps  (1080p30)  av1  ~293 MB  (default)
   720p, 30 fps   (720p30)   av1  ~214 MB
   ...
-audio (m4a, aac, ~69 MB each):
+audio (mp4, aac; extra tracks m4a, aac, ~69 MB each):
   in the video: en-US (original)
   auto-dubbed: ar, bn, de-DE, es-US, fr-FR, hi, id, it, iw, ja, ko, ml, nl-NL, pa, pl, pt-BR, ru, ta, te, uk
 ```
 
-The audio lines show the track in the video and, by role, the dubs a download can add as separate m4a files (`audio:CODE`, e.g. `audio:pl`; an audio description as `audio:CODE.descriptive`). The parameters in brackets and `audio:CODE` are meant for a later version of yt2html that downloads the video itself.
+Both headers start with the container and codec of what goes into the video; after the semicolon, the image header says the sizes include the original audio and the audio header describes the extra tracks. The audio lines show the track in the video and, by role, the dubs a download can add as separate m4a files (`audio:CODE`, e.g. `audio:pl`; an audio description as `audio:CODE.descriptive`). The parameters in brackets and `audio:CODE` are meant for a later version of yt2html that downloads the video itself.
 
 ### About this copy
 

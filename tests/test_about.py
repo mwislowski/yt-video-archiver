@@ -1035,11 +1035,11 @@ def test_format_list_of_a_video(info):
     info["formats"] = video_formats_example()
     assert yt2html.format_list(info) == [
         'Test: "video" | part 1 / <2>? [TESTVIDEO01]',
-        "image (mp4; AV1, else H.264; sizes with the original audio):",
+        "image (mp4, AV1 else H.264; sizes with the original audio):",
         "  1080p, 50 fps  (1080p50)  h264  ~609 MB  (default)",
         "  1080p, 25 fps  (1080p25)  av1   ~309 MB",
         "  360p, 25 fps   (360p25)   h264   ~29 MB",
-        "audio (m4a, aac, ~9 MB each):",
+        "audio (mp4, aac; extra tracks m4a, aac, ~9 MB each):",
         "  in the video: en (original)",
         "  dubbed: pl"]
     assert yt2html.format_list(info, saved=True)[0].endswith(" · saved data of 05.11.2026")
@@ -1055,30 +1055,33 @@ def test_format_list_audio_lines(info):
         afmt("140-4", "mp4a.40.2", 65 * MB, "en", -1, **kind("descriptive")),
         afmt("140-5", "mp4a.40.2", None, "ja", -1, **kind("dubbed", "ja"))]
     assert yt2html.format_list(info)[3:] == [
-        "audio (m4a, aac, ~60–70 MB each):",
+        "audio (mp4, aac; extra tracks m4a, aac, ~60–70 MB each):",
         "  in the video: en (original)",
         "  dubbed: de, ja", "  auto-dubbed: pl", "  descriptive: en"]
     info.pop("duration", None)
     info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB),
                               afmt("140-1", "mp4a.40.2", None, "pl", -1)]
-    assert yt2html.format_list(info)[3] == "audio (m4a, aac):"   # sizes unknown
+    assert yt2html.format_list(info)[3] == "audio (mp4, aac; extra tracks m4a, aac):"   # sizes unknown
     info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB),
                               afmt("140-1", "mp4a.40.2", 900 * MB, "pl", -1),
                               afmt("140-2", "mp4a.40.2", 1_100 * MB, "de", -1)]
-    assert yt2html.format_list(info)[3] == "audio (m4a, aac, ~900 MB–1.1 GB each):"
+    assert yt2html.format_list(info)[3] == "audio (mp4, aac; extra tracks m4a, aac, ~900 MB–1.1 GB each):"
     info["formats"] = base + [afmt("140", "mp4a.40.2", 9 * MB)]
-    assert yt2html.format_list(info)[3:] == ["audio:", "  in the video: en (original)"]
+    assert yt2html.format_list(info)[3:] == ["audio (mp4, aac):", "  in the video: en (original)"]
+    # the original without aac: its own codec in the video, the extra tracks still aac
+    info["formats"] = base + [afmt("251", "opus", 8 * MB), afmt("140-1", "mp4a.40.2", 9 * MB, "pl", -1)]
+    assert yt2html.format_list(info)[3] == "audio (mp4, opus; extra tracks m4a, aac, ~9 MB each):"
     info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB, "pl", -1),
                               afmt("140-1", "mp4a.40.2", 5 * MB, "de", -1)]   # no original known
-    assert yt2html.format_list(info)[3:] == ["audio (m4a, aac, ~5 MB each):",
+    assert yt2html.format_list(info)[3:] == ["audio (mp4, aac; extra tracks m4a, aac, ~5 MB each):",
                                              "  in the video: pl",   # the first: the main audio
                                              "  tracks: de"]
     # a single track has nothing to mark it by: the original
     info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB, "pl", -1)]
-    assert yt2html.format_list(info)[3:] == ["audio:", "  in the video: pl (original)"]
+    assert yt2html.format_list(info)[3:] == ["audio (mp4, aac):", "  in the video: pl (original)"]
     info["formats"] = base
     assert yt2html.format_list(info)[1:] == [
-        "image (mp4; AV1, else H.264; sizes with the original audio):",
+        "image (mp4, AV1 else H.264; sizes with the original audio):",
         "  1080p, 25 fps  (1080p25)  av1  ~300 MB", "audio: none"]   # no audio: no default
     info["formats"] = [vfmt("244", 480, "vp9", 50 * MB)]
     assert yt2html.format_list(info)[1] == ("image: nothing a download can take "
