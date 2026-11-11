@@ -614,7 +614,7 @@ def picked(info, **options):
     html = render(info, **options)
     found = {}
     for caption, body in re.findall(r"<caption>(.*?)</caption>(.*?)</table>", html):
-        cells = re.findall(r'<td class="[^"]*\bpick\b[^"]*">(.*?)</td>', body)
+        cells = re.findall(r'<td class="[^"]*\bplanned\b[^"]*">(.*?)</td>', body)
         if cells:
             found[caption.split(" (")[0].split(";")[0]] = cells
     return found
@@ -654,7 +654,7 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
         ["en", "en", "original", "~9 MB", "~8 MB", "en", "en"],
         ["pl", "pl", "dubbed", "~9 MB", "–", "–", "–"]])
     # the transcript takes the author's English: marked in its cell
-    assert '<td><span class="pick">en</span></td><td>en</td>' in render(info)
+    assert '<td><span class="planned">en</span></td><td>en</td>' in render(info)
     assert translation(info) == "machine translation into 2 languages"   # pl, fr
     # the best quality up to 1080p first (here 50 fps, only in h264), then its codec
     assert rest == ("not downloaded; planned default: 1080p, 50 fps (1080p50) h264 + en aac, "
@@ -666,7 +666,7 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
     html = render(info)   # sizes right-aligned, the rest wraps
     assert '<th class="size">h264</th>' in html and "<th>quality</th>" in html
     assert '<td class="size">~909 MB</td>' in html and "<td>dubbed</td>" in html
-    assert '<td class="size pick">~609 MB</td>' in html and ".pick{color:var(--pick)}" in html
+    assert '<td class="size planned">~609 MB</td>' in html and ".planned{color:var(--planned)}" in html
 
 
 def test_video_formats_without_an_original_language_or_runtime(info):
@@ -1270,7 +1270,7 @@ def test_languages_table_joins_subtitles_to_audio(info):
     assert translation(info) == "machine translation into 5 languages"
     # automatic captions as the transcript's track: marked in their cell
     info[yt2html.CAPTION_KEY] = {"language": "en", "kind": "asr"}
-    assert '<td><span class="pick">en</span></td></tr>' in render(info)
+    assert '<td><span class="planned">en</span></td></tr>' in render(info)
     # only the author's subtitles: still translated
     del info["automatic_captions"]
     assert translation(info) == "machine translation into 5 languages"

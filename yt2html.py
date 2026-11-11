@@ -1404,7 +1404,7 @@ CSS = """
   --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
   --accent:#0e8f85; --on-accent:#fff; --accent-text:#3cc8b4;
   --accent-soft:rgba(14,143,133,.28); --hover:brightness(1.15);
-  --pick:#ffd54a;
+  --planned:#9cc3e8;
   --player-w:clamp(320px,40vw,720px);
   color-scheme:dark;
 }
@@ -1532,7 +1532,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
   text-align:left;vertical-align:top;font-weight:400}
 .formats-info .formats th{font-weight:600;white-space:nowrap}
 .formats-info .formats .size{text-align:right;white-space:nowrap}
-.formats-info .formats .pick{color:var(--pick)}
+.formats-info .formats .planned{color:var(--planned)}
 .formats-info .translation{margin:4px 0 0 14px}
 .copy-info a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .copy-info .command{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:12px;
@@ -1649,7 +1649,7 @@ LIGHT_VARIABLES = """
   --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
   --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
   --accent:#0f766e; --accent-text:#0f766e; --accent-soft:rgba(15,118,110,.16);
-  --hover:brightness(.92); --pick:#9a6700;
+  --hover:brightness(.92); --planned:#2f6a9e;
   color-scheme:light;
 """
 
@@ -3081,7 +3081,7 @@ def video_overview(info: dict) -> dict | None:
     picked = (("author" if picked[0] == "manual" else "auto"), picked[1]) if picked else None
 
     def codes_cell(row, kind):
-        return ", ".join(f'<span class="pick">{esc(code)}</span>' if (kind, code) == picked
+        return ", ".join(f'<span class="planned">{esc(code)}</span>' if (kind, code) == picked
                          else esc(code) for code in row[kind]) or None
 
     language_rows = []
@@ -3246,7 +3246,7 @@ def formats_table(title: str, head: list[str], rows: list[list], sizes: range = 
     wraps. Cells in `picks` ((row, column) of the data rows) are the planned
     default."""
     def cell(tag, r, i, value):
-        classes = " ".join(["size"] * (i in sizes) + ["pick"] * ((r, i) in picks))
+        classes = " ".join(["size"] * (i in sizes) + ["planned"] * ((r, i) in picks))
         attribute = f' class="{classes}"' if classes else ""
         return f"<{tag}{attribute}>{value if value is not None else '–'}</{tag}>"
     return (f'<div class="formats"><table><caption>{title}</caption>'

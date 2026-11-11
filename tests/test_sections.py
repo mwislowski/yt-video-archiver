@@ -121,11 +121,20 @@ def test_themes(info):
     assert "--bg:#ffffff" not in dark
 
 
+def test_both_themes_set_the_same_colour_variables():
+    # A variable missing from one theme (or misspelled there) keeps the other theme's colour.
+    import re
+    names = lambda css: set(re.findall(r"(--[\w-]+):", css))
+    dark = names(yt2html.CSS.split("}", 1)[0]) - {"--player-w"}
+    assert names(yt2html.LIGHT_VARIABLES) == dark - {"--on-accent"}
+    assert {"--planned"} <= dark
+
+
 def test_no_fixed_colours_outside_the_variables():
     # New styles must use CSS variables, or they break one of the themes.
     allowed = {"#0f0f0f", "#f1f1f1", "#aaaaaa", "#272727", "#3f3f3f", "#3ea6ff", "#3a3a3a",
                "#000", "#ff4e45", "#fff", "#0e8f85", "#3cc8b4",
-               "#ffd54a"}  # --pick: the planned default in Video formats
+               "#9cc3e8"}  # --planned: the planned default in Video formats
     import re
     assert set(re.findall(r"#[0-9a-fA-F]{3,6}\b", yt2html.CSS)) <= allowed
 
