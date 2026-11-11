@@ -626,11 +626,18 @@ def test_video_formats_section_above_about_and_the_video_file_row(info):
     assert html.index('<details class="formats-info">') < html.index('<details class="copy-info">')
     assert re.findall(r"<dt>(.*?)</dt>", about(html)) == ROWS
     assert "--video" not in command(html) and "experimental" not in html
-    # no formats: no section, the row says so
-    del info["formats"]
-    html = render(info)
-    assert formats_section(html) is None and 'class="formats-info"' not in html
-    assert row(html, "Video file") == "not downloaded; no formats in the data"
+    # only the storyboards (YouTube sent no video or audio, as for a Short
+    # fetched several times in a row) or no list at all: the section says so
+    for formats in ([f for f in info["formats"] if f["format_id"] == "sb0"], None):
+        info["formats"] = formats
+        html = render(info)
+        summary, inner = formats_section(html)
+        assert summary == "Video formats · none in the data" and "<table" not in inner
+        assert inner == ('\n<div class="none">no video or audio formats in the data: YouTube '
+                         'sometimes sends none for a while; make the page again later</div>')
+        assert html.index('class="formats-info"') < html.index('class="copy-info"')
+        assert row(html, "Video file") == "not downloaded; no video or audio formats in the data"
+    assert ".formats-info .none{margin" in html
 
 
 def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
@@ -1041,7 +1048,7 @@ def test_video_file_row_with_a_video_next_to_the_page(capsys, tmp_path, info):
                                        "version)")
     del info["formats"]
     assert row(render(info, video_files=["a&b [TESTVIDEO01].webm"]), "Video file") == (
-        "a video file next to the page: a&amp;b [TESTVIDEO01].webm; no formats in the data")
+        "a video file next to the page: a&amp;b [TESTVIDEO01].webm; no video or audio formats in the data")
     # when the page is made, the file is found by the id and measured
     info["formats"] = video_formats_example()
     saved = tmp_path / "x.info.json"
@@ -1119,7 +1126,12 @@ def test_format_list_audio_lines(info):
     assert yt2html.format_list(info)[1] == ("image: nothing a download can take "
                                             "(no av1 or h264 up to 1080p)")
     del info["formats"]
-    assert yt2html.format_list(info)[1:] == ["no formats in the data"]
+    assert yt2html.format_list(info)[1:] == [
+        "no video or audio formats in the data: YouTube sometimes sends none for a while; "
+        "try again later"]
+    assert yt2html.format_list(info, saved=True)[1:] == [
+        "no video or audio formats in the data: YouTube sent none when the data was saved; "
+        "make the page again with --overwrite"]
 
 
 def test_video_formats_option_prints_and_makes_no_page(capsys, tmp_path, info):

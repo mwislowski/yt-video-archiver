@@ -1533,7 +1533,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .formats-info .formats th{font-weight:600;white-space:nowrap}
 .formats-info .formats .size{text-align:right;white-space:nowrap}
 .formats-info .formats .planned{color:var(--planned)}
-.formats-info .translation{margin:4px 0 0 14px}
+.formats-info .translation,.formats-info .none{margin:4px 0 0 14px}
 .copy-info a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .copy-info .command{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:12px;
   background:var(--chip);border-radius:4px;padding:1px 6px;
@@ -3259,12 +3259,22 @@ def formats_table(title: str, head: list[str], rows: list[list], sizes: range = 
 MARKED = "marked: the planned default"
 
 
+# Without video and audio formats (only the storyboard images for the seek
+# bar's preview, or none at all): YouTube sometimes sends none for a while,
+# e.g. after several requests for the same video.
+NO_FORMATS = "no video or audio formats in the data"
+NO_FORMATS_WHY = "YouTube sometimes sends none for a while"
+
+
 def render_video_formats(info: dict) -> str:
     """The Video formats section above "About this copy": folded to one grey
-    line with the summary; open, the tables. Nothing when there are no formats."""
+    line with the summary; open, the tables. Without formats, one line that
+    says so (it looks like a fault of the page otherwise)."""
     overview = video_overview(info)
     if overview is None:
-        return ""
+        return ('<details class="formats-info"><summary>Video formats<span class="rest"> · '
+                f'none in the data</span></summary>\n<div class="none">{NO_FORMATS}: '
+                f'{NO_FORMATS_WHY}; make the page again later</div></details>')
     image, languages = overview["image"], overview["languages"]
     parts = []
     if image["rows"]:
@@ -3303,7 +3313,7 @@ def about_video_file(info: dict, video_files: list[str] | None = None,
     else:
         found = "not downloaded"
     if overview is None:
-        return f"{found}; no formats in the data"
+        return f"{found}; {NO_FORMATS}"
     text = found + ("" if video_files else f"; planned default: {overview['default']}")
     text += f"; Deno at download: {overview['deno']}"
     if overview["signed_in"]:
@@ -3327,7 +3337,9 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
     lines = [head]
     overview = video_overview(info)
     if overview is None:
-        return lines + ["no formats in the data"]
+        return lines + [f"{NO_FORMATS}: " + ("YouTube sent none when the data was saved; make "
+                                             "the page again with --overwrite" if saved
+                                             else f"{NO_FORMATS_WHY}; try again later")]
     variants = overview["variants"]
     if variants:
         lines.append("image (mp4, AV1 else H.264; sizes with the original audio):")
