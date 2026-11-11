@@ -665,14 +665,15 @@ def test_video_formats_without_an_original_language_or_runtime(info):
     info["duration"] = 600   # 1000 kbit/s * 600 s = 75 MB
     info[yt2html.DOWNLOAD_KEY] = {"deno": False}
     tables, rest = video_tables(info)
-    assert tables["image"] == ("image (sizes include the audio: ? aac); "
+    assert tables["image"] == ("image (sizes include the audio: aac); "   # no language
                                "marked: the planned default",
                                [["quality", "resolution", "h264"], ["1080p, 25 fps (1080p25)", "–", "~80 MB"]])
-    assert tables["audio"][1][1] == ["?", "?", "original", "~5 MB"]   # a single track: the original
+    # no language in the data: no code, "unknown"; a single track: the original
+    assert tables["audio"][1][1] == ["–", "unknown", "original", "~5 MB"]
     assert tables["subtitles"][1][1:] == [["by the author", "none"], ["auto-generated", "none"],
                                           ["auto-translated", "none"]]
-    assert summary(info) == "Video formats · up to 1080p, 25 fps · audio: ? original · no subtitles"
-    assert rest == ("not downloaded; planned default: 1080p, 25 fps (1080p25) h264 + ? aac, "
+    assert summary(info) == "Video formats · up to 1080p, 25 fps · audio: original · no subtitles"
+    assert rest == ("not downloaded; planned default: 1080p, 25 fps (1080p25) h264 + aac, "
                     "mp4, ~80 MB; Deno at download: "
                     "no, so YouTube may have offered more formats than listed")
     info[yt2html.DOWNLOAD_KEY] = {"deno": True}
@@ -808,6 +809,19 @@ def test_video_formats_edge_cases(info):
 
 def test_sizes_and_codec_names():
     assert yt2html.human_size(None) == "size unknown"
+    assert yt2html.human_size(999_999) == "<1 MB" and yt2html.human_size(1_000_000) == "~1 MB"
+
+
+def test_small_sizes_are_escaped_on_the_page(info):
+    """"<1 MB" is text: an entity on the page, plain on the screen."""
+    info["formats"] = [vfmt("160", 144, "avc1.4d400c", 300_000),
+                       afmt("140", "mp4a.40.2", 400_000)]
+    html = render(info, video_files=["x [TESTVIDEO01].mp4"], video_size=500_000)
+    section = formats_section(html)[1]
+    assert section.count("&lt;1 MB") == 2 and "<1 MB" not in section   # image and audio cells
+    assert "x [TESTVIDEO01].mp4, &lt;1 MB;" in html
+    assert "h264 + en aac, mp4, &lt;1 MB;" in render(info)   # the planned default in Video file
+    assert yt2html.format_list(info)[2].endswith("h264  <1 MB  (default)")
     assert yt2html.human_size(999_999_999) == "~1000 MB"
     assert yt2html.human_size(1_000_000_000) == "~1.0 GB"
     assert yt2html.codec_name("hvc1.2.4", yt2html.VIDEO_CODECS) == "h265"
@@ -1076,6 +1090,12 @@ def test_format_list_audio_lines(info):
     assert yt2html.format_list(info)[3:] == ["audio (mp4, aac; extra tracks m4a, aac, ~5 MB each):",
                                              "  in the video: pl",   # the first: the main audio
                                              "  tracks: de"]
+    info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB, None, -1),
+                              afmt("140-1", "mp4a.40.2", 5 * MB, "de", -1, **kind("dubbed", "de"))]
+    assert yt2html.format_list(info)[4] == "  in the video: unknown language"   # no role: none marked
+    info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB),
+                              afmt("140-1", "mp4a.40.2", 5 * MB, None, -1)]
+    assert yt2html.format_list(info)[5] == "  dubbed: unknown language"
     # a single track has nothing to mark it by: the original
     info["formats"] = base + [afmt("140", "mp4a.40.2", 5 * MB, "pl", -1)]
     assert yt2html.format_list(info)[3:] == ["audio (mp4, aac):", "  in the video: pl (original)"]

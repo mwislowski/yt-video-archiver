@@ -185,6 +185,8 @@ def test_player_tile_label_gets_the_quality_and_the_language(info):
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
     assert ('data-qualities="{&quot;1920x804&quot;: &quot;1080p&quot;, '
             '&quot;1280x536&quot;: &quot;720p&quot;}" data-language="en-US"') in html
+    info["formats"][2]["language"] = None   # no language in the data: the tile names none
+    assert 'data-language=""' in yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
     del info["formats"]
     assert 'data-qualities="{}" data-language=""' in yt2html.render_page(info, None, {},
                                                                         dt.date(2026, 11, 6))

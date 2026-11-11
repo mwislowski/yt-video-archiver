@@ -2814,8 +2814,11 @@ def format_size(info: dict, fmt: dict) -> int | None:
 
 
 def human_size(size: int | None) -> str:
+    """Approximate: "~1.2 GB", "~609 MB", "<1 MB" below one megabyte."""
     if not size:
         return "size unknown"
+    if size < 1e6:
+        return "<1 MB"
     return f"~{size / 1e9:.1f} GB" if size >= 1e9 else f"~{size / 1e6:.0f} MB"
 
 
@@ -2834,8 +2837,17 @@ def video_formats(info: dict) -> tuple[list[dict], list[dict]]:
     return video, audio
 
 
+UNKNOWN_LANGUAGE = "?"   # the key of a track without a language in the data
+
+
 def audio_language(fmt: dict) -> str:
-    return fmt.get("language") or "?"
+    return fmt.get("language") or UNKNOWN_LANGUAGE
+
+
+def track_text(code: str, codec: str | None = None) -> str:
+    """A track for a text: "en aac", or only "aac" when the language is unknown."""
+    return " ".join(part for part in (None if code == UNKNOWN_LANGUAGE else esc(code), codec)
+                    if part)
 
 
 def is_hls(fmt: dict) -> bool:
@@ -2977,7 +2989,7 @@ def video_overview(info: dict) -> dict | None:
                     cells.append(None)
                     continue
                 f = formats[key] = best(pool)
-                cells.append(", ".join([with_audio(f)] + hdr(f)))
+                cells.append(", ".join([esc(with_audio(f))] + hdr(f)))   # "<1 MB" in HTML
             if hls:
                 named = []
                 for key in ordered(list(dict.fromkeys(
@@ -3010,8 +3022,8 @@ def video_overview(info: dict) -> dict | None:
         pick = variants[0]["format"]
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
              "rows": rows, "picks": picks,
-             "audio": (f"{esc(audio_language(main_audio))} "
-                       f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}"
+             "audio": (track_text(audio_language(main_audio),
+                              codec_name(main_audio.get("acodec"), AUDIO_CODECS))
                        if main_audio else None)}
 
     tracks = set(map(track, audio))
@@ -3027,11 +3039,13 @@ def video_overview(info: dict) -> dict | None:
     tracks = sorted(tracks, key=track_order)
     audio_rows = []
     for key in tracks:
-        cells = [human_size(format_size(info, audio_for(key, codec, premium)))
+        cells = [esc(human_size(format_size(info, audio_for(key, codec, premium))))
                  if audio_for(key, codec, premium) else None
                  for codec, premium in audio_keys]
-        audio_rows.append((esc(key[0]), esc(language_name(info, [f for f in audio
-                                                                  if track(f) == key], key[0])),
+        known = key[0] != UNKNOWN_LANGUAGE   # unknown: no code, the name "unknown"
+        audio_rows.append((esc(key[0]) if known else None,
+                           esc(language_name(info, [f for f in audio if track(f) == key], key[0]))
+                           if known else "unknown",
                            esc(key[1]) if key[1] else None, cells))
     audio_picks = []
     if main_audio:
@@ -3053,9 +3067,8 @@ def video_overview(info: dict) -> dict | None:
 
     if pick:
         default = (f"{rows[picks[0][0]][0]} {key_of(pick)[0]} + "
-                   f"{esc(audio_language(main_audio))} "
-                   f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}, mp4, "
-                   f"{with_audio(pick)}")
+                   f"{track_text(audio_language(main_audio), codec_name(main_audio.get('acodec'), AUDIO_CODECS))}"
+                   f", mp4, {esc(with_audio(pick))}")
     else:
         default = "nothing (no av1 or h264 image up to 1080p with audio)"
 
@@ -3067,7 +3080,7 @@ def video_overview(info: dict) -> dict | None:
         summary.append(f"up to {top}p" + (f", {fps:g} fps" if fps else ""))
     if original:  # then every other track has a role
         roles = [role for _, role in tracks if role != "original"]
-        summary.append("audio: " + " + ".join([f"{esc(original[0])} original"] + [
+        summary.append("audio: " + " + ".join([track_text(original[0], "original")] + [
             f"{roles.count(role)} {esc(role)}" for role in dict.fromkeys(roles)]))
     elif tracks:
         summary.append(f"{len(tracks)} audio track{'s' * (len(tracks) > 1)}")
@@ -3232,7 +3245,7 @@ def about_video_file(info: dict, video_files: list[str] | None = None,
     overview = video_overview(info)
     if video_files:
         found = (f"a video file next to the page: {esc(video_files[0])}"
-                 + (f", {human_size(video_size).lstrip('~')}" if video_size else ""))
+                 + (f", {esc(human_size(video_size).lstrip('~'))}" if video_size else ""))
     else:
         found = "not downloaded"
     if overview is None:
@@ -3242,6 +3255,10 @@ def about_video_file(info: dict, video_files: list[str] | None = None,
     if overview["signed_in"]:
         text += "; signed in, so YouTube offered no HLS formats"
     return text
+
+
+def named_code(code: str) -> str:
+    return "unknown language" if code == UNKNOWN_LANGUAGE else code
 
 
 def format_list(info: dict, saved: bool = False) -> list[str]:
@@ -3284,9 +3301,11 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
     if extra:
         header += "; extra tracks m4a, aac" + (f", {each} each" if each else "")
     lines.append(f"audio ({header}):")
-    lines.append(f"  in the video: {in_video[0]}" + (f" ({in_video[1]})" if in_video[1] else ""))
+    lines.append(f"  in the video: {named_code(in_video[0])}"
+                 + (f" ({in_video[1]})" if in_video[1] else ""))
     for role in dict.fromkeys(role for _, role in extra):
-        lines.append(f"  {role or 'tracks'}: {', '.join(code for code, r in extra if r == role)}")
+        lines.append(f"  {role or 'tracks'}: "
+                     + ", ".join(named_code(code) for code, r in extra if r == role))
     return lines
 
 
@@ -3486,7 +3505,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     overview = video_overview(info)
     in_video = overview["in_video"] if overview else None
     body.insert(0, render_player(video_names(info), video_files, player_qualities(info),
-                                 in_video[0] if in_video else None))
+                                 in_video[0] if in_video and in_video[0] != UNKNOWN_LANGUAGE
+                                 else None))
     body.append(f"<script>{PLAYER_JS}</script>")
 
     return "\n".join([
