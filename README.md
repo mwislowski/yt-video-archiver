@@ -17,6 +17,7 @@ The video itself and its subtitles are **not** downloaded; download them separat
 - **License**, if it is not the standard YouTube one (e.g. Creative Commons).
 - **All comments**, oldest first, every thread fully expanded, with likes, pinned and creator marks.
 - **A player for your downloaded copy of the video**, if it lies next to the page (see below).
+- **Video formats**, folded near the bottom: the qualities, codecs and approximate sizes YouTube offers for the video, its audio tracks (original, dubbed, auto-dubbed, audio description) and subtitles (see below).
 - **About this copy**, folded at the bottom: how this copy was made and what it lacks (see below).
 
 Images are embedded in the file. The page works without JavaScript; a small built-in script only adds the player. It shows in light or dark colours according to the device it is opened on. Not included: YouTube's own video player, recommendations, YouTube's *Video details* (it repeats the facts).
@@ -37,7 +38,7 @@ uv tool update-shell
 | Update the program and yt-dlp | `uv tool upgrade yt-video-archiver` |
 | Remove the program | `uv tool uninstall yt-video-archiver` |
 
-Optional: a JavaScript runtime recommended by yt-dlp for YouTube, e.g. Deno (`winget install DenoLand.Deno`; macOS `brew install deno`). Without it yt-dlp prints warnings about video formats; they are harmless for the page, but YouTube may then offer fewer video formats (relevant for the experimental `--video`).
+Optional: a JavaScript runtime recommended by yt-dlp for YouTube, e.g. Deno (`winget install DenoLand.Deno`; macOS `brew install deno`). Without it yt-dlp prints warnings about video formats; they are harmless for the page, but YouTube may then offer fewer video formats (the *Video formats* section then lists fewer).
 
 ### macOS and Linux
 
@@ -99,7 +100,6 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Task | Command |
 |---|---|
 | Download the video so that the page can play it (mp4 that every browser plays) | `yt-dlp -f "bv*[vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 "URL"` |
-| Experimental: list the video's formats (quality, codecs, sizes, audio languages, subtitles) at the end of *About this copy*; nothing is downloaded yet | `yt2html "URL" --video` |
 | Also keep the raw data | `yt2html "URL" --save-json` |
 | Rebuild a page from saved data (no download; keeps the snapshot date) | `yt2html --from-json "Title [id].info.json"` |
 | The same, by the video id: the saved data is looked up in the folder given with `-o` (default: the current folder) | `yt2html --from-json VIDEO_ID -o "D:\Videos"` |
@@ -209,9 +209,13 @@ With the player closed, timestamps open YouTube as before; `Ctrl`+click always o
 
 **Follow** marks the current sentence in the transcript on the right and keeps it in view as the video plays. With several transcripts on the page, pressing *Follow* again moves to the next one (*Follow 2/3*), and after the last one it turns off. Scrolling the page yourself also ends it; *Follow* then starts again with the transcript you followed last (as long as the page stays open).
 
+### Video formats
+
+Above *About this copy*, *Video formats* is folded to a grey line with a summary (`up to 1080p, 30 fps · audio: en original + 20 auto-dubbed · subtitles: …`). Opened, it lists what YouTube offered when the data was fetched: the image by quality (height and frame rate, e.g. `1080p, 30 fps (1080p30)`) and codec (h264, av1, vp9; formats for YouTube Premium accounts in their own columns; HLS formats only named, since YouTube gives no reliable size for them) with approximate sizes including the audio, the audio tracks by role and language, and the subtitles. The marked cells show what a download of the video would take by default: the best quality up to 1080p in AV1, else H.264, with the original audio, as mp4. The video itself is not downloaded yet; the *Video file* row of *About this copy* says so and notes how the list came about (with or without Deno, signed in or not).
+
 ### About this copy
 
-At the bottom of every page, *About this copy* is folded to a single grey line with the snapshot date, which is there in any case, also with `--no-snapshot`. Opened, it describes this particular copy in rows that are always the same: *Downloaded*, *Page built*, *Playlist*, *Command*, *Video page*, *Markers* (chapters and other timestamp lists such as Walkthroughs), *Info cards*, *Transcript*, *Comments*, *Images*, *Software* and *Disclaimer* (with the experimental `--video`, a last row *Video (experimental)* lists the formats YouTube offers). They tell when and with which versions the copy was made, give the command that makes an equivalent copy again, and say what was left out or did not work, so two copies of the same video can be compared row by row.
+At the bottom of every page, *About this copy* is folded to a single grey line with the snapshot date, which is there in any case, also with `--no-snapshot`. Opened, it describes this particular copy in rows that are always the same: *Downloaded*, *Page built*, *Playlist*, *Command*, *Video page*, *Markers* (chapters and other timestamp lists such as Walkthroughs), *Info cards*, *Transcript*, *Comments*, *Images*, *Video file*, *Software* and *Disclaimer*. They tell when and with which versions the copy was made, give the command that makes an equivalent copy again, and say what was left out or did not work, so two copies of the same video can be compared row by row.
 
 ## Good to know
 

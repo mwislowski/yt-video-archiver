@@ -181,7 +181,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         info[DOWNLOAD_KEY] = {"yt2html": __version__,
                               "cookies_from_browser": browser_name(args.cookies_from_browser),
                               # yt-dlp needs a JavaScript runtime (by default Deno) for
-                              # YouTube's full list of formats; noted for --video
+                              # YouTube's full list of formats (Video formats section)
                               "deno": shutil.which("deno") is not None}
         if not args.no_comments:
             info[LIMIT_KEY] = args.max_comments
@@ -1496,24 +1496,25 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .replies .avatar{width:24px;height:24px;font-size:12px}
 .replies .comment{gap:12px;margin-top:12px}
 .replies .replies{margin-left:36px}
-/* About this copy: folded at the bottom; open, only its title stays in the summary */
-.copy-info{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
+/* Video formats and About this copy: folded at the bottom; open, only the
+   title stays in the summary */
+.formats-info,.copy-info{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
   color:var(--muted);font-size:12px;line-height:18px}
-.copy-info summary{cursor:pointer;width:max-content;max-width:100%}
-.copy-info[open] summary .rest{display:none}
+.formats-info+.copy-info{margin-top:12px}
+.formats-info summary,.copy-info summary{cursor:pointer;width:max-content;max-width:100%}
+.formats-info[open] summary .rest,.copy-info[open] summary .rest{display:none}
 .copy-info dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:10px 0 0 14px}
 .copy-info dt{font-weight:600}
 .copy-info dd{margin:0;overflow-wrap:anywhere}
-/* --video (experimental): tables of formats, scrolled sideways on narrow screens */
-.copy-info dd{min-width:0}
-.copy-info .formats{overflow-x:auto;max-width:100%;margin:0 0 10px}
-.copy-info .formats table{border-collapse:collapse}
-.copy-info .formats caption{caption-side:top;text-align:left;font-weight:600;padding-bottom:2px}
-.copy-info .formats th,.copy-info .formats td{border:1px solid var(--line);padding:1px 8px;
+/* Video formats: tables, scrolled sideways on narrow screens; the planned default marked */
+.formats-info .formats{overflow-x:auto;max-width:100%;margin:10px 0 0 14px}
+.formats-info .formats table{border-collapse:collapse}
+.formats-info .formats caption{caption-side:top;text-align:left;font-weight:600;padding-bottom:2px}
+.formats-info .formats th,.formats-info .formats td{border:1px solid var(--line);padding:1px 8px;
   text-align:left;vertical-align:top;font-weight:400}
-.copy-info .formats th{font-weight:600;white-space:nowrap}
-.copy-info .formats .size{text-align:right;white-space:nowrap}
-.copy-info .formats .pick{color:var(--pick)}
+.formats-info .formats th{font-weight:600;white-space:nowrap}
+.formats-info .formats .size{text-align:right;white-space:nowrap}
+.formats-info .formats .pick{color:var(--pick)}
 .copy-info a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .copy-info .command{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:12px;
   background:var(--chip);border-radius:4px;padding:1px 6px;
@@ -2565,7 +2566,7 @@ def format_transcript_spec(spec: list[tuple[str, str | None]]) -> str:
 
 
 def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
-                  no_avatars: bool, video: bool = False) -> str:
+                  no_avatars: bool) -> str:
     """The command that makes an equivalent copy today: the settings that
     shaped this page, from the download and (for a page built from saved
     data) from the build; defaults are left out, paths never appear."""
@@ -2580,8 +2581,6 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
         parts += ["--max-comments", str(info[LIMIT_KEY])]
     if CARDS_KEY not in info:
         parts.append("--no-cards")
-    if video:
-        parts.append("--video")
     if no_avatars:
         parts.append("--no-avatars")
     versions = format_transcript_spec(spec if TRANSCRIPT_KEY in info else [])
@@ -2801,6 +2800,30 @@ def is_hls(fmt: dict) -> bool:
     return str(fmt.get("protocol") or "").startswith("m3u8")
 
 
+# The kind of an audio track, as YouTube writes it into each format's address
+# ("xtags=acont%3Ddubbed-auto%3Alang%3Dpl"): the names the row shows, in the
+# order of its rows. A kind not listed here is shown as YouTube names it.
+AUDIO_KINDS = {"original": "original", "dubbed": "dubbed", "dubbed-auto": "auto-dubbed",
+               "descriptive": "descriptive"}
+AUDIO_ROLES = tuple(AUDIO_KINDS.values())
+# The planned default goes up to this height (higher only when chosen).
+DEFAULT_MAX_HEIGHT = 1080
+
+
+def audio_kind(fmt: dict) -> str | None:
+    """YouTube's kind of the audio track (acont: original, dubbed, dubbed-auto,
+    descriptive) from the xtags of the format's address (a query parameter,
+    or a path part in HLS addresses); None without it. Undocumented, so the
+    row falls back to yt-dlp's language preference when it is missing."""
+    for key in ("url", "manifest_url"):
+        found = re.search(r"xtags[=/]([^&/?#]+)", str(fmt.get(key) or ""))
+        if found:
+            tags = dict(part.partition("=")[::2]
+                        for part in urllib.parse.unquote(found.group(1)).split(":"))
+            return tags.get("acont")
+    return None
+
+
 def is_premium(fmt: dict) -> bool:
     """Formats YouTube gives only to Premium accounts (e.g. 1080p with a higher
     bitrate); yt-dlp says "Premium" in the format note."""
@@ -2808,11 +2831,13 @@ def is_premium(fmt: dict) -> bool:
 
 
 def video_overview(info: dict) -> dict | None:
-    """The formats YouTube offers for this video, for deciding how --video will
-    download, as tables: image (heights × codecs, sizes with the main audio),
-    audio (languages × codecs), subtitles; then what the planned defaults
-    (H.264, original audio, mp4) would take and whether yt-dlp had Deno (a
-    JavaScript runtime) for the full list. None when there are no formats."""
+    """The formats YouTube offers for this video, as tables: image (quality,
+    i.e. height and frame rate, × codecs; sizes with the main audio), audio
+    (tracks: language and role × codecs), subtitles; the planned default
+    (AV1 first, H.264 as a fallback, up to 1080p, with the main audio, mp4),
+    marked in the tables; a one-line summary; whether yt-dlp had Deno (a
+    JavaScript runtime) for the full list and was signed in. None when there
+    are no formats."""
     video, audio = video_formats(info)
     if not video and not audio:
         return None
@@ -2821,22 +2846,42 @@ def video_overview(info: dict) -> dict | None:
     hls = [f for f in video if is_hls(f)]
     video = [f for f in video if not is_hls(f)]
     audio = [f for f in audio if not is_hls(f)] or audio
-    original = next((f.get("language") for f in audio if f.get("language_preference") == 10), None)
+    # Audio tracks: (language, role). The role is YouTube's kind of track;
+    # without it, yt-dlp's language preference: 10 the original, -10 an
+    # audio description, the rest dubbed when an original is known.
+    has_original = any(audio_kind(f) == "original" or f.get("language_preference") == 10
+                       for f in audio)
+
+    def role_of(f):
+        kind = audio_kind(f)
+        if kind:
+            return AUDIO_KINDS.get(kind, kind)
+        if f.get("language_preference") == 10:
+            return "original"
+        if f.get("language_preference") == -10:
+            return "descriptive"
+        return "dubbed" if has_original else None
+
+    def track(f):
+        return audio_language(f), role_of(f)
+
+    original = next((track(f) for f in audio if role_of(f) == "original"), None)
 
     def best(formats):
         return max(formats, key=lambda f: (f.get("fps") or 0, format_size(info, f) or 0))
 
-    def audio_for(language, codec=None, premium=False):
-        pool = [f for f in audio if audio_language(f) == language and is_premium(f) == premium
+    def audio_for(key, codec=None, premium=False):
+        pool = [f for f in audio if track(f) == key and is_premium(f) == premium
                 and (codec is None or codec_name(f.get("acodec"), AUDIO_CODECS) == codec)]
         return best(pool) if pool else None
 
     # the main audio and the planned default leave Premium formats out
     regular_audio = [f for f in audio if not is_premium(f)]
-    # the original language first (aac, else any codec); a dub only when nothing else
-    first = original or (audio_language(audio[0]) if audio else "?")
-    main_audio = audio_for(first, "aac") or audio_for(first) or (
-        best(regular_audio) if regular_audio else None)
+    # the original first (aac, else any codec); else an ordinary track, an
+    # audio description only when there is nothing else
+    first = original or (track(audio[0]) if audio else None)
+    spoken = [f for f in regular_audio if role_of(f) != "descriptive"] or regular_audio
+    main_audio = audio_for(first, "aac") or audio_for(first) or (best(spoken) if spoken else None)
     audio_bytes = format_size(info, main_audio) if main_audio else 0
     known = [(codec, premium) for codec in ("h264", "av1", "vp9", "h265")
              for premium in (False, True)]
@@ -2856,24 +2901,26 @@ def video_overview(info: dict) -> dict | None:
     def ordered(keys):
         return [k for k in known if k in keys] + [k for k in keys if k not in known]
 
+    def with_audio(f):  # the size of a video format together with the main audio
+        size = format_size(info, f)
+        return human_size(size + (audio_bytes or 0) if size else None)
+
     columns = ordered(list(dict.fromkeys(key_of(f) for f in video)))
-    rows = []
+    rows, chosen = [], []   # chosen: per row (height, {column key: format}), DASH only
     for height in sorted({f["height"] for f in video + hls}, reverse=True):
         # one row per frame rate at this height (most often just one)
         rates = sorted({f.get("fps") or 0 for f in video if f["height"] == height},
                        reverse=True) or [None]
         for i, fps in enumerate(rates):
-            cells = []
+            cells, formats = [], {}
             for key in columns:
                 pool = [f for f in video if f["height"] == height and key_of(f) == key
                         and (f.get("fps") or 0) == fps]
                 if not pool:
                     cells.append(None)
                     continue
-                f = best(pool)
-                size = format_size(info, f)
-                cells.append(", ".join([human_size(size + (audio_bytes or 0) if size else None)]
-                                       + hdr(f)))
+                f = formats[key] = best(pool)
+                cells.append(", ".join([with_audio(f)] + hdr(f)))
             if hls:
                 named = []
                 for key in ordered(list(dict.fromkeys(
@@ -2882,39 +2929,47 @@ def video_overview(info: dict) -> dict | None:
                     named.append(" ".join([label(key)] + extras(f)))
                 # HLS once per height, in its first row
                 cells.append((", ".join(named) or None) if i == 0 else None)
-            rows.append((f"{height}p" + (f", {fps:g} fps" if fps else ""), cells))
-    # AV1 first, H.264 as a fallback: the cell each row would take (marked)
-    picks = []
-    for r, (_, cells) in enumerate(rows):
-        for key in (("av1", False), ("h264", False)):
-            if key in columns and cells[columns.index(key)] is not None:
-                picks.append((r, columns.index(key)))
-                break
+            rows.append((quality_label(height, fps), cells))
+            chosen.append((height, formats))
+    # The planned default: the best quality up to 1080p that has AV1 or H.264
+    # (the quality first), then AV1 there, else H.264; Premium never.
+    picks, pick = [], None
+    for r, (height, formats) in enumerate(chosen if main_audio else []):
+        if height > DEFAULT_MAX_HEIGHT:
+            continue
+        key = next((k for k in (("av1", False), ("h264", False)) if k in formats), None)
+        if key:
+            picks.append((r, columns.index(key)))
+            pick = formats[key]
+            break
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
              "rows": rows, "picks": picks,
              "audio": (f"{esc(audio_language(main_audio))} "
                        f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}"
                        if main_audio else None)}
 
+    tracks = set(map(track, audio))
     audio_keys = [(codec, premium) for premium in (False, True) for codec in ("aac", "opus")
-                  if any(audio_for(language, codec, premium)
-                         for language in {audio_language(f) for f in audio})]
-    languages = list(dict.fromkeys(audio_language(f) for f in audio))
-    if original in languages:  # the original first
-        languages.remove(original)
-        languages.insert(0, original)
+                  if any(audio_for(key, codec, premium) for key in tracks)]
+
+    def track_order(key):  # by role (known ones first, in their order), then language
+        language, role = key
+        rank = (AUDIO_ROLES.index(role) if role in AUDIO_ROLES
+                else len(AUDIO_ROLES) + (role is None))
+        return rank, role or "", language
+
+    tracks = sorted(tracks, key=track_order)
     audio_rows = []
-    for language in languages:
-        role = "original" if language == original else "dubbed" if original else None
-        cells = [human_size(format_size(info, audio_for(language, codec, premium)))
-                 if audio_for(language, codec, premium) else None
+    for key in tracks:
+        cells = [human_size(format_size(info, audio_for(key, codec, premium)))
+                 if audio_for(key, codec, premium) else None
                  for codec, premium in audio_keys]
-        audio_rows.append((esc(language), role, cells))
+        audio_rows.append((esc(key[0]), esc(key[1]) if key[1] else None, cells))
     audio_picks = []
     if main_audio:
         key = (codec_name(main_audio.get("acodec"), AUDIO_CODECS), False)
         if key in audio_keys:
-            audio_picks.append((languages.index(audio_language(main_audio)), audio_keys.index(key)))
+            audio_picks.append((tracks.index(track(main_audio)), audio_keys.index(key)))
     audio_table = {"columns": [codec + (" Premium" if premium else "")
                                for codec, premium in audio_keys], "rows": audio_rows,
                    "picks": audio_picks}
@@ -2928,43 +2983,59 @@ def video_overview(info: dict) -> dict | None:
                  ("auto-generated", esc(", ".join(origs)) if origs else "none"),
                  ("auto-translated", f"{translated} languages" if translated > 0 else "none")]
 
-    h264 = [f for f in video if codec_name(f.get("vcodec"), VIDEO_CODECS) == "h264"
-            and not is_premium(f)]
-    if h264 and main_audio:
-        pick = max(h264, key=lambda f: (f["height"], f.get("fps") or 0, format_size(info, f) or 0))
-        size = format_size(info, pick)
-        default = (f"{pick['height']}p h264 + {esc(audio_language(main_audio))} "
+    if pick:
+        default = (f"{rows[picks[0][0]][0]} {key_of(pick)[0]} + "
+                   f"{esc(audio_language(main_audio))} "
                    f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}, mp4, "
-                   f"{human_size(size + (audio_bytes or 0) if size else None)}")
+                   f"{with_audio(pick)}")
     else:
-        default = "nothing (no h264 image with audio)"
-    # the rule to try out: AV1 first, H.264 as a fallback, up to 1080p
-    av1 = [f for f in video if codec_name(f.get("vcodec"), VIDEO_CODECS) == "av1"
-           and not is_premium(f) and f["height"] <= 1080]
-    candidates = av1 or [f for f in h264 if f["height"] <= 1080]
-    if candidates and main_audio:
-        pick = max(candidates, key=lambda f: (f["height"], f.get("fps") or 0,
-                                              format_size(info, f) or 0))
-        size = format_size(info, pick)
-        default_av1 = (f"{pick['height']}p {'av1' if av1 else 'h264 (no AV1)'} + "
-                       f"{esc(audio_language(main_audio))} "
-                       f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}, mp4, "
-                       f"{human_size(size + (audio_bytes or 0) if size else None)}")
-    else:
-        default_av1 = "nothing (no av1 or h264 image with audio)"
-    deno = (info.get(DOWNLOAD_KEY) or {}).get("deno")
+        default = "nothing (no av1 or h264 image up to 1080p with audio)"
+
+    # The summary: the top quality, the audio tracks by role, the subtitles.
+    summary = []
+    if video or hls:
+        top = max(f["height"] for f in video + hls)
+        fps = max((f.get("fps") or 0 for f in video + hls if f["height"] == top), default=0)
+        summary.append(f"up to {top}p" + (f", {fps:g} fps" if fps else ""))
+    if original:  # then every other track has a role
+        roles = [role for _, role in tracks if role != "original"]
+        summary.append("audio: " + " + ".join([f"{esc(original[0])} original"] + [
+            f"{roles.count(role)} {esc(role)}" for role in dict.fromkeys(roles)]))
+    elif tracks:
+        summary.append(f"{len(tracks)} audio track{'s' * (len(tracks) > 1)}")
+
+    def named(languages, what):
+        return f"{esc(', '.join(languages)) if len(languages) <= 3 else len(languages)} {what}"
+    parts = ([named(manual, "by the author")] * bool(manual) + [named(origs, "auto-generated")]
+             * bool(origs) + [f"{translated} auto-translated"] * (translated > 0))
+    summary.append("subtitles: " + " + ".join(parts) if parts else "no subtitles")
+
+    download = info.get(DOWNLOAD_KEY) or {}
+    deno = download.get("deno")
     return {"image": image, "audio": audio_table, "subtitles": subtitles, "default": default,
-            "default_av1": default_av1,
+            "summary": " · ".join(summary),
             "deno": ("yes" if deno else
                      "unknown (data saved by an older version)" if deno is None else
-                     "no, so YouTube may have offered more formats than listed")}
+                     "no, so YouTube may have offered more formats than listed"),
+            "signed_in": bool(download.get("cookies_from_browser"))}
+
+
+def quality_label(height: int, fps: float | None) -> str:
+    """The quality of a row of the image table, with the parameter that will
+    choose it ("1080p, 30 fps (1080p30)"); a height offered only as HLS
+    (fps None) has no parameter, since only single-file formats are chosen."""
+    if fps is None:
+        return f"{height}p"
+    name = f"{height}p" + (f"{fps:g}" if fps else "")
+    return f"{height}p" + (f", {fps:g} fps" if fps else "") + f" ({name})"
 
 
 def formats_table(title: str, head: list[str], rows: list[list], sizes: range = range(0),
                   picks: set = frozenset()) -> str:
-    """A small table of the --video overview; an empty cell is a dash. Columns
-    in `sizes` hold sizes: right-aligned, never wrapped; the rest wraps. Cells
-    in `picks` ((row, column) of the data rows) are what the rule would take."""
+    """A small table of the Video formats section; an empty cell is a dash.
+    Columns in `sizes` hold sizes: right-aligned, never wrapped; the rest
+    wraps. Cells in `picks` ((row, column) of the data rows) are the planned
+    default."""
     def cell(tag, r, i, value):
         classes = " ".join(["size"] * (i in sizes) + ["pick"] * ((r, i) in picks))
         attribute = f' class="{classes}"' if classes else ""
@@ -2976,62 +3047,74 @@ def formats_table(title: str, head: list[str], rows: list[list], sizes: range = 
             + "</table></div>")
 
 
-def about_video(info: dict) -> str:
-    """The Video (experimental) row: the overview as tables (temporary)."""
+MARKED = "marked: the planned default"
+
+
+def render_video_formats(info: dict) -> str:
+    """The Video formats section above "About this copy": folded to one grey
+    line with the summary; open, the tables. Nothing when there are no formats."""
     overview = video_overview(info)
     if overview is None:
-        return "no formats in the data"
+        return ""
     image, audio = overview["image"], overview["audio"]
     parts = []
     if image["rows"]:
         title = "image" + (f" (sizes include the audio: {image['audio']})" if image["audio"] else "")
         if image["picks"]:
-            title += "; marked: AV1 first, H.264 as a fallback"
+            title += "; " + MARKED
         sized = len(image["columns"]) - image["columns"][-1:].count("HLS (sizes unknown)")
-        parts.append(formats_table(title, ["height"] + image["columns"],
-                                   [[height, *cells] for height, cells in image["rows"]],
+        parts.append(formats_table(title, ["quality"] + image["columns"],
+                                   [[quality, *cells] for quality, cells in image["rows"]],
                                    range(1, 1 + sized),
                                    {(r, 1 + c) for r, c in image["picks"]}))
-    else:
-        parts.append("image: none")
     if audio["rows"]:
-        parts.append(formats_table("audio", ["language", "role"] + audio["columns"],
+        parts.append(formats_table("audio" + ("; " + MARKED) * bool(audio["picks"]),
+                                   ["language", "role"] + audio["columns"],
                                    [[language, role, *cells]
                                     for language, role, cells in audio["rows"]],
                                    range(2, 2 + len(audio["columns"])),
                                    {(r, 2 + c) for r, c in audio["picks"]}))
-    else:
-        parts.append("audio: none")
     parts.append(formats_table("subtitles", ["kind", "languages"],
                                [list(row) for row in overview["subtitles"]]))
-    parts.append(f"planned default: {overview['default']}<br>"
-                 f"planned default, AV1 first (up to 1080p): {overview['default_av1']}<br>"
-                 f"Deno at download: {overview['deno']}")
-    return "".join(parts)
+    return ('<details class="formats-info"><summary>Video formats<span class="rest"> · '
+            f'{overview["summary"]}</span></summary>\n' + "".join(parts) + "</details>")
+
+
+def about_video_file(info: dict) -> str:
+    """The "Video file" row: whether the video was downloaded (not yet: the
+    page alone), what the planned default would take, and how the list of
+    formats came about (Deno, signed in)."""
+    overview = video_overview(info)
+    if overview is None:
+        return "not downloaded; no formats in the data"
+    text = (f"not downloaded; planned default: {overview['default']}; "
+            f"Deno at download: {overview['deno']}")
+    if overview["signed_in"]:
+        text += "; signed in, so YouTube offered no HLS formats"
+    return text
 
 
 def render_about(info: dict, archived: dt.date, thumbnail: str | None,
                  avatar_uris: dict[str, str], extra_images: dict[str, str], spec: list,
                  theme: str, show_snapshot: bool, no_avatars: bool, from_json: bool,
-                 built: dt.datetime, video: bool = False) -> str:
+                 built: dt.datetime) -> str:
     """"About this copy": how this copy was made, what worked and what did not.
     Every row is always there, in a fixed order (see docs/DEVELOPMENT.md)."""
     rows = [
         ("Downloaded", about_downloaded(info, archived)),
         ("Page built", about_page_built(from_json, built)),
         ("Playlist", about_playlist(info)),
-        ("Command", about_command(info, spec, theme, show_snapshot, no_avatars, video)),
+        ("Command", about_command(info, spec, theme, show_snapshot, no_avatars)),
         ("Video page", about_video_page(info)),
         ("Markers", about_markers(info)),
         ("Info cards", about_cards(info)),
         ("Transcript", about_transcript(info, spec)),
         ("Comments", about_comments(info)),
         ("Images", about_images(info, thumbnail, avatar_uris, extra_images, no_avatars)),
+        ("Video file", about_video_file(info)),
         ("Software", about_software()),
         ("Disclaimer", esc(DISCLAIMER)),
     ]
-    if video:  # experimental, only with --video
-        rows.append(("Video (experimental)", about_video(info)))
     items = "\n".join(f"<dt>{name}</dt><dd>{value}</dd>" for name, value in rows)
     return ('<details class="copy-info"><summary>About this copy<span class="rest"> · '
             f'Snapshot {archived.strftime(DATE_FORMAT)} · made with yt2html</span></summary>\n'
@@ -3065,7 +3148,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 extra_images: dict[str, str] | None = None,
                 theme: str = "auto", no_avatars: bool = False,
                 from_json: bool = False, built: dt.datetime | None = None,
-                video_files: list[str] | None = None, video: bool = False) -> str:
+                video_files: list[str] | None = None) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
     `avatar_uris` and `extra_images` ({image url: data URI}). `no_avatars`,
     `from_json` and `built` (the build time, default now) are only described
@@ -3165,9 +3248,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
             body.append(render_comment(c, children, avatars, video_id, duration, uploader))
         body.append("</section>")
 
+    body.append(render_video_formats(info))
     body.append(render_about(info, archived, thumbnail, avatar_uris, extra_images or {},
                              spec, theme, show_snapshot, no_avatars, from_json,
-                             built or dt.datetime.now(), video))
+                             built or dt.datetime.now()))
     body.append("</main>")
     body.insert(0, render_player(video_names(info), video_files))
     body.append(f"<script>{PLAYER_JS}</script>")
@@ -3859,7 +3943,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None)
                        transcript_spec=args.transcript,
                        extra_images=extra_images,
                        no_avatars=args.no_avatars, from_json=args.from_json,
-                       video_files=video_files_for(info, output_dir), video=args.video)
+                       video_files=video_files_for(info, output_dir))
     write_atomically(target, page)
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
@@ -4049,10 +4133,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--no-cards", action="store_true",
                         help="leave out the author's info cards (nothing is read or "
                              "downloaded for them)")
-    parser.add_argument("--video", action="store_true",
-                        help="experimental: describe the video's formats (quality, codecs, "
-                             "sizes, audio languages, subtitles) at the end of 'About this "
-                             "copy'; nothing is downloaded yet")
     parser.add_argument("--no-avatars", action="store_true",
                         help="do not embed the avatars of comment authors (letter "
                              "placeholders instead); the channel's avatar stays")
