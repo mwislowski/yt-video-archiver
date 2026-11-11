@@ -1386,6 +1386,7 @@ CSS = """
   --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
   --accent:#0e8f85; --on-accent:#fff; --accent-text:#3cc8b4;
   --accent-soft:rgba(14,143,133,.28); --hover:brightness(1.15);
+  --pick:#ffd54a;
   --player-w:clamp(320px,40vw,720px);
   color-scheme:dark;
 }
@@ -1512,6 +1513,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
   text-align:left;vertical-align:top;font-weight:400}
 .copy-info .formats th{font-weight:600;white-space:nowrap}
 .copy-info .formats .size{text-align:right;white-space:nowrap}
+.copy-info .formats .pick{color:var(--pick)}
 .copy-info a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .copy-info .command{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:12px;
   background:var(--chip);border-radius:4px;padding:1px 6px;
@@ -1627,7 +1629,7 @@ LIGHT_VARIABLES = """
   --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
   --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
   --accent:#0f766e; --accent-text:#0f766e; --accent-soft:rgba(15,118,110,.16);
-  --hover:brightness(.92);
+  --hover:brightness(.92); --pick:#9a6700;
   color-scheme:light;
 """
 
@@ -2831,7 +2833,9 @@ def video_overview(info: dict) -> dict | None:
 
     # the main audio and the planned default leave Premium formats out
     regular_audio = [f for f in audio if not is_premium(f)]
-    main_audio = audio_for(original or (audio_language(audio[0]) if audio else "?"), "aac") or (
+    # the original language first (aac, else any codec); a dub only when nothing else
+    first = original or (audio_language(audio[0]) if audio else "?")
+    main_audio = audio_for(first, "aac") or audio_for(first) or (
         best(regular_audio) if regular_audio else None)
     audio_bytes = format_size(info, main_audio) if main_audio else 0
     known = [(codec, premium) for codec in ("h264", "av1", "vp9", "h265")
@@ -2879,8 +2883,15 @@ def video_overview(info: dict) -> dict | None:
                 # HLS once per height, in its first row
                 cells.append((", ".join(named) or None) if i == 0 else None)
             rows.append((f"{height}p" + (f", {fps:g} fps" if fps else ""), cells))
+    # AV1 first, H.264 as a fallback: the cell each row would take (marked)
+    picks = []
+    for r, (_, cells) in enumerate(rows):
+        for key in (("av1", False), ("h264", False)):
+            if key in columns and cells[columns.index(key)] is not None:
+                picks.append((r, columns.index(key)))
+                break
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
-             "rows": rows,
+             "rows": rows, "picks": picks,
              "audio": (f"{esc(audio_language(main_audio))} "
                        f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}"
                        if main_audio else None)}
@@ -2899,8 +2910,14 @@ def video_overview(info: dict) -> dict | None:
                  if audio_for(language, codec, premium) else None
                  for codec, premium in audio_keys]
         audio_rows.append((esc(language), role, cells))
+    audio_picks = []
+    if main_audio:
+        key = (codec_name(main_audio.get("acodec"), AUDIO_CODECS), False)
+        if key in audio_keys:
+            audio_picks.append((languages.index(audio_language(main_audio)), audio_keys.index(key)))
     audio_table = {"columns": [codec + (" Premium" if premium else "")
-                               for codec, premium in audio_keys], "rows": audio_rows}
+                               for codec, premium in audio_keys], "rows": audio_rows,
+                   "picks": audio_picks}
 
     manual = [lang for lang, fmts in (info.get("subtitles") or {}).items()
               if fmts and lang != "live_chat"]
@@ -2921,23 +2938,41 @@ def video_overview(info: dict) -> dict | None:
                    f"{human_size(size + (audio_bytes or 0) if size else None)}")
     else:
         default = "nothing (no h264 image with audio)"
+    # the rule to try out: AV1 first, H.264 as a fallback, up to 1080p
+    av1 = [f for f in video if codec_name(f.get("vcodec"), VIDEO_CODECS) == "av1"
+           and not is_premium(f) and f["height"] <= 1080]
+    candidates = av1 or [f for f in h264 if f["height"] <= 1080]
+    if candidates and main_audio:
+        pick = max(candidates, key=lambda f: (f["height"], f.get("fps") or 0,
+                                              format_size(info, f) or 0))
+        size = format_size(info, pick)
+        default_av1 = (f"{pick['height']}p {'av1' if av1 else 'h264 (no AV1)'} + "
+                       f"{esc(audio_language(main_audio))} "
+                       f"{codec_name(main_audio.get('acodec'), AUDIO_CODECS)}, mp4, "
+                       f"{human_size(size + (audio_bytes or 0) if size else None)}")
+    else:
+        default_av1 = "nothing (no av1 or h264 image with audio)"
     deno = (info.get(DOWNLOAD_KEY) or {}).get("deno")
     return {"image": image, "audio": audio_table, "subtitles": subtitles, "default": default,
+            "default_av1": default_av1,
             "deno": ("yes" if deno else
                      "unknown (data saved by an older version)" if deno is None else
                      "no, so YouTube may have offered more formats than listed")}
 
 
-def formats_table(title: str, head: list[str], rows: list[list], sizes: range = range(0)) -> str:
+def formats_table(title: str, head: list[str], rows: list[list], sizes: range = range(0),
+                  picks: set = frozenset()) -> str:
     """A small table of the --video overview; an empty cell is a dash. Columns
-    in `sizes` hold sizes: right-aligned, never wrapped; the rest wraps."""
-    def cell(tag, i, value):
-        size = ' class="size"' if i in sizes else ""
-        return f"<{tag}{size}>{value if value is not None else '–'}</{tag}>"
+    in `sizes` hold sizes: right-aligned, never wrapped; the rest wraps. Cells
+    in `picks` ((row, column) of the data rows) are what the rule would take."""
+    def cell(tag, r, i, value):
+        classes = " ".join(["size"] * (i in sizes) + ["pick"] * ((r, i) in picks))
+        attribute = f' class="{classes}"' if classes else ""
+        return f"<{tag}{attribute}>{value if value is not None else '–'}</{tag}>"
     return (f'<div class="formats"><table><caption>{title}</caption>'
-            "<tr>" + "".join(cell("th", i, h) for i, h in enumerate(head)) + "</tr>"
-            + "".join("<tr>" + "".join(cell("td", i, v) for i, v in enumerate(row)) + "</tr>"
-                      for row in rows)
+            "<tr>" + "".join(cell("th", -1, i, h) for i, h in enumerate(head)) + "</tr>"
+            + "".join("<tr>" + "".join(cell("td", r, i, v) for i, v in enumerate(row)) + "</tr>"
+                      for r, row in enumerate(rows))
             + "</table></div>")
 
 
@@ -2950,22 +2985,27 @@ def about_video(info: dict) -> str:
     parts = []
     if image["rows"]:
         title = "image" + (f" (sizes include the audio: {image['audio']})" if image["audio"] else "")
+        if image["picks"]:
+            title += "; marked: AV1 first, H.264 as a fallback"
         sized = len(image["columns"]) - image["columns"][-1:].count("HLS (sizes unknown)")
         parts.append(formats_table(title, ["height"] + image["columns"],
                                    [[height, *cells] for height, cells in image["rows"]],
-                                   range(1, 1 + sized)))
+                                   range(1, 1 + sized),
+                                   {(r, 1 + c) for r, c in image["picks"]}))
     else:
         parts.append("image: none")
     if audio["rows"]:
         parts.append(formats_table("audio", ["language", "role"] + audio["columns"],
                                    [[language, role, *cells]
                                     for language, role, cells in audio["rows"]],
-                                   range(2, 2 + len(audio["columns"]))))
+                                   range(2, 2 + len(audio["columns"])),
+                                   {(r, 2 + c) for r, c in audio["picks"]}))
     else:
         parts.append("audio: none")
     parts.append(formats_table("subtitles", ["kind", "languages"],
                                [list(row) for row in overview["subtitles"]]))
     parts.append(f"planned default: {overview['default']}<br>"
+                 f"planned default, AV1 first (up to 1080p): {overview['default_av1']}<br>"
                  f"Deno at download: {overview['deno']}")
     return "".join(parts)
 

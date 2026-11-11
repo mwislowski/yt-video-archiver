@@ -124,7 +124,8 @@ def test_themes(info):
 def test_no_fixed_colours_outside_the_variables():
     # New styles must use CSS variables, or they break one of the themes.
     allowed = {"#0f0f0f", "#f1f1f1", "#aaaaaa", "#272727", "#3f3f3f", "#3ea6ff", "#3a3a3a",
-               "#000", "#ff4e45", "#fff", "#0e8f85", "#3cc8b4"}
+               "#000", "#ff4e45", "#fff", "#0e8f85", "#3cc8b4",
+               "#ffd54a"}  # --pick: what the --video rule would take (experimental)
     import re
     assert set(re.findall(r"#[0-9a-fA-F]{3,6}\b", yt2html.CSS)) <= allowed
 
