@@ -44,7 +44,7 @@ import yt_dlp
 from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
 
 # The program version; pyproject.toml reads it from here (single source).
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 # --------------------------------------------------------------------------
 # Configuration

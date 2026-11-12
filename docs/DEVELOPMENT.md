@@ -25,8 +25,8 @@ uv tool install --editable PATH\TO\yt-video-archiver
 An editable install changes the everyday command with every edit, experiments included. For a stable everyday command, install a release instead and work on the code with `uv run yt2html` in the project folder:
 
 ```powershell
-uv tool install git+https://github.com/mwislowski/yt-video-archiver@v0.7.1          # a tested release
-uv tool install --force git+https://github.com/mwislowski/yt-video-archiver@v0.8.0  # later: switch to a newer one
+uv tool install git+https://github.com/mwislowski/yt-video-archiver@v0.8.0          # a tested release
+uv tool install --force git+https://github.com/mwislowski/yt-video-archiver@v0.9.0  # later: switch to a newer one
 ```
 
 After a change in `pyproject.toml` (dependencies, command) add `--reinstall`. To update yt-dlp in the project: `uv lock --upgrade-package yt-dlp`, then `uv sync`, and commit the updated `uv.lock`.

@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-12
+
 ### Added
 
 - *Video formats*, a folded section above *About this copy* on every page: the formats YouTube offers for the video, with a short summary when folded (top quality, language of the original audio) and two small tables: image by quality (YouTube's name, as in its quality menu, and the frame rate; the actual size in a resolution column; with the parameter that will choose it when a download can take it, up to 1080p in AV1 or H.264, e.g. `1080p, 30 fps (1080p30)`) and codec (h264, av1, vp9, h265; HDR; formats for YouTube Premium accounts in their own columns) with approximate sizes including the audio; HLS formats (a playlist of short pieces) only named, since their declared bitrate gives no reliable size; languages: one row per audio track with code, English language name and role (original, dubbed by the author, auto-dubbed by YouTube, audio description; a single track counts as the original; aac and opus) and the subtitles in that language (by the author; auto-generated from that track's speech), subtitles without such audio in rows of their own; the original's language first, then the other languages with audio, then those without, alphabetically; a line on machine translation of subtitles (`machine-translated subtitles: possible in 155 other languages for each row with subtitles`; else `none (no subtitles to translate)`, `unknown (YouTube listed no translation languages)` or `unknown (not read from YouTube; make the page again later)`). The planned default for a later video download (the best quality up to 1080p in AV1, else H.264, with the original audio, mp4) is shown in light blue (darker blue in the light theme; yellow is kept for the choice of a later download); the table captions carry no colour legend, README explains the colours. Sizes below 1 MB show as `<1 MB` (Shorts); a track without a language in the data shows as `unknown`. Without video and audio formats in the data (YouTube sometimes sends only the storyboard images for the seek bar's preview, usually for a short while, e.g. after several requests for the same video) the section says so in one line (`no video or audio formats in the data: …; make the page again later`), and so does `--video-formats`. Works with `--from-json`, since the formats are in the saved data.
@@ -114,7 +116,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.5.0...v0.6.0
