@@ -445,3 +445,44 @@ def test_audio_needs_no_image_within_the_limit(tmp_path, youtube):
     (tmp_path / (page(tmp_path).stem + ".mp4")).write_bytes(b"v")
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "480p,audio:pl"]) == 0
     assert [o["format"] for o in youtube["downloads"]] == ["140-1"]
+
+
+# The player with another audio track ----------------------------------------------
+
+def test_player_audio_switches(info):
+    # none without extra tracks
+    assert 'class="buttons audio"' not in yt2html.render_player(["x"], language="en")
+    html = yt2html.render_player(["x"], language="en-US",
+                                 audio_tracks=[("pl", "T [id].pl.auto-dubbed.m4a"), ("de-DE", "a&b.m4a")])
+    row_html = re.search(r'<div class="buttons audio">(.*?)</div>', html).group(1)
+    assert row_html == (
+        '<button type="button" class="original" data-audio="" aria-pressed="true">en-US</button>'
+        '<button type="button" data-audio="T [id].pl.auto-dubbed.m4a" aria-pressed="false">pl</button>'
+        '<button type="button" data-audio="a&amp;b.m4a" aria-pressed="false">de-DE</button>')
+    assert html.index('class="now-playing"') < html.index('class="buttons audio"')   # the last row
+    # an original of an unknown language
+    assert '>orig</button>' in yt2html.render_player(["x"], audio_tracks=[("pl", "p.m4a")])
+    assert ">a&lt;b</button>" in yt2html.render_player(["x"], audio_tracks=[("a<b", "p.m4a")])
+    # the page: the tracks --video downloaded with it, not files found next to it
+    info["formats"] = json.loads(json.dumps(DUBS))
+    assert 'class="buttons audio"' not in render_page(info)
+    info[yt2html.VIDEO_KEY] = {"date": "2026-11-12", "parameters": "audio:pl", "extra_audio": [
+        {"audio": "pl", "role": "dubbed", "file": "T.pl.dubbed.m4a", "size": 1, "audio_format": "140-1"}]}
+    page_html = render_page(info)
+    assert ('<button type="button" class="original" data-audio="" aria-pressed="true">en</button>'
+            '<button type="button" data-audio="T.pl.dubbed.m4a" aria-pressed="false">pl</button>'
+            in page_html)
+    # its own colour in both themes, the original a little wider
+    assert ".player .buttons.audio button[aria-pressed=true]{background:var(--audio);" in yt2html.CSS
+    assert ".player .buttons.audio button.original{width:72px}" in yt2html.CSS
+    assert "--audio:#5b47c4" in yt2html.LIGHT_VARIABLES
+    # the script: the video muted, the track follows it, a bad file switched off
+    js = yt2html.PLAYER_JS
+    assert "video.muted = true;" in js and "dub = new Audio(encodeURIComponent(button.dataset.audio));" in js
+    assert "button.disabled = true;" in js and "setAudio(panel.querySelector('[data-audio=\"\"]'));" in js
+    assert "if (Math.abs(off) > 0.3) dub.currentTime = video.currentTime;" in js
+    assert "(Math.abs(off) > 0.04 ? (off > 0 ? 0.97 : 1.03) : 1)" in js
+
+
+def render_page(info):
+    return yt2html.render_page(info, None, {}, dt.date(2026, 11, 12))

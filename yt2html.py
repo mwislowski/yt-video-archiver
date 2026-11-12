@@ -1416,7 +1416,7 @@ CSS = """
   --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
   --accent:#0e8f85; --on-accent:#fff; --accent-text:#3cc8b4;
   --accent-soft:rgba(14,143,133,.28); --hover:brightness(1.15);
-  --planned:#9cc3e8; --chosen:#ffd54a;
+  --planned:#9cc3e8; --chosen:#ffd54a; --audio:#6d5bd0;
   --player-w:clamp(320px,40vw,720px);
   color-scheme:dark;
 }
@@ -1608,6 +1608,9 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .player .buttons.follow button.lang{width:40px}
 .player button:disabled{opacity:.45;cursor:default;filter:none}
 .player .buttons.follow button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
+.player .buttons.audio button{width:52px;padding:4px 0;font-size:12px}
+.player .buttons.audio button.original{width:72px}
+.player .buttons.audio button[aria-pressed=true]{background:var(--audio);color:var(--on-accent)}
 .player .now-playing{margin-top:4px;cursor:pointer}
 /* the chapter in a softened accent colour, one line (cut with an ellipsis);
    its line stays reserved while chapters are off, so the sentences never move */
@@ -1662,7 +1665,7 @@ LIGHT_VARIABLES = """
   --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
   --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
   --accent:#0f766e; --accent-text:#0f766e; --accent-soft:rgba(15,118,110,.16);
-  --hover:brightness(.92); --planned:#2f6a9e; --chosen:#9a6700;
+  --hover:brightness(.92); --planned:#2f6a9e; --chosen:#9a6700; --audio:#5b47c4;
   color-scheme:light;
 """
 
@@ -2093,13 +2096,17 @@ VIDEO_EXTENSIONS = ("mp4", "webm", "m4v", "mkv")
 
 
 def render_player(video_names: list[str], video_files: list[str] | None = None,
-                  qualities: dict[str, str] | None = None, language: str | None = None) -> str:
+                  qualities: dict[str, str] | None = None, language: str | None = None,
+                  audio_tracks: list[tuple[str, str]] | None = None) -> str:
     """The player panel; hidden until the script finds a video file next to
     the page: `video_files` first (files with the video's id found next to the
     page when it was built), then the page's own name and `video_names`, each
     with every video extension (for videos downloaded later). `qualities`
     ({"1920x1080": "1080p"}) and `language` (of the audio in the video) give
-    the tile its label once the file's size is known."""
+    the tile its label once the file's size is known. `audio_tracks`
+    ([(code, file)]: the extra tracks --video downloaded with the page) add a
+    row of switches under the others: the original first, then one per
+    track, only one on at a time."""
     speeds = "".join(f'<button type="button" data-speed="{v}" aria-pressed="{str(v == "1").lower()}">'
                      f'{v}×</button>' for v in PLAYER_SPEEDS)
     return (
@@ -2136,7 +2143,13 @@ def render_player(video_names: list[str], video_files: list[str] | None = None,
         '<div class="line prev2"></div><div class="line prev"></div><div class="line current"></div>'
         '<div class="line translation"></div><div class="line next"></div>'
         '<div class="line next2"></div></div>'
-        '</aside>')
+        + (('<div class="buttons audio">'
+            f'<button type="button" class="original" data-audio="" aria-pressed="true">'
+            f'{esc(language or "orig")}</button>'
+            + "".join(f'<button type="button" data-audio="{esc(file)}" aria-pressed="false">'
+                      f'{esc(code)}</button>' for code, file in audio_tracks)
+            + '</div>') if audio_tracks else '')
+        + '</aside>')
 
 
 # The only script of a page: it adds the player when a video file with the
@@ -2432,6 +2445,50 @@ PLAYER_JS = r"""
       button.blur();
     });
   });
+  // Another audio track (an m4a next to the page, downloaded with --video):
+  // the video plays muted and the track follows it; every 250 ms the track
+  // is nudged (3 % faster or slower, inaudible) or, when far off, set to the
+  // video's time. A track that cannot be read is switched off for good.
+  var dub = null;
+  function setAudio(button) {
+    if (dub) { dub.pause(); dub = null; }
+    video.muted = false;
+    if (button.dataset.audio) {
+      dub = new Audio(encodeURIComponent(button.dataset.audio));
+      dub.onerror = function () {
+        button.disabled = true;
+        setAudio(panel.querySelector('[data-audio=""]'));
+      };
+      video.muted = true;
+      dub.currentTime = video.currentTime;
+      dub.playbackRate = video.playbackRate;
+      if (!video.paused) dub.play().catch(function () {});
+    }
+    all('[data-audio]', panel).forEach(function (other) {
+      other.setAttribute('aria-pressed', String(other === button));
+    });
+  }
+  all('[data-audio]', panel).forEach(function (button) {
+    button.addEventListener('click', function () { setAudio(button); button.blur(); });
+  });
+  ['play', 'playing'].forEach(function (event) {
+    video.addEventListener(event, function () {
+      if (!dub) return;
+      dub.currentTime = video.currentTime;
+      dub.play().catch(function () {});
+    });
+  });
+  ['pause', 'waiting', 'ended'].forEach(function (event) {
+    video.addEventListener(event, function () { if (dub) dub.pause(); });
+  });
+  video.addEventListener('seeking', function () { if (dub) dub.currentTime = video.currentTime; });
+  video.addEventListener('ratechange', function () { if (dub) dub.playbackRate = video.playbackRate; });
+  setInterval(function () {
+    if (!dub || video.paused) return;
+    var off = dub.currentTime - video.currentTime;
+    if (Math.abs(off) > 0.3) dub.currentTime = video.currentTime;
+    dub.playbackRate = video.playbackRate * (Math.abs(off) > 0.04 ? (off > 0 ? 0.97 : 1.03) : 1);
+  }, 250);
   seek.addEventListener('input', function () { jump(Number(seek.value)); });
   video.addEventListener('timeupdate', function () {
     seek.value = video.currentTime;
@@ -3640,9 +3697,11 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     body.append("</main>")
     overview = video_overview(info)
     in_video = overview["in_video"] if overview else None
+    extra_audio = [(a["audio"], a["file"])
+                   for a in (info.get(VIDEO_KEY) or {}).get("extra_audio") or []]
     body.insert(0, render_player(video_names(info), video_files, player_qualities(info),
                                  in_video[0] if in_video and in_video[0] != UNKNOWN_LANGUAGE
-                                 else None))
+                                 else None, extra_audio))
     body.append(f"<script>{PLAYER_JS}</script>")
 
     return "\n".join([
