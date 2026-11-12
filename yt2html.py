@@ -3108,17 +3108,22 @@ def video_overview(info: dict) -> dict | None:
         if key in audio_keys:
             audio_picks.append((table_rows.index(rows_of[tracks.index(track(main_audio))]),
                                 audio_keys.index(key)))
-    # Machine translation: YouTube's list of target languages (given only when
-    # the video has subtitles), but the source language.
-    targets = len(info.get(TRANSLATIONS_KEY) or [lang for lang in auto
-                                                 if not lang.endswith("-orig")])
+    # Machine translation: YouTube's list of target languages from the watch
+    # page (given only when the video has subtitles; else yt-dlp's translation
+    # entries), but the source language. Without a number, why: no subtitles,
+    # YouTube's empty list (nothing to do about it), or no list read (try later).
+    listed = info.get(TRANSLATIONS_KEY)
+    targets = len(listed or [lang for lang in auto if not lang.endswith("-orig")])
     translated = max(targets - 1, 0)
+    translation = "machine-translated subtitles: " + (
+        f"possible in {translated} other languages for each row with subtitles" if translated
+        else "none (no subtitles to translate)" if not (manual or auto)
+        else "unknown (not read from YouTube; make the page again later)" if listed is None
+        else "unknown (YouTube listed no translation languages)")
     languages_table = {"columns": [codec + (" Premium" if premium else "")
                                    for codec, premium in audio_keys],
                        "rows": language_rows, "picks": audio_picks,
-                       "translation": (f"machine translation: each subtitles track can be translated "
-                                       f"into {translated} other languages"
-                                       if translated else "machine translation: none")}
+                       "translation": translation}
 
     if pick:
         default = (f"{rows[picks[0][0]][0]} {key_of(pick)[0]} + "

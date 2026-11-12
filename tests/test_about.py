@@ -662,8 +662,8 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
         ["pl", "pl", "dubbed", "~9 MB", "–", "–", "–"]])
     # the subtitles the transcript takes are not marked (no subtitles file by default)
     assert "<td>en</td><td>en</td></tr>" in render(info) and "<span" not in formats_section(render(info))[1]
-    assert translation(info) == ("machine translation: each subtitles track can be translated "
-                                 "into 2 other languages")   # pl, fr
+    assert translation(info) == ("machine-translated subtitles: possible in 2 other languages "
+                                 "for each row with subtitles")   # pl, fr
     # the best quality up to 1080p first (here 50 fps, only in h264), then its codec
     assert rest == ("not downloaded; planned default: 1080p, 50 fps (1080p50) h264 + en aac, "
                     "mp4, ~609 MB; Deno at download: unknown (data saved by an older version)")
@@ -686,7 +686,7 @@ def test_video_formats_without_an_original_language_or_runtime(info):
                                [["quality", "resolution", "h264"], ["1080p, 25 fps (1080p25)", "–", "~80 MB"]])
     # no language in the data: no code, "unknown"; a single track: the original
     assert tables["languages"][1][1] == ["–", "unknown", "original", "~5 MB", "–", "–"]
-    assert translation(info) == "machine translation: none"
+    assert translation(info) == "machine-translated subtitles: none (no subtitles to translate)"
     assert summary(info) == "Video formats · up to 1080p, 25 fps"   # the language is unknown
     assert rest == ("not downloaded; planned default: 1080p, 25 fps (1080p25) h264 + aac, "
                     "mp4, ~80 MB; Deno at download: "
@@ -705,7 +705,9 @@ def test_video_formats_without_an_original_language_or_runtime(info):
     info["automatic_captions"] = {"en-orig": [{}], "en": [{}]}   # en = en-orig, no translation
     # automatic captions of the only audio track, of an unknown language: its row
     assert video_tables(info)[0]["languages"][1][1][-1] == "en"
-    assert translation(info) == "machine translation: none"
+    # subtitles, but no list of translation languages read from the watch page
+    assert translation(info) == ("machine-translated subtitles: unknown (not read from YouTube; "
+                                 "make the page again later)")
 
 
 def kind(acont, lang="en"):
@@ -1276,14 +1278,23 @@ def test_languages_table_joins_subtitles_to_audio(info):
         ["de", "German", "–", "de", "–"],
         ["pl", "Polish", "–", "pl", "–"]]
     assert rows[0][3] == "aac" and all(r[3] == "–" for r in rows if r[2] == "–")   # no size
-    assert translation(info) == ("machine translation: each subtitles track can be translated "
-                                 "into 5 other languages")
+    assert translation(info) == ("machine-translated subtitles: possible in 5 other languages "
+                                 "for each row with subtitles")
     # only the author's subtitles: still translated
     del info["automatic_captions"]
-    assert translation(info) == ("machine translation: each subtitles track can be translated "
-                                 "into 5 other languages")
+    assert translation(info) == ("machine-translated subtitles: possible in 5 other languages "
+                                 "for each row with subtitles")
+    # YouTube's list read, but empty: nothing to do about it
     info[yt2html.TRANSLATIONS_KEY] = {}
-    assert translation(info) == "machine translation: none"
+    assert translation(info) == "machine-translated subtitles: unknown (YouTube listed no translation languages)"
+    # an empty list, but yt-dlp's own translation entries (another source): possible
+    info["automatic_captions"] = {"en-orig": [{}], "en": [{}], "pl": [{}], "de": [{}]}
+    assert "possible in 2 other languages" in translation(info)
+    del info["automatic_captions"]
+    # the list not read: try later
+    info[yt2html.TRANSLATIONS_KEY] = None
+    assert translation(info) == ("machine-translated subtitles: unknown (not read from YouTube; "
+                                 "make the page again later)")
 
 
 def test_languages_table_edge_cases(info):
