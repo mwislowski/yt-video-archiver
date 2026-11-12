@@ -149,14 +149,18 @@ PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TR
 # Fetching data
 # --------------------------------------------------------------------------
 
+# The format yt-dlp is told to "choose" when nothing is downloaded: a single
+# format, so it does not plan to merge image and sound and warn about a missing
+# ffmpeg (needed only to download a video).
+NO_MERGE_FORMAT = "bv*/b/ba"
+
+
 def fetch_formats(url: str, args: argparse.Namespace) -> dict:
     """Only the video's data, for --video-formats: no comments, no watch page.
     Notes, like fetch_info(), whether Deno was there and whether signed in."""
-    # A single-format choice: yt-dlp then does not warn about a missing ffmpeg,
-    # which only matters for a download (merging image and sound).
     opts = {"skip_download": True, "noplaylist": True, "extract_flat": "in_playlist",
             "ignore_no_formats_error": True, "noprogress": True, "quiet": True,
-            "format": "bv*/b/ba"}
+            "format": NO_MERGE_FORMAT}
     if args.cookies_from_browser:
         opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -179,6 +183,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         "getcomments": not args.no_comments,
         # The video is not downloaded, so a missing format must not be fatal.
         "ignore_no_formats_error": True,
+        "format": NO_MERGE_FORMAT,   # no warning about a missing ffmpeg
         "noprogress": True,
         "extractor_args": {
             "youtube": {

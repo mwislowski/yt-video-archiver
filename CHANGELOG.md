@@ -19,6 +19,7 @@ All notable changes to this project. Versions: the second number for new feature
 
 ### Fixed
 
+- Making a page no longer prints yt-dlp's warning `ffmpeg not found. The downloaded format may not be the best available`: a page downloads no video, so it needs no ffmpeg.
 - `--cookies-from-browser` with a profile, keyring or container (`"firefox:PROFILE_FOLDER"`, the syntax of yt-dlp's command line) failed with `unsupported browser`: the whole text went to yt-dlp as the browser name. It is now split as yt-dlp does, and a wrong browser or keyring is reported before anything is downloaded.
 
 ## [0.7.1] - 2026-11-10

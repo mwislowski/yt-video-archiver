@@ -215,6 +215,8 @@ def test_fetch_info_gives_yt_dlp_the_split_spec(monkeypatch, info):
     yt2html.fetch_info("u", yt2html.parse_args(["u", "--cookies-from-browser",
                                                  "firefox:fTW1hk7Y.Profile 1"]))
     assert seen["cookiesfrombrowser"] == ("firefox", "fTW1hk7Y.Profile 1", None, None)
+    # a single format: yt-dlp does not warn about a missing ffmpeg (a page needs none)
+    assert seen["format"] == yt2html.NO_MERGE_FORMAT == "bv*/b/ba"
 
 
 def test_cookies_is_the_short_name(info, capsys):
