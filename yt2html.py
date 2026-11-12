@@ -3077,12 +3077,8 @@ def video_overview(info: dict) -> dict | None:
         return base not in with_audio_languages, base != original_base, base, rank, code
 
     table_rows = sorted(rows_of + list(alone.values()), key=language_order)
-    picked = choose_caption_track(info)   # the subtitles the transcript takes
-    picked = (("author" if picked[0] == "manual" else "auto"), picked[1]) if picked else None
-
     def codes_cell(row, kind):
-        return ", ".join(f'<span class="planned">{esc(code)}</span>' if (kind, code) == picked
-                         else esc(code) for code in row[kind]) or None
+        return esc(", ".join(row[kind])) or None
 
     language_rows = []
     for row in table_rows:
@@ -3115,7 +3111,6 @@ def video_overview(info: dict) -> dict | None:
     languages_table = {"columns": [codec + (" Premium" if premium else "")
                                    for codec, premium in audio_keys],
                        "rows": language_rows, "picks": audio_picks,
-                       "subtitles_marked": bool(picked),
                        "translation": (f"machine translation: each subtitles track can be translated "
                                        f"into {translated} other languages"
                                        if translated else "machine translation: none")}
@@ -3127,26 +3122,15 @@ def video_overview(info: dict) -> dict | None:
     else:
         default = "nothing (no av1 or h264 image up to 1080p with audio)"
 
-    # The summary: the top quality, the audio tracks by role, the subtitles.
+    # The summary, short on purpose: the top quality and the original audio's
+    # language (the tables tell the rest).
     summary = []
     if video or hls:
         top = max(map(quality, video + hls))
         fps = max((f.get("fps") or 0 for f in video + hls if quality(f) == top), default=0)
         summary.append(f"up to {top}p" + (f", {fps:g} fps" if fps else ""))
-    if original:  # then every other track has a role
-        roles = [role for _, role in tracks if role != "original"]
-        summary.append("audio: " + " + ".join([track_text(original[0], "original")] + [
-            f"{roles.count(role)} {esc(role)}" for role in dict.fromkeys(roles)]))
-    elif tracks:
-        summary.append(f"{len(tracks)} audio track{'s' * (len(tracks) > 1)}")
-
-    def named(languages, what):
-        return f"{esc(', '.join(languages)) if len(languages) <= 3 else len(languages)} {what}"
-    # No machine translation here: it comes with any subtitles, and after a "+"
-    # it read as more languages; the line under the languages table explains it.
-    parts = ([named(manual, "by the author")] * bool(manual) + [named(origs, "auto-generated")]
-             * bool(origs))
-    summary.append("subtitles: " + " + ".join(parts) if parts else "no subtitles")
+    if original and original[0] != UNKNOWN_LANGUAGE:
+        summary.append(f"original audio: {esc(original[0])}")
 
     download = info.get(DOWNLOAD_KEY) or {}
     deno = download.get("deno")
@@ -3259,7 +3243,6 @@ def formats_table(title: str, head: list[str], rows: list[list], sizes: range = 
             + "</table></div>")
 
 
-MARKED = "marked: the planned default"
 
 
 # Without video and audio formats (only the storyboard images for the seek
@@ -3282,8 +3265,6 @@ def render_video_formats(info: dict) -> str:
     parts = []
     if image["rows"]:
         title = "image" + (f" (sizes include the audio: {image['audio']})" if image["audio"] else "")
-        if image["picks"]:
-            title += "; " + MARKED
         sized = len(image["columns"]) - image["columns"][-1:].count("HLS (sizes unknown)")
         parts.append(formats_table(title, ["quality", "resolution"] + image["columns"],
                                    [[quality, resolution, *cells]
@@ -3291,16 +3272,15 @@ def render_video_formats(info: dict) -> str:
                                    range(2, 2 + sized),
                                    {(r, 2 + c) for r, c in image["picks"]}))
     if languages["rows"]:
-        marks = (["the planned default"] * bool(languages["picks"])
-                 + ["the transcript's subtitles"] * languages["subtitles_marked"])
-        parts.append(formats_table("languages" + ("; marked: " + " and ".join(marks)) * bool(marks),
+        parts.append(formats_table("languages",
                                    ["code", "language", "audio"] + languages["columns"]
                                    + ["subtitles by the author", "auto-generated subtitles"],
                                    languages["rows"], range(3, 3 + len(languages["columns"])),
                                    {(r, 3 + c) for r, c in languages["picks"]}))
     parts.append(f'<div class="translation">{languages["translation"]}</div>')
-    return ('<details class="formats-info"><summary>Video formats<span class="rest"> · '
-            f'{overview["summary"]}</span></summary>\n' + "".join(parts) + "</details>")
+    rest = f'<span class="rest"> · {overview["summary"]}</span>' if overview["summary"] else ""
+    return (f'<details class="formats-info"><summary>Video formats{rest}</summary>\n'
+            + "".join(parts) + "</details>")
 
 
 def about_video_file(info: dict, video_files: list[str] | None = None,
@@ -3345,7 +3325,9 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
                                              else f"{NO_FORMATS_WHY}; try again later")]
     variants = overview["variants"]
     if variants:
-        lines.append("image (mp4, AV1 else H.264; sizes with the original audio):")
+        audio = overview["image"]["audio"]
+        lines.append("image (mp4, AV1 else H.264" + (f"; sizes include the audio: {audio}" if audio
+                                                     else "") + "):")
         widths = [max(len(v[key]) for v in variants) for key in ("quality", "parameter",
                                                                   "codec", "size")]
         for i, v in enumerate(variants):

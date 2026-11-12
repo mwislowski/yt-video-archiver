@@ -646,8 +646,7 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
     info["automatic_captions"] = {"en-orig": [{}], "en": [{}], "pl": [{}], "fr": [{}]}
     tables, rest = video_tables(info)
     assert list(tables) == ["image", "languages"]
-    assert tables["image"] == ("image (sizes include the audio: en aac); "
-                               "marked: the planned default", [
+    assert tables["image"] == ("image (sizes include the audio: en aac)", [
         ["quality", "resolution", "h264", "av1", "vp9", "vp9 Premium"],
         ["2160p, 25 fps", "–", "–", "–", "~2.5 GB, HDR10", "–"],
         ["1080p, 50 fps (1080p50)", "–", "~609 MB", "–", "–", "–"],    # one row per frame rate
@@ -655,21 +654,20 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
         ["360p, 25 fps (360p25)", "–", "~29 MB", "–", "~24 MB", "–"],
     ])
     # audio and subtitles in one table; the author's "de" has no formats: left out
-    assert tables["languages"] == ("languages; marked: the planned default and the "
-                                   "transcript's subtitles", [
+    assert tables["languages"] == ("languages", [
         ["code", "language", "audio", "aac", "opus", *SUBS],
         ["en", "en", "original", "~9 MB", "~8 MB", "en", "en"],
         ["pl", "pl", "dubbed", "~9 MB", "–", "–", "–"]])
-    # the transcript takes the author's English: marked in its cell
-    assert '<td><span class="planned">en</span></td><td>en</td>' in render(info)
+    # the subtitles the transcript takes are not marked (no subtitles file by default)
+    assert "<td>en</td><td>en</td></tr>" in render(info) and "<span" not in formats_section(render(info))[1]
     assert translation(info) == ("machine translation: each subtitles track can be translated "
                                  "into 2 other languages")   # pl, fr
     # the best quality up to 1080p first (here 50 fps, only in h264), then its codec
     assert rest == ("not downloaded; planned default: 1080p, 50 fps (1080p50) h264 + en aac, "
                     "mp4, ~609 MB; Deno at download: unknown (data saved by an older version)")
     assert picked(info) == {"image": ["~609 MB"], "languages": ["~9 MB"]}
-    assert summary(info) == ("Video formats · up to 2160p, 25 fps · audio: en original + "
-                             "1 dubbed · subtitles: en by the author + en auto-generated")
+    # short on purpose: the top quality and the original audio's language
+    assert summary(info) == "Video formats · up to 2160p, 25 fps · original audio: en"
     html = render(info)   # sizes right-aligned, the rest wraps
     assert '<th class="size">h264</th>' in html and "<th>quality</th>" in html
     assert '<td class="size">~909 MB</td>' in html and "<td>dubbed</td>" in html
@@ -682,13 +680,12 @@ def test_video_formats_without_an_original_language_or_runtime(info):
     info["duration"] = 600   # 1000 kbit/s * 600 s = 75 MB
     info[yt2html.DOWNLOAD_KEY] = {"deno": False}
     tables, rest = video_tables(info)
-    assert tables["image"] == ("image (sizes include the audio: aac); "   # no language
-                               "marked: the planned default",
+    assert tables["image"] == ("image (sizes include the audio: aac)",   # no language
                                [["quality", "resolution", "h264"], ["1080p, 25 fps (1080p25)", "–", "~80 MB"]])
     # no language in the data: no code, "unknown"; a single track: the original
     assert tables["languages"][1][1] == ["–", "unknown", "original", "~5 MB", "–", "–"]
     assert translation(info) == "machine translation: none"
-    assert summary(info) == "Video formats · up to 1080p, 25 fps · audio: original · no subtitles"
+    assert summary(info) == "Video formats · up to 1080p, 25 fps"   # the language is unknown
     assert rest == ("not downloaded; planned default: 1080p, 25 fps (1080p25) h264 + aac, "
                     "mp4, ~80 MB; Deno at download: "
                     "no, so YouTube may have offered more formats than listed")
@@ -707,13 +704,6 @@ def test_video_formats_without_an_original_language_or_runtime(info):
     # automatic captions of the only audio track, of an unknown language: its row
     assert video_tables(info)[0]["languages"][1][1][-1] == "en"
     assert translation(info) == "machine translation: none"
-    # many languages: counted in the summary
-    info["subtitles"] = {lang: [{}] for lang in ("en", "de", "fr", "it")}
-    info["formats"].append(afmt("140-1", "mp4a.40.2", 5 * MB, language="pl", preference=None))
-    assert summary(info).endswith(
-        "2 audio tracks · subtitles: 4 by the author + en auto-generated")
-    info["subtitles"] = {lang: [{}] for lang in ("en", "de", "fr")}   # up to three: named
-    assert summary(info).endswith("subtitles: en, de, fr by the author + en auto-generated")
 
 
 def kind(acont, lang="en"):
@@ -752,9 +742,7 @@ def test_video_formats_order_rows_by_language_then_role(info):
     # the main audio is the original in aac, not the (larger) English description
     assert picked(info)["languages"] == ["~7 MB"]
     assert "planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~107 MB" in rest
-    assert summary(info) == ("Video formats · up to 1080p, 25 fps · audio: en original + "
-                             "3 dubbed + 2 auto-dubbed + 2 descriptive + 1 commentary + "
-                             "1 voice&lt;over · no subtitles")
+    assert summary(info) == "Video formats · up to 1080p, 25 fps · original audio: en"
     # no original known: by language; the mark follows its row
     info["formats"] = [vfmt("137", 1080, "avc1.640028", 100 * MB),
                        afmt("140-0", "mp4a.40.2", 5 * MB, "pl", -1),
@@ -764,11 +752,11 @@ def test_video_formats_order_rows_by_language_then_role(info):
     assert [[r[0], r[2], r[3]] for r in rows[1:]] == [["de", "dubbed", "~8 MB"], ["es", "secondary", "~9 MB"],
                         ["pl", "–", "~5 MB"]]
     assert picked(info)["languages"] == ["~5 MB"]           # the first track in the data
-    assert "· 3 audio tracks ·" in summary(info)
+    assert summary(info) == "Video formats · up to 1080p, 25 fps"   # no original known
     # a single track of another kind: not the original
     info["formats"] = [vfmt("137", 1080, "avc1.640028", 100 * MB),
                        afmt("140", "mp4a.40.2", 5 * MB, "pl", -1, **kind("secondary", "pl"))]
-    assert "· 1 audio track ·" in summary(info)
+    assert summary(info) == "Video formats · up to 1080p, 25 fps"
 
 
 def test_video_formats_main_audio_avoids_audio_descriptions(info):
@@ -805,12 +793,12 @@ def test_video_formats_edge_cases(info):
     assert "audio" not in tables and picked(info) == {}
     assert rest.startswith("not downloaded; planned default: nothing (no av1 or h264 image "
                            "up to 1080p with audio); ")
-    assert summary(info) == "Video formats · up to 360p, 25 fps · no subtitles"
+    assert summary(info) == "Video formats · up to 360p, 25 fps"
     # no image at all
     info["formats"] = [afmt("140", "mp4a.40.2", 9 * MB)]
     tables, rest = video_tables(info)
     assert list(tables) == ["languages"]
-    assert summary(info) == "Video formats · audio: en original · no subtitles"
+    assert summary(info) == "Video formats · original audio: en"
     # unknown size and an unknown codec
     info["formats"] = [vfmt("1", 720, "xyz1.2", None), afmt("2", "opus", None)]
     info.pop("duration", None)
@@ -821,7 +809,14 @@ def test_video_formats_edge_cases(info):
     # no frame rate in the data: the height alone
     info["formats"] = [vfmt("1", 720, "avc1.4d401f", 10 * MB, fps=None)]
     assert video_tables(info)[0]["image"][1][1] == ["720p (720p)", "–", "~10 MB"]
-    assert summary(info) == "Video formats · up to 720p · no subtitles"
+    assert summary(info) == "Video formats · up to 720p"   # no audio
+    # only audio of an unknown language: nothing to sum up, no separator
+    info["formats"] = [afmt("140", "mp4a.40.2", 9 * MB, language=None, preference=None)]
+    assert summary(info) == "Video formats" and '<summary>Video formats</summary>' in render(info)
+    # codes from the data are escaped like every other cell
+    info["subtitles"] = {"x<y": [{}]}
+    inner = formats_section(render(info))[1]
+    assert "x&lt;y" in inner and "x<y" not in inner
 
 
 def test_sizes_and_codec_names():
@@ -1005,7 +1000,7 @@ def test_video_formats_mark_the_planned_default(info):
                        vfmt("244", 480, "vp9", 50 * MB), afmt("251", "opus", 8 * MB)]
     tables, rest = video_tables(info)
     assert tables["image"][0] == "image (sizes include the audio: en opus)"
-    assert tables["languages"][0] == "languages; marked: the planned default"
+    assert tables["languages"][0] == "languages"
     assert "planned default: nothing (no av1 or h264 image up to 1080p with audio)" in rest
     assert picked(info) == {"languages": ["~8 MB"]}
 
@@ -1068,7 +1063,7 @@ def test_format_list_of_a_video(info):
     info["formats"] = video_formats_example()
     assert yt2html.format_list(info) == [
         'Test: "video" | part 1 / <2>? [TESTVIDEO01]',
-        "image (mp4, AV1 else H.264; sizes with the original audio):",
+        "image (mp4, AV1 else H.264; sizes include the audio: en aac):",
         "  1080p, 50 fps  (1080p50)  h264  ~609 MB  (default)",
         "  1080p, 25 fps  (1080p25)  av1   ~309 MB",
         "  360p, 25 fps   (360p25)   h264   ~29 MB",
@@ -1120,7 +1115,7 @@ def test_format_list_audio_lines(info):
     assert yt2html.format_list(info)[3:] == ["audio (mp4, aac):", "  in the video: pl (original)"]
     info["formats"] = base
     assert yt2html.format_list(info)[1:] == [
-        "image (mp4, AV1 else H.264; sizes with the original audio):",
+        "image (mp4, AV1 else H.264):",   # no audio: no sizes with it
         "  1080p, 25 fps  (1080p25)  av1  ~300 MB", "audio: none"]   # no audio: no default
     info["formats"] = [vfmt("244", 480, "vp9", 50 * MB)]
     assert yt2html.format_list(info)[1] == ("image: nothing a download can take "
@@ -1281,9 +1276,6 @@ def test_languages_table_joins_subtitles_to_audio(info):
     assert rows[0][3] == "aac" and all(r[3] == "–" for r in rows if r[2] == "–")   # no size
     assert translation(info) == ("machine translation: each subtitles track can be translated "
                                  "into 5 other languages")
-    # automatic captions as the transcript's track: marked in their cell
-    info[yt2html.CAPTION_KEY] = {"language": "en", "kind": "asr"}
-    assert '<td><span class="planned">en</span></td></tr>' in render(info)
     # only the author's subtitles: still translated
     del info["automatic_captions"]
     assert translation(info) == ("machine translation: each subtitles track can be translated "
