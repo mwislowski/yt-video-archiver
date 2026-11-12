@@ -93,7 +93,6 @@ def test_failure_of_one_source_does_not_stop_others(capsys, info_file, tmp_path)
 # --from-json sources: patterns, video ids and page names
 
 def saved(folder, name="Title [TESTVIDEO01].info.json", info=None):
-    import json
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / name
     path.write_text(json.dumps(info or {"id": "TESTVIDEO01", "title": "Title"}), encoding="utf-8")

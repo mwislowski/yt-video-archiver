@@ -1069,6 +1069,19 @@ def test_video_file_row_with_a_video_next_to_the_page(capsys, tmp_path, info):
 # --video-formats: the list on the screen, no page
 # --------------------------------------------------------------------------
 
+def test_format_choice_is_what_a_download_takes(info):
+    # the choice without any presentation: what --video will take from
+    assert yt2html.video_choice(info) is None   # no formats
+    info["formats"] = video_formats_example()
+    choice = yt2html.video_choice(info)
+    assert [(v["height"], v["fps"], v["format"]["format_id"], v["codec"], v["parameter"])
+            for v in choice.variants] == [(1080, 50, "299", "h264", "1080p50"),   # best first
+                                          (1080, 25, "399", "av1", "1080p25"),
+                                          (360, 25, "134", "h264", "360p25")]
+    assert choice.main_audio["format_id"] == "140" and choice.original == ("en", "original")
+    assert choice.variants[0]["size"] == "~609 MB"   # with the main audio
+
+
 def test_format_list_of_a_video(info):
     info["formats"] = video_formats_example()
     assert yt2html.format_list(info) == [

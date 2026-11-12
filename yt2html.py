@@ -2895,68 +2895,122 @@ def is_premium(fmt: dict) -> bool:
     return "premium" in (fmt.get("format_note") or "").lower()
 
 
-def video_overview(info: dict) -> dict | None:
-    """The formats YouTube offers for this video, as tables: image (quality,
-    i.e. height and frame rate, × codecs; sizes with the main audio), audio
-    (tracks: language and role × codecs), subtitles; the planned default
-    (AV1 first, H.264 as a fallback, up to 1080p, with the main audio, mp4),
-    marked in the tables; a one-line summary; whether yt-dlp had Deno (a
-    JavaScript runtime) for the full list and was signed in. None when there
-    are no formats."""
-    video, audio = video_formats(info)
-    if not video and not audio:
-        return None
-    # Sizes, the main audio and the planned default come from formats with a
-    # real size (DASH: one file each); HLS formats are only named.
-    hls = [f for f in video if is_hls(f)]
-    video = [f for f in video if not is_hls(f)]
-    audio = [f for f in audio if not is_hls(f)] or audio
-    # Audio tracks: (language, role). The role is YouTube's kind of track;
-    # without it, yt-dlp's language preference: 10 the original, -10 an
-    # audio description, the rest dubbed when an original is known. A video
-    # with a single language has nothing to mark it by: that is the original.
-    single = len({audio_language(f) for f in audio}) == 1
-    has_original = any(audio_kind(f) == "original" or f.get("language_preference") == 10
-                       for f in audio)
+def video_key(fmt: dict) -> tuple[str | None, bool]:
+    """A video format's column: (codec, Premium)."""
+    return codec_name(fmt.get("vcodec"), VIDEO_CODECS), is_premium(fmt)
 
-    def role_of(f):
-        kind = audio_kind(f)
+
+class FormatChoice:
+    """What a download can take from the formats in the data, without any
+    presentation: the audio tracks (language, role), the main audio (the
+    track that goes into the video), the qualities as YouTube names them,
+    and the variants a download can choose (up to DEFAULT_MAX_HEIGHT, the
+    first codec of RULE there), best first; the first is the planned
+    default. Video formats shows it, --video will take from it."""
+
+    def __init__(self, info: dict):
+        self.info = info
+        video, audio = video_formats(info)
+        # Sizes, the main audio and the variants come from formats with a
+        # real size (DASH: one file each); HLS formats are only named.
+        self.hls = [f for f in video if is_hls(f)]
+        self.video = [f for f in video if not is_hls(f)]
+        self.audio = [f for f in audio if not is_hls(f)] or audio
+        # A video with a single language has nothing to mark its tracks by:
+        # that is the original.
+        self._single = len({audio_language(f) for f in self.audio}) == 1
+        self._has_original = any(audio_kind(f) == "original"
+                                 or f.get("language_preference") == 10 for f in self.audio)
+        self.original = next((self.track(f) for f in self.audio
+                              if self.role_of(f) == "original"), None)
+        # The main audio: the original (aac, else any codec); else an ordinary
+        # track, an audio description only when there is nothing else; never
+        # a Premium format.
+        regular = [f for f in self.audio if not is_premium(f)]
+        first = self.original or (self.track(self.audio[0]) if self.audio else None)
+        spoken = [f for f in regular if self.role_of(f) != "descriptive"] or regular
+        self.main_audio = (self.audio_for(first, "aac") or self.audio_for(first)
+                           or (self.best(spoken) if spoken else None))
+        self._audio_bytes = format_size(info, self.main_audio) if self.main_audio else 0
+        # The quality as YouTube names it ("1080p" also for 1920x804 or 1080x1920)
+        self._qualities = youtube_qualities(self.video + self.hls)
+        self.variants = []
+        for height in sorted({self.quality(f) for f in self.video}, reverse=True):
+            if height > DEFAULT_MAX_HEIGHT:
+                continue
+            for fps in sorted({f.get("fps") or 0 for f in self.video
+                               if self.quality(f) == height}, reverse=True):
+                for key in RULE:
+                    pool = [f for f in self.video if self.quality(f) == height
+                            and video_key(f) == key and (f.get("fps") or 0) == fps]
+                    if pool:
+                        fmt = self.best(pool)
+                        self.variants.append({
+                            "height": height, "fps": fps, "format": fmt, "codec": key[0],
+                            "quality": quality_label(height, fps),
+                            "parameter": quality_parameter(height, fps),
+                            "size": self.with_audio(fmt)})
+                        break
+
+    def role_of(self, fmt: dict) -> str | None:
+        """YouTube's kind of track; without it, yt-dlp's language preference:
+        10 the original, -10 an audio description, the rest dubbed when an
+        original is known."""
+        kind = audio_kind(fmt)
         if kind:
             return AUDIO_KINDS.get(kind, kind)
-        if f.get("language_preference") == 10:
+        if fmt.get("language_preference") == 10:
             return "original"
-        if f.get("language_preference") == -10:
+        if fmt.get("language_preference") == -10:
             return "descriptive"
-        if single:
+        if self._single:
             return "original"
-        return "dubbed" if has_original else None
+        return "dubbed" if self._has_original else None
 
-    def track(f):
-        return audio_language(f), role_of(f)
+    def track(self, fmt: dict) -> tuple[str, str | None]:
+        """An audio format's track: (language, role)."""
+        return audio_language(fmt), self.role_of(fmt)
 
-    original = next((track(f) for f in audio if role_of(f) == "original"), None)
+    def best(self, formats: list[dict]) -> dict:
+        """The best of alike formats: the highest frame rate, then the largest."""
+        return max(formats, key=lambda f: (f.get("fps") or 0, format_size(self.info, f) or 0))
 
-    def best(formats):
-        return max(formats, key=lambda f: (f.get("fps") or 0, format_size(info, f) or 0))
-
-    def audio_for(key, codec=None, premium=False):
-        pool = [f for f in audio if track(f) == key and is_premium(f) == premium
+    def audio_for(self, key, codec: str | None = None, premium: bool = False) -> dict | None:
+        """The best format of an audio track, in a codec if given."""
+        pool = [f for f in self.audio if self.track(f) == key and is_premium(f) == premium
                 and (codec is None or codec_name(f.get("acodec"), AUDIO_CODECS) == codec)]
-        return best(pool) if pool else None
+        return self.best(pool) if pool else None
 
-    # the main audio and the planned default leave Premium formats out
-    regular_audio = [f for f in audio if not is_premium(f)]
-    # the original first (aac, else any codec); else an ordinary track, an
-    # audio description only when there is nothing else
-    first = original or (track(audio[0]) if audio else None)
-    spoken = [f for f in regular_audio if role_of(f) != "descriptive"] or regular_audio
-    main_audio = audio_for(first, "aac") or audio_for(first) or (best(spoken) if spoken else None)
-    audio_bytes = format_size(info, main_audio) if main_audio else 0
+    def quality(self, fmt: dict) -> int:
+        return self._qualities[id(fmt)]
+
+    def with_audio(self, fmt: dict) -> str:
+        """The size of a video format together with the main audio."""
+        size = format_size(self.info, fmt)
+        return human_size(size + (self._audio_bytes or 0) if size else None)
+
+
+def video_choice(info: dict) -> FormatChoice | None:
+    """What a download can take; None when the data has no video or audio formats."""
+    video, audio = video_formats(info)
+    return FormatChoice(info) if video or audio else None
+
+
+def video_overview(info: dict) -> dict | None:
+    """The formats YouTube offers for this video, as tables: image (quality,
+    i.e. height and frame rate, × codecs; sizes with the main audio) and
+    languages (audio tracks with the subtitles in their language); the
+    planned default (FormatChoice) marked in them; a short summary; whether
+    yt-dlp had Deno (a JavaScript runtime) for the full list and was signed
+    in. None when there are no formats."""
+    choice = video_choice(info)
+    if choice is None:
+        return None
+    video, hls, audio = choice.video, choice.hls, choice.audio
+    track, best, audio_for, quality = choice.track, choice.best, choice.audio_for, choice.quality
+    original, main_audio, with_audio = choice.original, choice.main_audio, choice.with_audio
     known = [(codec, premium) for codec in ("h264", "av1", "vp9", "h265")
              for premium in (False, True)]
-
-    def key_of(f):
-        return codec_name(f.get("vcodec"), VIDEO_CODECS), is_premium(f)
 
     def label(key):
         return esc(key[0]) + (" Premium" if key[1] else "")
@@ -2970,18 +3024,8 @@ def video_overview(info: dict) -> dict | None:
     def ordered(keys):
         return [k for k in known if k in keys] + [k for k in keys if k not in known]
 
-    def with_audio(f):  # the size of a video format together with the main audio
-        size = format_size(info, f)
-        return human_size(size + (audio_bytes or 0) if size else None)
-
-    # The quality as YouTube names it ("1080p" also for 1920x804 or 1080x1920)
-    qualities = youtube_qualities(video + hls)
-
-    def quality(f):
-        return qualities[id(f)]
-
-    columns = ordered(list(dict.fromkeys(key_of(f) for f in video)))
-    rows, chosen = [], []   # chosen: per row (quality, fps, {column key: format}), DASH only
+    columns = ordered(list(dict.fromkeys(video_key(f) for f in video)))
+    rows, row_of = [], {}   # row_of: (quality, fps) -> row index, DASH rows
     for height in sorted({quality(f) for f in video + hls}, reverse=True):
         # one row per frame rate at this quality (most often just one)
         rates = sorted({f.get("fps") or 0 for f in video if quality(f) == height},
@@ -2989,7 +3033,7 @@ def video_overview(info: dict) -> dict | None:
         for i, fps in enumerate(rates):
             cells, formats = [], {}
             for key in columns:
-                pool = [f for f in video if quality(f) == height and key_of(f) == key
+                pool = [f for f in video if quality(f) == height and video_key(f) == key
                         and (f.get("fps") or 0) == fps]
                 if not pool:
                     cells.append(None)
@@ -2999,8 +3043,8 @@ def video_overview(info: dict) -> dict | None:
             if hls:
                 named = []
                 for key in ordered(list(dict.fromkeys(
-                        key_of(f) for f in hls if quality(f) == height))):
-                    f = best([g for g in hls if quality(g) == height and key_of(g) == key])
+                        video_key(f) for f in hls if quality(f) == height))):
+                    f = best([g for g in hls if quality(g) == height and video_key(g) == key])
                     named.append(" ".join([label(key)] + extras(f)))
                 # HLS once per height, in its first row
                 cells.append((", ".join(named) or None) if i == 0 else None)
@@ -3010,18 +3054,11 @@ def video_overview(info: dict) -> dict | None:
             resolution = ", ".join(dict.fromkeys(f"{f['width']}×{f['height']}" for f in sized
                                                  if f.get("width"))) or None
             selectable = height <= DEFAULT_MAX_HEIGHT and any(k in formats for k in RULE)
+            row_of[height, fps] = len(rows)
             rows.append((quality_label(height, fps, selectable), resolution, cells))
-            chosen.append((height, fps, formats))
-    # The qualities a download can choose (up to 1080p, with AV1 or H.264),
-    # best first, each with the codec the rule takes; the first is the default.
-    variants = []
-    for r, (height, fps, formats) in enumerate(chosen):
-        key = next((k for k in RULE if k in formats), None)
-        if key and height <= DEFAULT_MAX_HEIGHT:
-            variants.append({"row": r, "column": columns.index(key), "format": formats[key],
-                             "quality": quality_label(height, fps),
-                             "parameter": quality_parameter(height, fps),
-                             "codec": key[0], "size": with_audio(formats[key])})
+    # The variants with their place in the image table; the first is marked.
+    variants = [dict(v, row=row_of[v["height"], v["fps"]], column=columns.index((v["codec"], False)))
+                for v in choice.variants]
     picks = [(variants[0]["row"], variants[0]["column"])] if variants and main_audio else []
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
              "rows": rows, "picks": picks,
