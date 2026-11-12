@@ -480,8 +480,13 @@ def test_player_audio_switches(info):
     js = yt2html.PLAYER_JS
     assert "video.muted = true;" in js and "dub = new Audio(encodeURIComponent(button.dataset.audio));" in js
     assert "button.disabled = true;" in js and "setAudio(panel.querySelector('[data-audio=\"\"]'));" in js
-    assert "if (Math.abs(off) > 0.3) dub.currentTime = video.currentTime;" in js
-    assert "(Math.abs(off) > 0.04 ? (off > 0 ? 0.97 : 1.03) : 1)" in js
+    # averaged over a second, corrected only between 80 and 20 ms (each speed
+    # change can click), set to the video's time only when a second off
+    assert "gaps = gaps.concat(dub.currentTime - video.currentTime).slice(-4);" in js
+    assert "if (Math.abs(off) > 1) { dub.currentTime = video.currentTime; gaps = []; return; }" in js
+    assert "if (Math.abs(off) > 0.08) nudging = true;" in js
+    assert "else if (Math.abs(off) < 0.02) nudging = false;" in js
+    assert "if (dub.playbackRate !== rate) dub.playbackRate = rate;" in js
 
 
 def render_page(info):

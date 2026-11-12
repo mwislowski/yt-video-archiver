@@ -105,7 +105,7 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | The same, at most 720p (or 720p at most 30 frames per second) | `yt2html "URL" --video 720p` / `--video 720p30` |
 | List the qualities a video download can take and the audio tracks it can add, without making a page | `yt2html "URL" --video-formats` |
 | Also keep the raw data | `yt2html "URL" --save-json` |
-| Rebuild a page from saved data (no download; keeps the snapshot date) | `yt2html --from-json "Title [id].info.json"` |
+| Rebuild a page from saved data (no new data, comments or video from YouTube; the thumbnail and avatars are downloaded again from their addresses in the data; keeps the snapshot date) | `yt2html --from-json "Title [id].info.json"` |
 | The same, by the video id: the saved data is looked up in the folder given with `-o` (default: the current folder) | `yt2html --from-json VIDEO_ID -o "D:\Videos"` |
 | Rebuild several pages; `*` and `?` work also in PowerShell and cmd, square brackets are part of the name | `yt2html --from-json "D:\Videos\*.info.json" -o "D:\Videos"` |
 | Rebuild with fewer comments (only fewer: more need a new download) | `yt2html --from-json VIDEO_ID --max-comments 100` or `--no-comments` |
@@ -264,6 +264,7 @@ At the bottom of every page, *About this copy* is folded to a single grey line w
 - `bilingual:LANG` uses YouTube's machine translation, so its quality varies. YouTube refuses translations requested within about a minute of opening the video, so the program may wait up to a minute (shown on screen) and retries after `HTTP 429`.
 - A chapter list in a video description becomes real chapters on YouTube only if it starts at `0:00`, has at least three timestamps in ascending order and each chapter is at least 10 seconds long.
 - Typical page size: a few hundred KB up to a few MB for thousands of comments.
+- Keep the pages themselves, not only the saved data: a page holds its images, while `--from-json` downloads the thumbnail and avatars again, and YouTube may remove them over the years (missing avatars become letters). Rebuilding from saved data is for a newer look of the page; the extra audio switches and the *Video file* row come back only if the data was saved (`--save-json`) in the same run as `--video`.
 - Browser cookies on Windows: Firefox works reliably; Chrome and other Chromium-based browsers encrypt their cookies in a way yt-dlp usually cannot read there.
 
 ## Troubleshooting

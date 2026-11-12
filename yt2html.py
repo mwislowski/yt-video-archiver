@@ -2446,10 +2446,13 @@ PLAYER_JS = r"""
     });
   });
   // Another audio track (an m4a next to the page, downloaded with --video):
-  // the video plays muted and the track follows it; every 250 ms the track
-  // is nudged (3 % faster or slower, inaudible) or, when far off, set to the
-  // video's time. A track that cannot be read is switched off for good.
-  var dub = null;
+  // the video plays muted and the track follows it. Every 250 ms the gap is
+  // measured and averaged over the last second (Firefox reports the time
+  // coarsely); a correction (3 % faster or slower) starts above 80 ms and
+  // ends below 20 ms, so the speed changes rarely (each change can click);
+  // only more than 1 s off sets the track to the video's time. A track that
+  // cannot be read is switched off for good.
+  var dub = null, gaps = [], nudging = false;
   function setAudio(button) {
     if (dub) { dub.pause(); dub = null; }
     video.muted = false;
@@ -2484,10 +2487,14 @@ PLAYER_JS = r"""
   video.addEventListener('seeking', function () { if (dub) dub.currentTime = video.currentTime; });
   video.addEventListener('ratechange', function () { if (dub) dub.playbackRate = video.playbackRate; });
   setInterval(function () {
-    if (!dub || video.paused) return;
-    var off = dub.currentTime - video.currentTime;
-    if (Math.abs(off) > 0.3) dub.currentTime = video.currentTime;
-    dub.playbackRate = video.playbackRate * (Math.abs(off) > 0.04 ? (off > 0 ? 0.97 : 1.03) : 1);
+    if (!dub || video.paused) { gaps = []; return; }
+    gaps = gaps.concat(dub.currentTime - video.currentTime).slice(-4);
+    var off = gaps.reduce(function (a, b) { return a + b; }, 0) / gaps.length;
+    if (Math.abs(off) > 1) { dub.currentTime = video.currentTime; gaps = []; return; }
+    if (Math.abs(off) > 0.08) nudging = true;
+    else if (Math.abs(off) < 0.02) nudging = false;
+    var rate = video.playbackRate * (nudging ? (off > 0 ? 0.97 : 1.03) : 1);
+    if (dub.playbackRate !== rate) dub.playbackRate = rate;
   }, 250);
   seek.addEventListener('input', function () { jump(Number(seek.value)); });
   video.addEventListener('timeupdate', function () {
