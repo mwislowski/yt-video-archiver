@@ -43,6 +43,7 @@ from pathlib import Path
 
 import yt_dlp
 from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
+from yt_dlp.utils import ISO639Utils
 
 # The program version; pyproject.toml reads it from here (single source).
 __version__ = "0.8.0"
@@ -2909,6 +2910,13 @@ def video_key(fmt: dict) -> tuple[str | None, bool]:
     return codec_name(fmt.get("vcodec"), VIDEO_CODECS), is_premium(fmt)
 
 
+def track_order(key: tuple) -> tuple:
+    """Audio tracks by role (known ones first, in their order), then language."""
+    language, role = key
+    rank = AUDIO_ROLES.index(role) if role in AUDIO_ROLES else len(AUDIO_ROLES) + (role is None)
+    return rank, role or "", language
+
+
 class FormatChoice:
     """What a download can take from the formats in the data, without any
     presentation: the audio tracks (language, role), the main audio (the
@@ -2941,6 +2949,13 @@ class FormatChoice:
         self.main_audio = (self.audio_for(first, "aac") or self.audio_for(first)
                            or (self.best(spoken) if spoken else None))
         self._audio_bytes = format_size(info, self.main_audio) if self.main_audio else 0
+        # Tracks by role (known ones first, in their order), then language;
+        # the ones a download can add: an ordinary aac format (m4a), not the
+        # track already in the video.
+        self.tracks = sorted(set(map(self.track, self.audio)), key=track_order)
+        self.in_video = self.track(self.main_audio) if self.main_audio else None
+        self.extra = [key for key in self.tracks
+                      if key != self.in_video and self.audio_for(key, "aac")]
         # The quality as YouTube names it ("1080p" also for 1920x804 or 1080x1920)
         self._qualities = youtube_qualities(self.video + self.hls)
         self.variants = []
@@ -3079,17 +3094,9 @@ def video_overview(info: dict) -> dict | None:
                               codec_name(main_audio.get("acodec"), AUDIO_CODECS))
                        if main_audio else None)}
 
-    tracks = set(map(track, audio))
+    tracks = choice.tracks
     audio_keys = [(codec, premium) for premium in (False, True) for codec in ("aac", "opus")
                   if any(audio_for(key, codec, premium) for key in tracks)]
-
-    def track_order(key):  # by role (known ones first, in their order), then language
-        language, role = key
-        rank = (AUDIO_ROLES.index(role) if role in AUDIO_ROLES
-                else len(AUDIO_ROLES) + (role is None))
-        return rank, role or "", language
-
-    tracks = sorted(tracks, key=track_order)
 
     # The languages table: one row per audio track, with the subtitles joined
     # to it by language; subtitles without a matching audio track get rows of
@@ -3167,12 +3174,14 @@ def video_overview(info: dict) -> dict | None:
         else "none (no subtitles to translate)" if not (manual or auto)
         else "unknown (not read from YouTube; make the page again later)" if listed is None
         else "unknown (YouTube listed no translation languages)")
-    audio_chosen = []
+    audio_chosen = []   # the track in the video and the extra tracks downloaded
+    taken = {downloaded.get("audio_format")} | {a.get("audio_format")
+                                                for a in downloaded.get("extra_audio") or []}
     for f in audio:
         key = (codec_name(f.get("acodec"), AUDIO_CODECS), is_premium(f))
-        if f.get("format_id") == downloaded.get("audio_format") and key in audio_keys:
-            audio_chosen = [(table_rows.index(rows_of[tracks.index(track(f))]),
-                             audio_keys.index(key))]
+        if f.get("format_id") in taken and key in audio_keys:
+            audio_chosen.append((table_rows.index(rows_of[tracks.index(track(f))]),
+                                 audio_keys.index(key)))
     languages_table = {"columns": [codec + (" Premium" if premium else "")
                                    for codec, premium in audio_keys],
                        "rows": language_rows, "picks": audio_picks, "chosen": audio_chosen,
@@ -3192,8 +3201,7 @@ def video_overview(info: dict) -> dict | None:
     deno = download.get("deno")
     # The track in the video (the main audio) and the ones a download can add
     # (aac, m4a), by role, for the console list.
-    in_video = track(main_audio) if main_audio else None
-    extra = [key for key in tracks if key != in_video and audio_for(key, "aac")]
+    in_video, extra = choice.in_video, choice.extra
     known = sorted(filter(None, (format_size(info, audio_for(key, "aac")) for key in extra)))
     extra_sizes = list(dict.fromkeys(map(human_size, known)))   # smallest to largest
     return {"image": image, "languages": languages_table,
@@ -3352,9 +3360,9 @@ def about_video_file(info: dict, video_files: list[str] | None = None,
     The planned default shows in the tables (marked) and in --video-formats,
     not here."""
     overview = video_overview(info)
-    downloaded = info.get(VIDEO_KEY)
-    if downloaded:
-        day = dt.date.fromisoformat(downloaded["date"]).strftime(DATE_FORMAT)
+    downloaded = info.get(VIDEO_KEY) or {}
+    day = dt.date.fromisoformat(downloaded["date"]).strftime(DATE_FORMAT) if downloaded else ""
+    if downloaded.get("video_format"):
         audio = track_text(downloaded.get("audio") or UNKNOWN_LANGUAGE,
                            esc(downloaded.get("audio_codec") or ""))
         found = (f"downloaded {day}: {esc(downloaded['quality'])} {esc(downloaded['codec'])} + "
@@ -3364,6 +3372,12 @@ def about_video_file(info: dict, video_files: list[str] | None = None,
                  + (f", {esc(human_size(video_size).lstrip('~'))}" if video_size else ""))
     else:
         found = "not downloaded"
+    extra = downloaded.get("extra_audio") or []
+    if extra:   # "extra audio m4a: pl (auto-dubbed), de-DE (auto-dubbed), 138 MB"
+        found += (f"; extra audio m4a{'' if downloaded.get('video_format') else ' ' + day}: "
+                  + ", ".join(esc(a["audio"]) + (f" ({esc(a['role'])})" if a.get("role") else "")
+                              for a in extra)
+                  + f", {esc(human_size(sum(a['size'] for a in extra)).lstrip('~'))}")
     if overview is None:
         return f"{found}; {NO_FORMATS}"
     text = f"{found}; Deno at download: {overview['deno']}"
@@ -3422,10 +3436,13 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
     lines.append(f"audio ({header}):")
     lines.append(f"  in the video: {named_code(in_video[0])}"
                  + (f" ({in_video[1]})" if in_video[1] else ""))
-    for role in dict.fromkeys(role for _, role in extra):
-        lines.append(f"  {role or 'tracks'}: "
-                     + ", ".join(named_code(code) for code, r in extra if r == role))
-    return lines
+    return lines + [f"  {line}" for line in extra_track_lines(extra)]
+
+
+def extra_track_lines(extra: list) -> list[str]:
+    """The tracks a download can add, one line per role: "auto-dubbed: ar, bn, …"."""
+    return [f"{role or 'tracks'}: " + ", ".join(named_code(code) for code, r in extra if r == role)
+            for role in dict.fromkeys(role for _, role in extra)]
 
 
 def list_formats(args: argparse.Namespace) -> int:
@@ -4419,10 +4436,12 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     spec = args.video
     folder = page.parent
     existing = video_files_for({"id": video_id_from_url(source) or source_id(page)}, folder)
-    if existing and not spec["overwrite"]:
+    take_image = not existing or spec["overwrite"]
+    if not take_image:
         log(f"Video skipped (file exists): {folder / existing[0]}. "
             "Add overwrite to --video to download it again.")
-        return None
+        if not spec["audio"]:
+            return None
     if not shutil.which("ffmpeg"):
         raise VideoSkipped(f"ffmpeg not found (it joins image and sound). "
                            f"Install it: {install_hint('ffmpeg')}.")
@@ -4444,30 +4463,112 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                            "none for a while; try again later).")
     variant = choose_variant(choice, spec)
     audio = choice.main_audio
-    if not variant or not audio:
+    if take_image and (not variant or not audio):
         raise VideoSkipped(f"no AV1 or H.264 image up to {limit_text(spec)} "
                            "(see Video formats on the page)." if not variant else
                            "no audio track in the list.")
-    audio_codec = codec_name(audio.get("acodec"), AUDIO_CODECS)
-    audio_code = audio_language(audio)
-    log(f"Video: {variant['quality']} {variant['codec']} + "
-        f"{track_text(audio_code, audio_codec)}, mp4, {variant['size']}")
-    target = folder / f"{page.stem}.mp4"
-    opts = {"format": f"{variant['format']['format_id']}+{audio['format_id']}",
-            "merge_output_format": "mp4",
-            "outtmpl": {"default": str(folder / page.stem.replace("%", "%%")) + ".%(ext)s"},
-            "overwrites": spec["overwrite"], "noplaylist": True,
-            "quiet": True, "noprogress": False}
-    if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
-    yt_download(fresh, opts)
-    size = target.stat().st_size
-    log(f"Saved video: {target} ({human_size(size).lstrip('~')})")
-    return {"date": dt.date.today().isoformat(), "parameters": spec["text"],
-            "file": target.name, "size": size, "quality": variant["quality"],
-            "codec": variant["codec"], "video_format": variant["format"]["format_id"],
-            "audio": None if audio_code == UNKNOWN_LANGUAGE else audio_code,
-            "audio_codec": audio_codec, "audio_format": audio["format_id"]}, fresh.get("formats")
+
+    def options(fmt: str, name: str) -> dict:
+        opts = {"format": fmt, "merge_output_format": "mp4",
+                "outtmpl": {"default": str(folder / name.replace("%", "%%")) + ".%(ext)s"},
+                "overwrites": spec["overwrite"], "noplaylist": True,
+                "quiet": True, "noprogress": False}
+        if args.cookies_from_browser:
+            opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+        return opts
+
+    result = {"date": dt.date.today().isoformat(), "parameters": spec["text"]}
+    if take_image:
+        audio_codec = codec_name(audio.get("acodec"), AUDIO_CODECS)
+        audio_code = audio_language(audio)
+        log(f"Video: {variant['quality']} {variant['codec']} + "
+            f"{track_text(audio_code, audio_codec)}, mp4, {variant['size']}")
+        target = folder / f"{page.stem}.mp4"
+        yt_download(fresh, options(f"{variant['format']['format_id']}+{audio['format_id']}",
+                                   page.stem))
+        size = target.stat().st_size
+        log(f"Saved video: {target} ({human_size(size).lstrip('~')})")
+        result.update({"file": target.name, "size": size, "quality": variant["quality"],
+                       "codec": variant["codec"], "video_format": variant["format"]["format_id"],
+                       "audio": None if audio_code == UNKNOWN_LANGUAGE else audio_code,
+                       "audio_codec": audio_codec, "audio_format": audio["format_id"]})
+    # The extra audio tracks: separate m4a files, each on its own.
+    wanted, messages = resolve_audio(choice, spec["audio"])
+    if messages:
+        log("Audio: " + "; ".join(messages) + ".")
+        log("  Tracks to add: " + ("; ".join(extra_track_lines(choice.extra)) or "none"))
+    extra = []
+    for key in wanted:
+        fmt, name = choice.audio_for(key, "aac"), audio_name(page, key)
+        if name.exists() and not spec["overwrite"]:
+            log(f"Audio skipped (file exists): {name}. Add overwrite to --video to download "
+                "it again.")
+            continue
+        log(f"Audio: {key[0]}" + (f" ({key[1]})" if key[1] else "")
+            + f", m4a, {human_size(format_size(fresh, fmt))}")
+        yt_download(fresh, options(fmt["format_id"], name.stem))
+        size = name.stat().st_size
+        log(f"Saved audio: {name} ({human_size(size).lstrip('~')})")
+        extra.append({"audio": key[0], "role": key[1], "file": name.name, "size": size,
+                      "audio_format": fmt["format_id"]})
+    if extra:
+        result["extra_audio"] = extra
+    if not take_image and not extra:
+        return None
+    return result, fresh.get("formats")
+
+
+AUDIO_PRIORITY = ("dubbed", "auto-dubbed")   # audio:CODE without a role, in this order
+
+
+def recognised_code(code: str, known: set) -> bool:
+    """A language code that exists: one in the video's data, an ISO 639-1
+    code (yt-dlp's table: "pl", "iw"; not "jp"), or any three-letter one
+    ("fil", "yue": too many to check)."""
+    base = base_language(code)
+    return (base in {base_language(k) for k in known} or len(base) == 3
+            or ISO639Utils.short2long(base) is not None)
+
+
+def resolve_audio(choice: FormatChoice, requests: list) -> tuple[list, list[str]]:
+    """The extra tracks the audio: parameters ask for, and messages for the
+    rest. A code matches exactly, else by language when it has no region
+    ("de" finds "de-DE"; "de-AT" does not); without a role: dubbed, then
+    auto-dubbed, then other kinds, never an audio description (a regional
+    variant each time: the first by role, then code); with a role exactly
+    that one (the four known ones, or a kind this video has). Only tracks
+    with an ordinary aac format can be added; each once."""
+    known = {code for code, _ in choice.tracks}
+    roles = set(AUDIO_ROLES) | {role for _, role in choice.tracks if role}
+    found, messages = [], []
+    for code, role, text in requests:
+        # the code is written the usual way (standard_code()), as in the data;
+        # a code with a region never equals a bare language, so "de-AT" stays
+        same = ([key for key in choice.tracks if key[0] == code]
+                or [key for key in choice.tracks if base_language(key[0]) == code])
+        if not recognised_code(code, known) or (role and role not in roles):
+            messages.append(f'"{text}" not recognised')
+            continue
+        if role:
+            fits = [key for key in same if key[1] == role]
+        else:
+            fits = sorted((key for key in same if key[1] != "descriptive"),
+                          key=lambda key: (AUDIO_PRIORITY.index(key[1]) if key[1] in AUDIO_PRIORITY
+                                           else len(AUDIO_PRIORITY), key[0]))
+        if fits and fits[0] == choice.in_video:
+            messages.append(f'"{text}" is already in the video')
+        elif not fits or fits[0] not in choice.extra:
+            messages.append(f'"{text}" not available')
+        elif fits[0] not in found:
+            found.append(fits[0])
+    return found, messages
+
+
+def audio_name(page: Path, key: tuple) -> Path:
+    """An extra track's file: "Title [id].pl.auto-dubbed.m4a" (code and role,
+    so a language with two versions gives two files)."""
+    code, role = key
+    return page.parent / f"{page.stem}.{code}{'.' + role if role else ''}.m4a"
 
 
 def source_id(page: Path) -> str | None:
@@ -4532,17 +4633,29 @@ VIDEO_QUALITY = re.compile(r"(\d+)p(\d+)?")
 def video_spec(value: str) -> dict:
     """Parse --video: "" (the default), or comma-separated parameters: a
     quality as an upper limit ("720p": up to 720p at any frame rate;
-    "720p30": up to 720p and 30 fps; at most 1080p) and "overwrite"; any
-    case of letters. Raises ArgumentTypeError (before anything is fetched),
+    "720p30": up to 720p and 30 fps; at most 1080p), "overwrite" and
+    extra audio tracks ("audio:pl", "audio:pl.auto-dubbed", repeated for
+    more; the code is written the usual way); any case of letters. Raises ArgumentTypeError (before anything is fetched),
     also for an address taken as parameters ("--video URL")."""
-    spec = {"height": None, "fps": None, "overwrite": False, "text": value.strip().lower()}
+    spec = {"height": None, "fps": None, "overwrite": False, "audio": [],
+            "text": value.strip().lower()}
     if not spec["text"]:
         return spec
     for item in (part.strip() for part in value.split(",")):
         if not item:
             raise argparse.ArgumentTypeError(f"empty item in '{value}' (check the commas)")
         quality = VIDEO_QUALITY.fullmatch(item.lower())
-        if item.lower() == "overwrite":
+        kind, _, rest = item.partition(":")
+        if kind.lower() == "audio" and rest:
+            # audio:CODE or audio:CODE.ROLE (split at the first dot: codes have
+            # none, roles may have a hyphen); checked against the video later
+            code, _, role = rest.partition(".")
+            if not LANGUAGE_CODE.fullmatch(code) or (role and not re.fullmatch(r"[a-z-]+", role.lower())):
+                raise argparse.ArgumentTypeError(
+                    f"'{item}': write audio:CODE or audio:CODE.ROLE, e.g. audio:pl or "
+                    f"audio:pl.auto-dubbed")
+            spec["audio"].append((standard_code(code), role.lower() or None, item))
+        elif item.lower() == "overwrite":
             if spec["overwrite"]:
                 raise argparse.ArgumentTypeError("'overwrite' is given more than once")
             spec["overwrite"] = True
@@ -4559,8 +4672,8 @@ def video_spec(value: str) -> dict:
             spec["height"], spec["fps"] = height, int(fps) if fps else None
         else:
             raise argparse.ArgumentTypeError(
-                f"'{item}' is not a parameter (use a quality such as 720p or 720p30, or "
-                f"overwrite); the video's address goes before --video")
+                f"'{item}' is not a parameter (use a quality such as 720p or 720p30, "
+                f"audio:CODE or overwrite); the video's address goes before --video")
     return spec
 
 
@@ -4745,8 +4858,11 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "named like the page (needs ffmpeg): the best quality up to "
                              "1080p in AV1, else H.264, with the original audio; then the "
                              "page is updated. Parameters, comma-separated: a quality as an "
-                             "upper limit (720p, or 720p30 to limit the frame rate too) and "
-                             "overwrite (download again although a video file is there). "
+                             "upper limit (720p, or 720p30 to limit the frame rate too), "
+                             "audio:CODE for an extra audio track as a separate m4a (e.g. "
+                             "audio:pl: a dub by the author, else YouTube's; audio:pl.auto-dubbed "
+                             "for that one; repeat for more) and overwrite (download again "
+                             "although the file is there). "
                              "Write the address first: yt2html URL --video 720p30")
     parser.add_argument("--video-formats", action="store_true",
                         help="only list, for each video, the qualities a download can take "

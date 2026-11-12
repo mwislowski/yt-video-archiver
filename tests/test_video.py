@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import json
 import re
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -62,8 +63,11 @@ def youtube(monkeypatch, info):
         seen["downloads"].append(opts)
         if seen.get("error"):
             raise yt2html.yt_dlp.utils.DownloadError("ERROR: HTTP Error 403: Forbidden")
-        # the name is a yt-dlp template: "%" must come as "%%"
-        Path(opts["outtmpl"]["default"] % {"ext": "mp4"}).write_bytes(b"x" * 1234)
+        # the name is a yt-dlp template ("%" must come as "%%"); the extension
+        # is the merged mp4, or the single format's own (m4a for audio)
+        ext = "mp4" if "+" in opts["format"] else next(
+            f["ext"] for f in fresh["formats"] if f["format_id"] == opts["format"])
+        Path(opts["outtmpl"]["default"] % {"ext": ext}).write_bytes(b"x" * 1234)
 
     monkeypatch.setattr(yt2html, "fetch_info", fetch_info)
     monkeypatch.setattr(yt2html, "fetch_formats", fetch_formats)
@@ -94,8 +98,11 @@ def test_video_parameters(value, expected):
 
 
 @pytest.mark.parametrize("value, message", [
-    (URL, "is not a parameter (use a quality such as 720p or 720p30, or overwrite); "
+    (URL, "is not a parameter (use a quality such as 720p or 720p30, audio:CODE or overwrite); "
           "the video's address goes before --video"),
+    ("audio:pl!", "'audio:pl!': write audio:CODE or audio:CODE.ROLE"),
+    ("audio:pl.auto_dubbed", "write audio:CODE or audio:CODE.ROLE, e.g. audio:pl"),
+    ("audio:", "'audio:' is not a parameter"),
     ("hd", "'hd' is not a parameter"),
     ("700p", "'700p' is not a parameter"),            # not a quality YouTube names
     ("2160p", "'2160p' is above 1080p; yt2html downloads up to 1080p"),
@@ -309,3 +316,132 @@ def test_yt_dlp_age():
     assert yt2html.yt_dlp_age("2026.10.26", today) == 17
     assert yt2html.yt_dlp_age("2026.09.01.1", today) == 72    # a fourth part
     assert yt2html.yt_dlp_age("unknown", today) is None
+
+
+# Extra audio tracks (audio:) ------------------------------------------------------
+
+def dub(fid, language, kind, acodec="mp4a.40.2", size=9 * MB):
+    """An audio format with YouTube's kind of track in its address, as in real data."""
+    xtags = urllib.parse.quote(f"acont={kind}:lang={language}")
+    return {**afmt(fid, acodec, size, language=language, preference=-1),
+            "url": f"https://rr.googlevideo.com/videoplayback?itag=140&xtags={xtags}&mime=audio"}
+
+
+DUBS = [vfmt("399", 1080, "av01.0.08M.08", 300 * MB),
+        dub("140", "en", "original"), dub("251", "en", "original", "opus", 8 * MB),
+        dub("140-1", "pl", "dubbed"), dub("140-2", "pl", "dubbed-auto"),
+        dub("140-3", "de-DE", "dubbed-auto"), dub("140-4", "es-US", "dubbed"),
+        dub("140-5", "es-ES", "dubbed"), dub("140-6", "ru", "descriptive"),
+        dub("251-7", "fr", "dubbed", "opus"), dub("140-8", "ja", "commentary")]
+
+
+def test_audio_parameters():
+    spec = yt2html.video_spec("720p,Audio:PL,audio:de-de.Auto-Dubbed")
+    assert spec["audio"] == [("pl", None, "Audio:PL"), ("de-DE", "auto-dubbed",
+                                                        "audio:de-de.Auto-Dubbed")]
+    assert spec["height"] == 720
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("audio:pl", ["pl", "dubbed"]),                 # by the author before YouTube's
+    ("audio:pl.auto-dubbed", ["pl", "auto-dubbed"]),
+    ("audio:de", ["de-DE", "auto-dubbed"]),         # the language finds the region
+    ("audio:de-de", ["de-DE", "auto-dubbed"]),      # any case
+    ("audio:es", ["es-ES", "dubbed"]),              # two regions: the first by code
+    ("audio:es-US", ["es-US", "dubbed"]),
+    ("audio:ru.descriptive", ["ru", "descriptive"]),
+    ("audio:ja.commentary", ["ja", "commentary"]),  # a kind this video has
+    ("audio:de-AT", '"audio:de-AT" not available'),   # another region: no
+    ("audio:ru", '"audio:ru" not available'),         # an audio description only if asked
+    ("audio:fr", '"audio:fr" not available'),         # no aac format to add
+    ("audio:fil", '"audio:fil" not available'),
+    ("audio:it.commentary", '"audio:it.commentary" not available'),
+    ("audio:jp", '"audio:jp" not recognised'),        # not a language code
+    ("audio:pl.autodubbed", '"audio:pl.autodubbed" not recognised'),
+    ("audio:en", '"audio:en" is already in the video'),
+    ("audio:en.original", '"audio:en.original" is already in the video'),
+])
+def test_audio_resolution(info, text, expected):
+    info["formats"] = json.loads(json.dumps(DUBS))
+    choice = yt2html.video_choice(info)
+    found, messages = yt2html.resolve_audio(choice, yt2html.video_spec(text)["audio"])
+    assert (found, messages) == (([tuple(expected)], []) if isinstance(expected, list)
+                                 else ([], [expected]))
+
+
+def test_audio_asked_twice_is_taken_once(info):
+    info["formats"] = json.loads(json.dumps(DUBS))
+    choice = yt2html.video_choice(info)
+    found, _ = yt2html.resolve_audio(choice, yt2html.video_spec("audio:pl,audio:PL.dubbed")["audio"])
+    assert found == [("pl", "dubbed")]
+
+
+def test_audio_with_the_video(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:jp,audio:en",
+                         "--save-json"]) == 0
+    html_path = page(tmp_path)
+    track = html_path.with_name(html_path.stem + ".pl.dubbed.m4a")
+    assert track.exists() and html_path.with_suffix(".mp4").exists()
+    assert [o["format"] for o in youtube["downloads"]] == ["399+140", "140-1"]
+    out = capsys.readouterr().out
+    assert ('[yt2html] Audio: "audio:jp" not recognised; "audio:en" is already in the video.\n'
+            "[yt2html]   Tracks to add: dubbed: es-ES, es-US, pl; auto-dubbed: de-DE, pl; "
+            "descriptive: ru; commentary: ja\n") in out
+    assert "[yt2html] Audio: pl (dubbed), m4a, ~9 MB" in out
+    assert f"[yt2html] Saved audio: {track} (<1 MB)" in out
+    html = html_path.read_text("utf-8")
+    assert row(html, "Video file") == (f"downloaded {TODAY}: 1080p, 25 fps av1 + en aac, mp4, "
+                                       "&lt;1 MB; extra audio m4a: pl (dubbed), &lt;1 MB; "
+                                       "Deno at download: yes")
+    assert marked(html, "chosen") == ["~309 MB", "~9 MB", "~9 MB"]   # image, en, pl
+    saved = json.loads(html_path.with_suffix(".info.json").read_text("utf-8"))
+    assert saved[yt2html.VIDEO_KEY]["extra_audio"] == [
+        {"audio": "pl", "role": "dubbed", "file": track.name, "size": 1234,
+         "audio_format": "140-1"}]
+
+
+def test_audio_files_on_their_own(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    yt2html.main([URL, "-o", str(tmp_path)])           # the page only
+    (tmp_path / (page(tmp_path).stem + ".mp4")).write_bytes(b"v")   # a video already there
+    capsys.readouterr()
+    # the video is skipped, the track is added (YouTube asked for the list)
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de"]) == 0
+    out = capsys.readouterr().out
+    assert "Video skipped (file exists)" in out and "Saved audio:" in out
+    assert [o["format"] for o in youtube["downloads"]] == ["140-3"]
+    assert "Updated page" not in out                   # the page existed: left as it is
+    # again: both there, nothing downloaded; overwrite takes both again
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de"]) == 0
+    out = capsys.readouterr().out
+    assert "Audio skipped (file exists): " in out and "Add overwrite to --video" in out
+    assert len(youtube["downloads"]) == 1
+    args = yt2html.parse_args([URL, "-o", str(tmp_path), "--video", "audio:de"])
+    assert yt2html.download_video(URL, args, page(tmp_path), set()) is None   # nothing new
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de,overwrite"])
+    assert [o["format"] for o in youtube["downloads"][1:]] == ["399+140", "140-3"]
+    assert all(o["overwrites"] for o in youtube["downloads"][1:])
+
+
+def test_audio_only_with_a_new_page(tmp_path, youtube, monkeypatch):
+    # the page is made now, the video was there before: the row names both
+    youtube["fresh"] = DUBS
+    monkeypatch.setattr(yt2html, "existing_page", lambda folder, ident: None)
+    name = yt2html.output_path({**yt2html.fetch_info(URL, None)}, tmp_path)
+    Path(name).with_suffix(".mp4").write_bytes(b"v")
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl.auto-dubbed"]) == 0
+    html = Path(name).read_text("utf-8")
+    assert row(html, "Video file").startswith(
+        f"a video file next to the page: {Path(name).stem}.mp4, &lt;1 MB; "
+        f"extra audio m4a {TODAY}: pl (auto-dubbed), &lt;1 MB; ")
+    assert marked(html, "chosen") == ["~9 MB"]          # only the track downloaded now
+
+
+def test_audio_needs_no_image_within_the_limit(tmp_path, youtube):
+    # the video is there; the list has no AV1 or H.264 within 480p: the track still comes
+    youtube["fresh"] = [vfmt("244", 480, "vp9", 50 * MB)] + DUBS[1:]
+    yt2html.main([URL, "-o", str(tmp_path)])
+    (tmp_path / (page(tmp_path).stem + ".mp4")).write_bytes(b"v")
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "480p,audio:pl"]) == 0
+    assert [o["format"] for o in youtube["downloads"]] == ["140-1"]
