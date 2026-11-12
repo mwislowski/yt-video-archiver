@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+
+- `--video`: after the page, also download the video itself as an mp4 named like the page, so the page plays it (needs ffmpeg): the best quality up to 1080p in AV1, else H.264, with the original audio. Parameters after `--video`, comma-separated: a quality as an upper limit (`720p`; `720p30` limits the frame rate too) and `overwrite`. The page is made first, then a fresh list of formats and the download, then the page again: its *Video file* row says what was downloaded (`downloaded DD.MM.YYYY: 1080p, 30 fps av1 + en-US aac, mp4, 293 MB`) and *Video formats* marks it in yellow (the planned default stays blue when it differs); with `--save-json` the data gets the fresh formats and the result (`yt2html_video`). A video file already next to the page is skipped; for an existing page only the video is downloaded. Checks before the download: ffmpeg (else the video is skipped, with the install command), Deno and the age of yt-dlp (notes). In a playlist, a pause of 5–15 seconds before each next video that needed a download. Not with `--from-json` or `--index-only`; `yt2html --video URL` (the address taken as parameters) is an error that says to put the address first.
+
 ## [0.8.0] - 2026-11-12
 
 ### Added

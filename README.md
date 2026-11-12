@@ -38,6 +38,8 @@ uv tool update-shell
 | Update the program and yt-dlp | `uv tool upgrade yt-video-archiver` |
 | Remove the program | `uv tool uninstall yt-video-archiver` |
 
+For `--video` (downloading the video itself): [ffmpeg](https://ffmpeg.org/), which joins image and sound into one file (`winget install --id Gyan.FFmpeg -e`, then open a new terminal; macOS `brew install ffmpeg`; Linux: the package manager, e.g. `sudo apt install ffmpeg`). Pages need no ffmpeg.
+
 Optional: a JavaScript runtime recommended by yt-dlp for YouTube, e.g. Deno (`winget install DenoLand.Deno`; macOS `brew install deno`). Without it yt-dlp prints warnings about video formats; they are harmless for the page, but YouTube may then offer fewer video formats (the *Video formats* section then lists fewer).
 
 ### macOS and Linux
@@ -99,7 +101,8 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 
 | Task | Command |
 |---|---|
-| Download the video so that the page can play it (mp4 that every browser plays) | `yt-dlp -f "bv*[vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 "URL"` |
+| Also download the video, after its page (an mp4 that the page plays; needs ffmpeg) | `yt2html "URL" --video` |
+| The same, at most 720p (or 720p at most 30 frames per second) | `yt2html "URL" --video 720p` / `--video 720p30` |
 | List the qualities a video download can take and the audio tracks it can add, without making a page | `yt2html "URL" --video-formats` |
 | Also keep the raw data | `yt2html "URL" --save-json` |
 | Rebuild a page from saved data (no download; keeps the snapshot date) | `yt2html --from-json "Title [id].info.json"` |
@@ -174,6 +177,21 @@ Good to know about the index:
 - **Renaming is safe.** Pages are found by `[video id]` in their names, so after renaming them the index links to the new names and still shows the original titles. The index of a playlist is found by `[playlist id]` and may be renamed the same way; the index of a list file must keep its name.
 - **`--index-only` downloads nothing.** It only rebuilds the index from the pages in the folder, e.g. after renaming or deleting pages. It uses the list kept in the earlier index; only if there is none yet, it reads the playlist's list from YouTube (one request, no video). New videos added to the playlist on YouTube appear only after a normal run with `--index`.
 
+### Downloading the video
+
+`yt2html "URL" --video` makes the page as usual, then downloads the video itself as an mp4 named like the page (`Title [id].mp4` next to `Title [id].html`), so the page plays it. Write the address first; parameters follow `--video`, separated by commas:
+
+| Parameter | Meaning |
+|---|---|
+| (none) | the best quality up to 1080p in AV1, else H.264, with the original audio |
+| `720p`, `480p`, … | a quality as an upper limit: the best one not above it, at any frame rate (`720p` takes 720p at 60 frames per second when there is one) |
+| `720p30`, `1080p60`, … | the same with the frame rate as a limit too (the parameters in brackets in *Video formats*) |
+| `overwrite` | download again although a video file is already next to the page |
+
+Example: `yt2html "URL" --video 720p30,overwrite`. Parameters in any case of letters; above 1080p is not offered (the file is meant to play everywhere).
+
+The order of work: the page first, then a fresh list of formats (the addresses in older data expire) and the download, then the page once more, from the data already in memory, so that its *Video file* row says what was downloaded (`downloaded 12.11.2026: 1080p, 30 fps av1 + en-US aac, mp4, 293 MB`) and *Video formats* marks it in yellow. The page is ready before the video: an error or `Ctrl+C` during the download leaves it as it is, and running the same command again resumes the download. `Ctrl+C` while the comments are downloading stops the whole run after the page, as without `--video`; run the same command again to get the video (the page is skipped, only the video is downloaded), or limit the comments beforehand with `--max-comments`. A video file already next to the page is skipped (`overwrite` downloads it again); for a page that already exists only the video is downloaded, and the page finds it the next time it is opened. In a playlist each video goes through the whole cycle, with a pause of 5–15 seconds before the next video that needed a download. `--video` cannot be used with `--from-json` (it needs YouTube) or `--index-only`. Without ffmpeg the page is made and the video skipped, with the command to install ffmpeg.
+
 ### Watching a downloaded video on the page
 
 If the downloaded video lies **next to the page**, the page shows a turquoise **▶ Play** tile first among the facts. Under *Play* it names the video file: its quality as YouTube names it and the language of its audio (`1080p · en-US`; a long language code is shortened to the language, `en`). A browser cannot look into a folder, it can only try names, so the page tries, each time it is opened:
@@ -212,7 +230,7 @@ With the player closed, timestamps open YouTube as before; `Ctrl`+click always o
 
 ### Video formats
 
-Above *About this copy*, *Video formats* is folded to a grey line with a short summary: the top quality and the language of the original audio (`up to 1080p, 30 fps · original audio: en-US`). Opened, it lists what YouTube offered when the data was fetched: the image by quality (YouTube's name for it, as in its quality menu, with the frame rate, e.g. `1080p, 30 fps`), resolution (the actual size of the image, e.g. `1920×1080`; YouTube calls a wide `1920×804` or a vertical `1080×1920` "1080p" too) and codec (h264, av1, vp9; formats for YouTube Premium accounts in their own columns; HLS formats only named, since YouTube gives no reliable size for them) with approximate sizes including the audio; then the languages: one row per audio track (code, language, role: original, dubbed by the author, auto-dubbed by YouTube, audio description) with the subtitles in that language (by the author, and auto-generated from that track's speech: a dub has its own), subtitles without such audio in rows of their own (the languages with audio first, the original's first), and a line on YouTube's machine translation of subtitles (`machine-translated subtitles: possible in 155 other languages for each row with subtitles`, made on request; without subtitles `none (no subtitles to translate)`; `unknown (…)` when YouTube listed no languages, or when the list could not be read, which making the page again later usually fixes). A quality a download of the video can take (up to 1080p, in AV1 or H.264) has its parameter in brackets, e.g. `1080p, 30 fps (1080p30)`. Cells in blue show what a download would take by default: the best quality up to 1080p in AV1, else H.264, with the original audio, as mp4 (yellow is kept for what you choose, once yt2html downloads videos). When YouTube sent no video or audio formats at all (it happens for a while, e.g. after several requests for the same video in a row; only the small preview images for the seek bar come), the section says so in one line; making the page again later usually brings them. The video itself is not downloaded by yt2html yet; the *Video file* row of *About this copy* names a video file found next to the page (or says `not downloaded`) and notes how the list came about (with or without Deno, signed in or not).
+Above *About this copy*, *Video formats* is folded to a grey line with a short summary: the top quality and the language of the original audio (`up to 1080p, 30 fps · original audio: en-US`). Opened, it lists what YouTube offered when the data was fetched: the image by quality (YouTube's name for it, as in its quality menu, with the frame rate, e.g. `1080p, 30 fps`), resolution (the actual size of the image, e.g. `1920×1080`; YouTube calls a wide `1920×804` or a vertical `1080×1920` "1080p" too) and codec (h264, av1, vp9; formats for YouTube Premium accounts in their own columns; HLS formats only named, since YouTube gives no reliable size for them) with approximate sizes including the audio; then the languages: one row per audio track (code, language, role: original, dubbed by the author, auto-dubbed by YouTube, audio description) with the subtitles in that language (by the author, and auto-generated from that track's speech: a dub has its own), subtitles without such audio in rows of their own (the languages with audio first, the original's first), and a line on YouTube's machine translation of subtitles (`machine-translated subtitles: possible in 155 other languages for each row with subtitles`, made on request; without subtitles `none (no subtitles to translate)`; `unknown (…)` when YouTube listed no languages, or when the list could not be read, which making the page again later usually fixes). A quality a download of the video can take (up to 1080p, in AV1 or H.264) has its parameter in brackets, e.g. `1080p, 30 fps (1080p30)`. Cells in blue show what `--video` takes by default: the best quality up to 1080p in AV1, else H.264, with the original audio, as mp4; cells in yellow show what `--video` downloaded (when it took something else, the default stays blue). When YouTube sent no video or audio formats at all (it happens for a while, e.g. after several requests for the same video in a row; only the small preview images for the seek bar come), the section says so in one line; making the page again later usually brings them. The *Video file* row of *About this copy* says what `--video` downloaded, else names a video file found next to the page (or says `not downloaded`), and notes how the list came about (with or without Deno, signed in or not).
 
 `--video-formats` prints the same choice on the screen without making a page (only the video's data is fetched, no comments; with `--from-json` from saved data, offline). It cannot be combined with the options that shape a page.
 
@@ -227,7 +245,7 @@ audio (mp4, aac; extra tracks m4a, aac, ~69 MB each):
   auto-dubbed: ar, bn, de-DE, es-US, fr-FR, hi, id, it, iw, ja, ko, ml, nl-NL, pa, pl, pt-BR, ru, ta, te, uk
 ```
 
-Both headers start with the container and codec of what goes into the video; after the semicolon, the image header names the audio track the sizes include and the audio header describes the extra tracks. The audio lines show the track in the video and, by role, the dubs a download can add as separate m4a files (`audio:CODE`, e.g. `audio:pl`; an audio description as `audio:CODE.descriptive`). The parameters in brackets and `audio:CODE` are meant for a later version of yt2html that downloads the video itself.
+Both headers start with the container and codec of what goes into the video; after the semicolon, the image header names the audio track the sizes include and the audio header describes the extra tracks. The audio lines show the track in the video and, by role, the dubs a download can add as separate m4a files (`audio:CODE`, e.g. `audio:pl`; an audio description as `audio:CODE.descriptive`). The parameters in brackets are what `--video` takes; `audio:CODE` is meant for a later version.
 
 ### About this copy
 
