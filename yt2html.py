@@ -1545,7 +1545,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .formats-info .formats th{font-weight:600;white-space:nowrap}
 .formats-info .formats .size{text-align:right;white-space:nowrap}
 .formats-info .formats .planned{color:var(--planned)}
-.formats-info .formats .chosen{color:var(--chosen)}
+.formats-info .formats .chosen,.formats-info .translation .chosen{color:var(--chosen)}
 .formats-info .translation,.formats-info .none{margin:4px 0 0 14px}
 .copy-info a{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .copy-info .command{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:12px;
@@ -3094,6 +3094,7 @@ def video_overview(info: dict) -> dict | None:
     choice = video_choice(info)
     if choice is None:
         return None
+    downloaded = info.get(VIDEO_KEY) or {}   # what --video took: marked yellow
     video, hls, audio = choice.video, choice.hls, choice.audio
     track, best, audio_for, quality = choice.track, choice.best, choice.audio_for, choice.quality
     original, main_audio, with_audio = choice.original, choice.main_audio, choice.with_audio
@@ -3149,7 +3150,6 @@ def video_overview(info: dict) -> dict | None:
                 for v in choice.variants]
     picks = [(variants[0]["row"], variants[0]["column"])] if variants and main_audio else []
     # What --video downloaded (yellow): its image cell and its audio's cell.
-    downloaded = info.get(VIDEO_KEY) or {}
     chosen = [(v["row"], v["column"]) for v in variants
               if v["format"].get("format_id") == downloaded.get("video_format")]
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
@@ -3200,8 +3200,13 @@ def video_overview(info: dict) -> dict | None:
         return base not in with_audio_languages, base != original_base, base, rank, code
 
     table_rows = sorted(rows_of + list(alone.values()), key=language_order)
+    # subtitles --video downloaded (yellow): (kind of cell, code)
+    taken_subs = {("author" if s["kind"] == "author" else "auto", s["code"])
+                  for s in downloaded.get("subtitles") or [] if s["kind"] != "translated"}
+
     def codes_cell(row, kind):
-        return esc(", ".join(row[kind])) or None
+        return ", ".join(f'<span class="chosen">{esc(code)}</span>' if (kind, code) in taken_subs
+                         else esc(code) for code in row[kind]) or None
 
     language_rows = []
     for row in table_rows:
@@ -3238,6 +3243,11 @@ def video_overview(info: dict) -> dict | None:
         else "none (no subtitles to translate)" if not (manual or auto)
         else "unknown (not read from YouTube; make the page again later)" if listed is None
         else "unknown (YouTube listed no translation languages)")
+    translations = [s for s in downloaded.get("subtitles") or [] if s["kind"] == "translated"]
+    if translations:   # "; downloaded: de, pl (from en)": always one source, the transcript's
+        translation += ("; downloaded: " + ", ".join(f'<span class="chosen">{esc(s["code"])}</span>'
+                                                     for s in translations)
+                        + f" (from {esc(translations[0]['source'])})")
     audio_chosen = []   # the track in the video and the extra tracks downloaded
     taken = {downloaded.get("audio_format")} | {a.get("audio_format")
                                                 for a in downloaded.get("extra_audio") or []}
@@ -3273,6 +3283,7 @@ def video_overview(info: dict) -> dict | None:
             "in_video_codec": codec_name(main_audio.get("acodec"), AUDIO_CODECS) if main_audio
             else None,
             "extra_audio": [(key[0], key[1]) for key in extra], "extra_sizes": extra_sizes,
+            "subtitles": subtitle_tracks(info),
             "summary": " · ".join(summary),
             "deno": ("yes" if deno else
                      "unknown (data saved by an older version)" if deno is None else
@@ -3442,6 +3453,12 @@ def about_video_file(info: dict, video_files: list[str] | None = None,
                   + ", ".join(esc(a["audio"]) + (f" ({esc(a['role'])})" if a.get("role") else "")
                               for a in extra)
                   + f", {esc(human_size(sum(a['size'] for a in extra)).lstrip('~'))}")
+    subs = downloaded.get("subtitles") or []
+    if subs:   # "subtitles srt: en (author), pl (translated from en)"; no sizes (small)
+        found += (f"; subtitles srt{'' if downloaded.get('video_format') or extra else ' ' + day}: "
+                  + ", ".join(f"{esc(s['code'])} ("
+                              + (f"translated from {esc(s['source'])}" if s["kind"] == "translated"
+                                 else esc(s["kind"])) + ")" for s in subs))
     if overview is None:
         return f"{found}; {NO_FORMATS}"
     text = f"{found}; Deno at download: {overview['deno']}"
@@ -3482,9 +3499,19 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
                          f"  {v['codec']:<{widths[2]}}  {v['size']:>{widths[3]}}{default}")
     else:
         lines.append("image: nothing a download can take (no av1 or h264 up to 1080p)")
+    lines += audio_lines(overview) if overview["in_video"] else ["audio: none"]
+    tracks = overview["subtitles"]
+    if not tracks["author"] and not tracks["auto-generated"]:
+        return lines + ["subtitles: none"]
+    return lines + ["subtitles (srt):"] + [f"  {SUB_KIND_TEXT[kind]}: {', '.join(tracks[kind])}"
+                                           for kind in ("author", "auto-generated") if tracks[kind]]
+
+
+def audio_lines(overview: dict) -> list[str]:
+    """The audio block of --video-formats: the track in the video and those
+    a download can add (with a main audio only)."""
     in_video, extra, sizes = overview["in_video"], overview["extra_audio"], overview["extra_sizes"]
-    if not in_video:  # no main audio: then no ordinary track to add either
-        return lines + ["audio: none"]
+    lines = []
     each = None
     if sizes:  # one size, or a range: "~60–70 MB", "~900 MB–1.1 GB"
         low, high = sizes[0], sizes[-1]
@@ -4490,8 +4517,26 @@ def limit_text(spec: dict) -> str:
     return f"{spec['height']}p" + (str(spec["fps"]) if spec["fps"] else "")
 
 
+def download_srt(url: str, args: argparse.Namespace, translated: bool,
+                 not_before: float) -> bytes:
+    """A subtitles file; a translation no sooner than `not_before` and again
+    after HTTP 429 (as for bilingual transcripts)."""
+    if not translated:
+        return fetch_subtitles(url, args)
+    wait(not_before - time.monotonic(), "YouTube refuses translations right after the video "
+                                        "is opened")
+    for attempt, pause in enumerate((0, *TRANSLATION_RETRY_WAITS)):
+        wait(pause, f"HTTP 429 from YouTube, retry {attempt} of {len(TRANSLATION_RETRY_WAITS)}")
+        try:
+            return fetch_subtitles(url, args)
+        except Exception as error:
+            if not (is_too_many_requests(error) and attempt < len(TRANSLATION_RETRY_WAITS)):
+                raise
+    return b""   # not reached
+
+
 def download_video(source: str, args: argparse.Namespace, page: Path,
-                   notes: set) -> tuple[dict, list] | None:
+                   notes: set, page_info: dict | None = None) -> tuple[dict, list] | None:
     """--video for one video whose page is `page`: a fresh list of formats
     (the addresses in older data expire), the variant within the limit
     (FormatChoice), checks, then yt-dlp downloads and merges it into an mp4
@@ -4506,9 +4551,10 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     if not take_image:
         log(f"Video skipped (file exists): {folder / existing[0]}. "
             "Add overwrite to --video to download it again.")
-        if not spec["audio"]:
+        if not spec["audio"] and not spec["subs"]:
             return None
-    if not shutil.which("ffmpeg"):
+    # ffmpeg joins image and sound and fixes m4a; subtitles need none
+    if (take_image or spec["audio"]) and not shutil.which("ffmpeg"):
         raise VideoSkipped(f"ffmpeg not found (it joins image and sound). "
                            f"Install it: {install_hint('ffmpeg')}.")
     if "deno" not in notes and not shutil.which("deno"):
@@ -4522,6 +4568,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             "fails, update: uv tool upgrade yt-video-archiver")
     log("Video: fetching the current list of formats...")
     notes.add("requested")   # the next video waits a moment first
+    started = time.monotonic()
     fresh = fetch_formats(source, args)
     choice = video_choice(fresh)
     if choice is None:
@@ -4544,6 +4591,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         return opts
 
     result = {"date": dt.date.today().isoformat(), "parameters": spec["text"]}
+    failures = 0
     if take_image:
         audio_codec = codec_name(audio.get("acodec"), AUDIO_CODECS)
         audio_code = audio_language(audio)
@@ -4579,8 +4627,45 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                       "audio_format": fmt["format_id"]})
     if extra:
         result["extra_audio"] = extra
-    if not take_image and not extra:
-        return None
+    # Subtitles: SRT files as YouTube gives them, each on its own; the
+    # transcript's choice of track (CAPTION_KEY) comes from the page's data.
+    subs = []
+    if spec["subs"]:
+        data = {**fresh, CAPTION_KEY: (page_info or {}).get(CAPTION_KEY),
+                TRANSLATIONS_KEY: (page_info or {}).get(TRANSLATIONS_KEY)}
+        wanted_subs, messages, source = resolve_subs(data, spec["subs"])
+        if messages:
+            log("Subtitles: " + "; ".join(messages) + ".")
+            log("  Subtitles to take: " + subs_offer(data, source))
+        for code, kind, url in wanted_subs:
+            name = sub_name(page, code, kind)
+            if name.exists() and not spec["overwrite"]:
+                log(f"Subtitles skipped (file exists): {name}. Add overwrite to --video to "
+                    "download them again.")
+                continue
+            log(f"Subtitles: {code} ("
+                + (f"machine translation from {base_language(source[0])}"
+                   if kind == "translated" else SUB_KIND_TEXT[kind]) + "), srt")
+            try:
+                srt = download_srt(url, args, kind == "translated",
+                                   started + TRANSLATION_WAIT)
+            except Exception as error:
+                log(f"Subtitles FAILED: {code}: {failure_reason(error)}")
+                failures += 1
+                continue
+            if not srt.strip():
+                log(f"  YouTube returned no subtitles for {code}; nothing saved.")
+                continue
+            name.write_bytes(srt)
+            log(f"Saved subtitles: {name} ({human_size(len(srt)).lstrip('~')})")
+            subs.append({"code": code, "kind": kind, "file": name.name, "size": len(srt)}
+                        | ({"source": base_language(source[0])} if kind == "translated" else {}))
+    if subs:
+        result["subtitles"] = subs
+    if failures:
+        result["_failures"] = failures   # told to the run, not saved
+    if not take_image and not extra and not subs:
+        return (None, None) if failures else None
     return result, fresh.get("formats")
 
 
@@ -4628,6 +4713,102 @@ def resolve_audio(choice: FormatChoice, requests: list) -> tuple[list, list[str]
         elif fits[0] not in found:
             found.append(fits[0])
     return found, messages
+
+
+# The kinds of subtitles sub: takes, in the order sub:CODE tries them.
+SUB_KINDS = ("author", "auto-generated", "translated")
+SUB_KIND_TEXT = {"author": "by the author", "auto-generated": "auto-generated"}
+
+
+def timedtext_url(formats: list[dict]) -> str | None:
+    """A subtitles track's address on YouTube's subtitles service, as SRT.
+    Entries that are HLS playlists (yt-dlp lists some as automatic captions)
+    are left out."""
+    for fmt in formats:
+        if "/api/timedtext" in str(fmt.get("url") or ""):
+            return with_query(fmt["url"], fmt="srt")
+    return None
+
+
+def subtitle_tracks(info: dict) -> dict:
+    """The subtitles a download can take: {"author": {code: url},
+    "auto-generated": {code: url}} (automatic ones: yt-dlp's "-orig" tracks,
+    made from one audio track's speech), SRT addresses only."""
+    # (live chat replays have no subtitles address, so they drop out too)
+    author = {code: timedtext_url(fmts) for code, fmts in (info.get("subtitles") or {}).items()
+              if fmts}
+    auto = {code.removesuffix("-orig"): timedtext_url(fmts)
+            for code, fmts in (info.get("automatic_captions") or {}).items()
+            if code.endswith("-orig") and fmts}
+    return {"author": {c: u for c, u in author.items() if u},
+            "auto-generated": {c: u for c, u in auto.items() if u}}
+
+
+def resolve_subs(info: dict, requests: list) -> tuple[list, list[str], tuple | None]:
+    """The subtitles the sub: parameters ask for: [(code, kind, url)], the
+    messages for the rest, and the translation source ((language, url): the
+    track the transcript takes). sub:CODE takes the author's subtitles in
+    that language, else the automatic ones, else a machine translation of
+    the transcript's track; sub:CODE.KIND only that kind. Codes match as for
+    audio: (exact, else a bare language finds its regional code). Each once."""
+    tracks = subtitle_tracks(info)
+    found, messages = [], []
+    picked = choose_caption_track(info)
+    source = None
+    if picked:
+        url = timedtext_url(picked[2])
+        source = (picked[1], url) if url else None
+    known = set(tracks["author"]) | set(tracks["auto-generated"]) | set(info.get(TRANSLATIONS_KEY) or {})
+    for code, sort, text in requests:
+        if not recognised_code(code, known):
+            messages.append(f'"{text}" not recognised')
+            continue
+        take = None
+        for kind in [sort] if sort else SUB_KINDS:
+            if kind == "translated":
+                listed = info.get(TRANSLATIONS_KEY)
+                if (source and base_language(code) != base_language(source[0])
+                        and (listed is None or code in listed)):
+                    take = (code, kind, with_query(source[1], tlang=code))
+            else:
+                codes = tracks[kind]
+                match = ([c for c in codes if c == code]
+                         or [c for c in codes if base_language(c) == code])
+                if match:
+                    take = (match[0], kind, codes[match[0]])
+            if take:
+                break
+        if not take:
+            messages.append(f'"{text}" not available')
+        elif take[:2] not in [f[:2] for f in found]:
+            found.append(take)
+    return found, messages, source
+
+
+def subs_offer(info: dict, source: tuple | None) -> str:
+    """What sub: can take, for the console: "by the author: en, pl;
+    auto-generated: en; other languages as a machine translation"."""
+    tracks = subtitle_tracks(info)
+    parts = [f"{SUB_KIND_TEXT[kind]}: {', '.join(tracks[kind])}"
+             for kind in ("author", "auto-generated") if tracks[kind]]
+    if source:
+        parts.append("other languages as a machine translation")
+    return "; ".join(parts) or "none"
+
+
+def fetch_subtitles(url: str, args: argparse.Namespace) -> bytes:
+    """One subtitles file from YouTube, through yt-dlp's connection (a bare
+    request is refused as automated)."""
+    opts = {"quiet": True}
+    if args.cookies_from_browser:
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        with ydl.urlopen(url) as response:
+            return response.read()
+
+
+def sub_name(page: Path, code: str, kind: str) -> Path:
+    return page.parent / f"{page.stem}.{code}.{kind}.srt"
 
 
 def audio_name(page: Path, key: tuple) -> Path:
@@ -4700,10 +4881,11 @@ def video_spec(value: str) -> dict:
     """Parse --video: "" (the default), or comma-separated parameters: a
     quality as an upper limit ("720p": up to 720p at any frame rate;
     "720p30": up to 720p and 30 fps; at most 1080p), "overwrite" and
-    extra audio tracks ("audio:pl", "audio:pl.auto-dubbed", repeated for
-    more; the code is written the usual way); any case of letters. Raises ArgumentTypeError (before anything is fetched),
+    extra audio tracks ("audio:pl", "audio:pl.auto-dubbed") and subtitles
+    ("sub:pl", "sub:pl.translated"), repeated for more (the code is written
+    the usual way); any case of letters. Raises ArgumentTypeError (before anything is fetched),
     also for an address taken as parameters ("--video URL")."""
-    spec = {"height": None, "fps": None, "overwrite": False, "audio": [],
+    spec = {"height": None, "fps": None, "overwrite": False, "audio": [], "subs": [],
             "text": value.strip().lower()}
     if not spec["text"]:
         return spec
@@ -4721,6 +4903,14 @@ def video_spec(value: str) -> dict:
                     f"'{item}': write audio:CODE or audio:CODE.ROLE, e.g. audio:pl or "
                     f"audio:pl.auto-dubbed")
             spec["audio"].append((standard_code(code), role.lower() or None, item))
+        elif kind.lower() == "sub" and rest:
+            # sub:CODE or sub:CODE.KIND (author, auto-generated, translated)
+            code, _, sort = rest.partition(".")
+            if not LANGUAGE_CODE.fullmatch(code) or (sort and sort.lower() not in SUB_KINDS):
+                raise argparse.ArgumentTypeError(
+                    f"'{item}': write sub:CODE or sub:CODE.KIND (KIND: "
+                    f"{', '.join(SUB_KINDS)}), e.g. sub:pl or sub:pl.translated")
+            spec["subs"].append((standard_code(code), sort.lower() or None, item))
         elif item.lower() == "overwrite":
             if spec["overwrite"]:
                 raise argparse.ArgumentTypeError("'overwrite' is given more than once")
@@ -4739,7 +4929,7 @@ def video_spec(value: str) -> dict:
         else:
             raise argparse.ArgumentTypeError(
                 f"'{item}' is not a parameter (use a quality such as 720p or 720p30, "
-                f"audio:CODE or overwrite); the video's address goes before --video")
+                f"audio:CODE, sub:CODE or overwrite); the video's address goes before --video")
     return spec
 
 
@@ -4927,7 +5117,11 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "upper limit (720p, or 720p30 to limit the frame rate too), "
                              "audio:CODE for an extra audio track as a separate m4a (e.g. "
                              "audio:pl: a dub by the author, else YouTube's; audio:pl.auto-dubbed "
-                             "for that one; repeat for more) and overwrite (download again "
+                             "for that one; repeat for more), sub:CODE for subtitles as an "
+                             "SRT file (sub:pl: the author's, else auto-generated, else a "
+                             "machine translation of the transcript's subtitles; "
+                             "sub:pl.author, .auto-generated or .translated for that kind) "
+                             "and overwrite (download again "
                              "although the file is there). "
                              "Write the address first: yt2html URL --video 720p30")
     parser.add_argument("--video-formats", action="store_true",
@@ -5022,7 +5216,7 @@ def main(argv=None) -> int:
         """--video after the page: the video file, then the page again (when it
         was made now) with the fresh list of formats and the result."""
         try:
-            done = download_video(source, args, outcome["target"], notes)
+            done = download_video(source, args, outcome["target"], notes, outcome.get("info"))
         except VideoSkipped as reason:
             log(f"Video skipped: {reason}")
             videos["skipped"] += 1
@@ -5040,8 +5234,14 @@ def main(argv=None) -> int:
         if done is None:
             videos["skipped"] += 1
             return
-        videos["downloaded"] += 1
         result, formats = done
+        if result is None:   # nothing new, and some subtitles failed
+            videos["failed"] += 1
+            return
+        if result.pop("_failures", 0):
+            videos["failed"] += 1
+        else:
+            videos["downloaded"] += 1
         if outcome.get("rebuild"):
             info = outcome["info"]
             info["formats"] = formats   # the list the video was chosen from
