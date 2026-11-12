@@ -3022,10 +3022,7 @@ def video_overview(info: dict) -> dict | None:
                              "quality": quality_label(height, fps),
                              "parameter": quality_parameter(height, fps),
                              "codec": key[0], "size": with_audio(formats[key])})
-    picks, pick = [], None
-    if variants and main_audio:
-        picks.append((variants[0]["row"], variants[0]["column"]))
-        pick = variants[0]["format"]
+    picks = [(variants[0]["row"], variants[0]["column"])] if variants and main_audio else []
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
              "rows": rows, "picks": picks,
              "audio": (track_text(audio_language(main_audio),
@@ -3125,13 +3122,6 @@ def video_overview(info: dict) -> dict | None:
                        "rows": language_rows, "picks": audio_picks,
                        "translation": translation}
 
-    if pick:
-        default = (f"{rows[picks[0][0]][0]} {key_of(pick)[0]} + "
-                   f"{track_text(audio_language(main_audio), codec_name(main_audio.get('acodec'), AUDIO_CODECS))}"
-                   f", mp4, {esc(with_audio(pick))}")
-    else:
-        default = "nothing (no av1 or h264 image up to 1080p with audio)"
-
     # The summary, short on purpose: the top quality and the original audio's
     # language (the tables tell the rest).
     summary = []
@@ -3150,7 +3140,7 @@ def video_overview(info: dict) -> dict | None:
     extra = [key for key in tracks if key != in_video and audio_for(key, "aac")]
     known = sorted(filter(None, (format_size(info, audio_for(key, "aac")) for key in extra)))
     extra_sizes = list(dict.fromkeys(map(human_size, known)))   # smallest to largest
-    return {"image": image, "languages": languages_table, "default": default,
+    return {"image": image, "languages": languages_table,
             "variants": variants, "in_video": in_video,
             "in_video_codec": codec_name(main_audio.get("acodec"), AUDIO_CODECS) if main_audio
             else None,
@@ -3296,9 +3286,9 @@ def render_video_formats(info: dict) -> str:
 def about_video_file(info: dict, video_files: list[str] | None = None,
                      video_size: int | None = None) -> str:
     """The "Video file" row: a video file found next to the page when it was
-    built (the first one, with its size), else "not downloaded" with what
-    the planned default would take; then how the list of formats came about
-    (Deno, signed in)."""
+    built (the first one, with its size), else "not downloaded"; then how the
+    list of formats came about (Deno, signed in). The planned default shows
+    in the tables (marked) and in --video-formats, not here."""
     overview = video_overview(info)
     if video_files:
         found = (f"a video file next to the page: {esc(video_files[0])}"
@@ -3307,8 +3297,7 @@ def about_video_file(info: dict, video_files: list[str] | None = None,
         found = "not downloaded"
     if overview is None:
         return f"{found}; {NO_FORMATS}"
-    text = found + ("" if video_files else f"; planned default: {overview['default']}")
-    text += f"; Deno at download: {overview['deno']}"
+    text = f"{found}; Deno at download: {overview['deno']}"
     if overview["signed_in"]:
         text += "; signed in, so YouTube offered no HLS formats"
     return text

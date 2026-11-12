@@ -604,6 +604,18 @@ def summary(info):
     return formats_section(render(info))[0]
 
 
+def planned(info):
+    """The planned default as --video-formats (its "(default)" line) and the
+    image caption (the audio the sizes include) tell it: "1080p, 30 fps
+    (1080p30) av1 + en aac, mp4, ~293 MB"; None when there is none."""
+    lines = [line for line in yt2html.format_list(info) if line.endswith("(default)")]
+    if not lines:
+        return None
+    quality, codec, size = re.fullmatch(r"\s*(.*?\))\s+(\S+)\s+(.+?)\s+\(default\)", lines[0]).groups()
+    quality = re.sub(r"\s+", " ", quality)   # the columns are aligned with spaces
+    return f"{quality} {codec} + {yt2html.video_overview(info)['image']['audio']}, mp4, {size}"
+
+
 def translation(info):
     return re.search(r'<div class="translation">(.*?)</div>', render(info)).group(1)
 
@@ -665,8 +677,9 @@ def test_video_formats_describe_image_audio_subtitles_and_the_default(info):
     assert translation(info) == ("machine-translated subtitles: possible in 2 other languages "
                                  "for each row with subtitles")   # pl, fr
     # the best quality up to 1080p first (here 50 fps, only in h264), then its codec
-    assert rest == ("not downloaded; planned default: 1080p, 50 fps (1080p50) h264 + en aac, "
-                    "mp4, ~609 MB; Deno at download: unknown (data saved by an older version)")
+    assert planned(info) == "1080p, 50 fps (1080p50) h264 + en aac, mp4, ~609 MB"
+    # the row says what is there, not the plan
+    assert rest == "not downloaded; Deno at download: unknown (data saved by an older version)"
     assert picked(info) == {"image": ["~609 MB"], "languages": ["~9 MB"]}
     # short on purpose: the top quality and the original audio's language
     assert summary(info) == "Video formats · up to 2160p, 25 fps · original audio: en"
@@ -688,8 +701,8 @@ def test_video_formats_without_an_original_language_or_runtime(info):
     assert tables["languages"][1][1] == ["–", "unknown", "original", "~5 MB", "–", "–"]
     assert translation(info) == "machine-translated subtitles: none (no subtitles to translate)"
     assert summary(info) == "Video formats · up to 1080p, 25 fps"   # the language is unknown
-    assert rest == ("not downloaded; planned default: 1080p, 25 fps (1080p25) h264 + aac, "
-                    "mp4, ~80 MB; Deno at download: "
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + aac, mp4, ~80 MB"
+    assert rest == ("not downloaded; Deno at download: "
                     "no, so YouTube may have offered more formats than listed")
     info[yt2html.DOWNLOAD_KEY] = {"deno": True}
     assert video_tables(info)[1].endswith("Deno at download: yes")
@@ -745,7 +758,7 @@ def test_video_formats_order_rows_by_language_then_role(info):
         ["it", "dubbed", "~9 MB"], ["ja", "commentary", "~9 MB"], ["pl", "auto-dubbed", "~9 MB"]]
     # the main audio is the original in aac, not the (larger) English description
     assert picked(info)["languages"] == ["~7 MB"]
-    assert "planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~107 MB" in rest
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + en aac, mp4, ~107 MB"
     assert summary(info) == "Video formats · up to 1080p, 25 fps · original audio: en"
     # no original known: by language; the mark follows its row
     info["formats"] = [vfmt("137", 1080, "avc1.640028", 100 * MB),
@@ -770,11 +783,9 @@ def test_video_formats_main_audio_avoids_audio_descriptions(info):
                        afmt("141", "mp4a.40.2", 18 * MB, format_note="Premium", **kind("original")),
                        afmt("140-1", "mp4a.40.2", 12 * MB, "en", -1, **kind("descriptive")),
                        afmt("140-2", "mp4a.40.2", 9 * MB, "pl", -1, **kind("dubbed", "pl"))]
-    assert "planned default: 1080p, 25 fps (1080p25) h264 + pl aac, mp4, ~109 MB" in (
-        video_tables(info)[1])
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + pl aac, mp4, ~109 MB"
     info["formats"] = info["formats"][:3]
-    assert "planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~112 MB" in (
-        video_tables(info)[1])
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + en aac, mp4, ~112 MB"
 
 
 def test_audio_kind_from_the_format_address():
@@ -795,8 +806,7 @@ def test_video_formats_edge_cases(info):
     tables, rest = video_tables(info)
     assert tables["image"] == ("image", [["quality", "resolution", "h264"], ["360p, 25 fps (360p25)", "–", "~30 MB"]])
     assert "audio" not in tables and picked(info) == {}
-    assert rest.startswith("not downloaded; planned default: nothing (no av1 or h264 image "
-                           "up to 1080p with audio); ")
+    assert planned(info) is None and rest.startswith("not downloaded; Deno at download: ")
     assert summary(info) == "Video formats · up to 360p, 25 fps"
     # no image at all
     info["formats"] = [afmt("140", "mp4a.40.2", 9 * MB)]
@@ -809,7 +819,7 @@ def test_video_formats_edge_cases(info):
     tables, rest = video_tables(info)
     assert tables["image"][1] == [["quality", "resolution", "xyz1"], ["720p, 25 fps", "–", "size unknown"]]
     assert tables["languages"][1][1] == ["en", "en", "original", "size unknown", "–", "–"]
-    assert "planned default: nothing" in rest
+    assert planned(info) is None
     # no frame rate in the data: the height alone
     info["formats"] = [vfmt("1", 720, "avc1.4d401f", 10 * MB, fps=None)]
     assert video_tables(info)[0]["image"][1][1] == ["720p (720p)", "–", "~10 MB"]
@@ -836,7 +846,6 @@ def test_small_sizes_are_escaped_on_the_page(info):
     section = formats_section(html)[1]
     assert section.count("&lt;1 MB") == 2 and "<1 MB" not in section   # image and audio cells
     assert "x [TESTVIDEO01].mp4, &lt;1 MB;" in html
-    assert "h264 + en aac, mp4, &lt;1 MB;" in render(info)   # the planned default in Video file
     assert yt2html.format_list(info)[2].endswith("h264  <1 MB  (default)")
     assert yt2html.human_size(999_999_999) == "~1000 MB"
     assert yt2html.human_size(1_000_000_000) == "~1.0 GB"
@@ -852,7 +861,7 @@ def test_video_formats_with_saved_data(capsys, tmp_path, info):
     info["formats"] = video_formats_example()
     code, out, html = rebuild(capsys, tmp_path, info)
     assert code == 0 and formats_section(html)
-    assert "planned default: 1080p, 50 fps (1080p50) h264" in row(html, "Video file")
+    assert planned(info).startswith("1080p, 50 fps (1080p50) h264")
 
 
 def test_video_formats_mark_premium_formats(info):
@@ -877,20 +886,19 @@ def test_video_formats_mark_premium_formats(info):
                                        *SUBS],
                                   # the name from yt-dlp's note of the Premium formats
                                   ["en", "English", "original", "~9 MB", "~18 MB", "~17 MB", "–", "–"]]
-    assert "planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~409 MB" in rest
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + en aac, mp4, ~409 MB"
     # with Premium audio only, the main audio is still an ordinary one
     info["formats"] = [vfmt("137", 1080, "avc1.640028", 400 * MB),
                        afmt("141", "mp4a.40.2", 18 * MB, format_note="Premium"),
                        afmt("251", "opus", 8 * MB)]
     tables, rest = video_tables(info)
     assert tables["image"][1][1] == ["1080p, 25 fps (1080p25)", "–", "~408 MB"]
-    assert "planned default: 1080p, 25 fps (1080p25) h264 + en opus, mp4, ~408 MB" in rest
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + en opus, mp4, ~408 MB"
     # the original only in Premium: an ordinary dub is the main audio, never Premium
     info["formats"] = [vfmt("137", 1080, "avc1.640028", 400 * MB),
                        afmt("141", "mp4a.40.2", 18 * MB, format_note="Premium"),
                        afmt("140-1", "mp4a.40.2", 9 * MB, language="pl", preference=-1)]
-    assert "planned default: 1080p, 25 fps (1080p25) h264 + pl aac, mp4, ~409 MB" in (
-        video_tables(info)[1])
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + pl aac, mp4, ~409 MB"
 
 
 def test_video_formats_name_hls_formats_without_sizes(info):
@@ -913,7 +921,7 @@ def test_video_formats_name_hls_formats_without_sizes(info):
                                   ["1080p, 25 fps (1080p25)", "–", "~216 MB",
                                    "h264, vp9, vp9 Premium"]]
     assert tables["languages"][1][1] == ["en", "en", "original", "~69 MB", "–", "–"]
-    assert "planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~216 MB" in rest
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + en aac, mp4, ~216 MB"
     assert summary(info).startswith("Video formats · up to 2160p, 60 fps · ")   # HLS counts
     html = render(info)   # the HLS column is text: not right-aligned
     assert "<th>HLS (sizes unknown)</th>" in html and "<td>vp9 60 fps</td>" in html
@@ -971,12 +979,11 @@ def test_video_formats_mark_the_planned_default(info):
         afmt("140-1", "mp4a.40.2", 9 * MB, language="pl", preference=-1),
     ]
     assert picked(info) == {"image": ["~209 MB"], "languages": ["~9 MB"]}
-    assert ("planned default: 1080p, 25 fps (1080p25) av1 + en aac, mp4, ~209 MB"
-            in video_tables(info)[1])
+    assert planned(info) == "1080p, 25 fps (1080p25) av1 + en aac, mp4, ~209 MB"
     # the original without aac: its opus, not a dub's aac
     info["formats"] = [f for f in info["formats"] if f["format_id"] != "140"]
     assert picked(info)["languages"] == ["~8 MB"]
-    assert "1080p, 25 fps (1080p25) av1 + en opus, mp4, ~208 MB" in video_tables(info)[1]
+    assert planned(info) == "1080p, 25 fps (1080p25) av1 + en opus, mp4, ~208 MB"
     # an audio codec without a column (e.g. Dolby ec-3): nothing marked there
     info["formats"] = [vfmt("399", 1080, "av01.0.08M.08", 200 * MB),
                        afmt("380", "ec-3", 9 * MB)]
@@ -990,8 +997,7 @@ def test_video_formats_mark_the_planned_default(info):
     info["formats"] = [vfmt("401", 2160, "av01.0.12M.08", 900 * MB),
                        vfmt("264", 1440, "avc1.640032", 700 * MB),
                        vfmt("137", 1080, "avc1.640028", 400 * MB), afmt("140", "mp4a.40.2", 9 * MB)]
-    assert ("planned default: 1080p, 25 fps (1080p25) h264 + en aac, mp4, ~409 MB"
-            in video_tables(info)[1])
+    assert planned(info) == "1080p, 25 fps (1080p25) h264 + en aac, mp4, ~409 MB"
     assert [r[0] for r in video_tables(info)[0]["image"][1][1:]] == [   # above 1080p: no parameter
         "2160p, 25 fps", "1440p, 25 fps", "1080p, 25 fps (1080p25)"]
     # a quality with only vp9 is skipped; nothing up to 1080p: nothing marked
@@ -1005,7 +1011,7 @@ def test_video_formats_mark_the_planned_default(info):
     tables, rest = video_tables(info)
     assert tables["image"][0] == "image (sizes include the audio: en opus)"
     assert tables["languages"][0] == "languages"
-    assert "planned default: nothing (no av1 or h264 image up to 1080p with audio)" in rest
+    assert planned(info) is None
     assert picked(info) == {"languages": ["~8 MB"]}
 
 
@@ -1209,7 +1215,7 @@ def test_video_formats_name_qualities_as_youtube(info):
     assert tables["image"][1] == [["quality", "resolution", "h264", "HLS (sizes unknown)"],
                                   ["1080p, 25 fps (1080p25)", "1080×1920", "~109 MB", "h264"],
                                   ["720p, 25 fps (720p25)", "720×1280", "~59 MB", "–"]]
-    assert "planned default: 1080p, 25 fps (1080p25) h264" in rest   # a Short can be taken
+    assert planned(info).startswith("1080p, 25 fps (1080p25) h264")   # a Short can be taken
     assert summary(info).startswith("Video formats · up to 1080p, 25 fps · ")
     # a wide frame: named after its width; two sizes in one row
     info["formats"] = [vfmt("137", 804, "avc1.640028", 100 * MB, width=1920),
