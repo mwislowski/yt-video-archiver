@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-13
+
 ### Added
 
 - `--video`: after the page, also download the video itself as an mp4 named like the page, so the page plays it (needs ffmpeg). By default the best quality up to 1080p in AV1, else H.264, with the original audio. Parameters follow `--video`, comma-separated: a quality as an upper limit (`720p`; `720p30` limits the frame rate too), `audio:CODE`, `sub:CODE` (both below) and `overwrite`. `yt2html --video URL` (the address taken as parameters) is an error that says to put the address first; not with `--from-json` or `--index-only`.
@@ -132,7 +134,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.6.0...v0.7.0
