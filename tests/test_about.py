@@ -1320,12 +1320,18 @@ def test_languages_table_edge_cases(info):
     def rows():
         return [[r[0], r[2], r[-2], r[-1]] for r in video_tables(info)[0]["languages"][1][1:]]
     video = [vfmt("137", 1080, "avc1.640028", 100 * MB)]
-    # automatic captions join the only audio track of an unknown language (made from
-    # its speech), the author's subtitles do not (they belong to the video)
+    # an audio track without a language: the original language the transcript
+    # uses (here from the only automatic captions), so everything in one row
     info["formats"] = video + [afmt("140", "mp4a.40.2", 5 * MB, None, -1)]
     info["subtitles"] = {"en": [{}]}
     info["automatic_captions"] = {"en-orig": [{}]}
-    assert rows() == [["–", "original", "–", "en"], ["en", "–", "en", "–"]]
+    assert rows() == [["en", "original", "en", "en"]]
+    # nothing to go by (two automatic tracks, no page data): unknown; automatic
+    # captions join it (made from its speech), the author's subtitles do not
+    info[yt2html.CAPTION_KEY] = None
+    info["automatic_captions"] = {"en-orig": [{}], "de-orig": [{}]}
+    assert rows() == [["–", "original", "–", "en, de"], ["en", "–", "en", "–"]]
+    info["automatic_captions"] = {"en-orig": [{}]}
     # ... not when there are more tracks, nor a known language
     info["formats"].append(afmt("140-1", "mp4a.40.2", 5 * MB, "pl", -1))
     info["subtitles"] = {}

@@ -579,7 +579,7 @@ def test_sub_details():
     assert (found, messages, source) == ([], ['"sub:pl" not available'], None)
     assert yt2html.subs_offer({"formats": []}, None) == "none"
     assert yt2html.subs_offer(sub_data(), ("en", "u")) == (
-        "by the author: en, pt-BR; auto-generated: en, de; other languages as a machine translation")
+        "by the author: en, pt-BR; auto-generated: de, en; other languages as a machine translation")
 
 
 @pytest.fixture
@@ -625,7 +625,7 @@ def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
     # "fi": not in YouTube's list of translation languages (from the page's data)
     assert ('[yt2html] Subtitles: "sub:jp" not recognised; "sub:fi" not available.\n'
             '[yt2html]   Subtitles to take: by the '
-            "author: en, pt-BR; auto-generated: en, de; other languages as a machine translation\n"
+            "author: en, pt-BR; auto-generated: de, en; other languages as a machine translation\n"
             in out)
     assert "[yt2html] Subtitles: en (by the author), srt" in out
     assert "[yt2html] Subtitles: pl (machine translation from en), srt" in out
@@ -696,7 +696,7 @@ def test_subtitles_only_with_a_new_page(tmp_path, subtitles, monkeypatch):
 def test_video_formats_lists_subtitles(info):
     info.update(sub_data())
     lines = yt2html.format_list(info)
-    assert lines[-3:] == ["subtitles (srt):", "  by the author: en, pt-BR", "  auto-generated: en, de"]
+    assert lines[-3:] == ["subtitles (srt):", "  by the author: en, pt-BR", "  auto-generated: de, en"]
     info["subtitles"], info["automatic_captions"] = {}, {}
     assert yt2html.format_list(info)[-1] == "subtitles: none"
 
@@ -714,3 +714,54 @@ def test_player_spoken_names_and_speeds():
     assert "toggle.textContent = '▶'; toggle.setAttribute('aria-label', 'Play');" in js
     # the extra track never slower than 0.25× (Firefox mutes slower sound)
     assert "var rate = Math.max(0.25, video.playbackRate * (nudging" in js
+
+
+def test_language_names_and_the_guessed_original(info):
+    # an audio track without a language, the author's subtitles with names (as TED)
+    info["formats"] = [vfmt("399", 1080, "av01.0.08M.08", 300 * MB),
+                       afmt("140", "mp4a.40.2", 9 * MB, language=None, preference=None)]
+    info["subtitles"] = {"en": [{"ext": "json3", "url": TT + "en", "name": "English"}],
+                         "zh-CN": [{"ext": "json3", "url": TT + "zh-CN", "name": "Chinese (China)"}],
+                         "pt-BR": [{"ext": "json3", "url": TT + "pt-BR", "name": "Portuguese (Brazil)"}]}
+    info["automatic_captions"] = {}
+    info[yt2html.CAPTION_KEY] = {"language": "en", "kind": "manual"}
+    info[yt2html.TRANSLATIONS_KEY] = {"en": "English", "pt": "Portuguese"}
+    html = render_page(info)
+    table = re.search(r"<caption>languages</caption>(.*?)</table>", html).group(1)
+    names = re.findall(r"<tr><td>([^<]*)</td><td>([^<]*)</td>", table)
+    # the original: the transcript's language; names from the author's subtitles
+    # before YouTube's list ("Portuguese (Brazil)", not "Portuguese")
+    assert names == [("en", "English"), ("pt-BR", "Portuguese (Brazil)"), ("zh-CN", "Chinese (China)")]
+    assert "<td>original</td>" in table and "original audio: en" in html
+    assert "<caption>image (sizes include the audio: en aac)</caption>" in html
+    # the subtitles a download can take: by code, not in the data's order
+    assert yt2html.subs_offer(info, None) == "by the author: en, pt-BR, zh-CN"
+    # a note of the audio format comes before the subtitles' name
+    info["formats"][1].update(language="en-US", format_note="English (US) original (default), medium")
+    assert ("<td>en-US</td><td>English (US)</td>" in render_page(info))
+    # nothing to go by: unknown, as before
+    info["formats"][1].update(language=None, format_note=None)
+    info[yt2html.CAPTION_KEY] = None
+    assert "<td>–</td><td>unknown</td>" in render_page(info)
+
+
+def test_video_guesses_the_language_with_the_page(tmp_path, youtube, monkeypatch, capsys):
+    # the fresh list has no language; the page's data (made now) gives the guess
+    youtube["fresh"] = [vfmt("399", 1080, "av01.0.08M.08", 300 * MB),
+                        afmt("140", "mp4a.40.2", 9 * MB, language=None, preference=None)]
+    fetch = yt2html.fetch_info
+    monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: {
+        **fetch(s, a), "formats": json.loads(json.dumps(youtube["fresh"])),
+        yt2html.CAPTION_KEY: {"language": "en", "kind": "manual"},
+        "subtitles": {"en": [{"ext": "json3", "url": TT + "en"}]}})
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video"]) == 0
+    assert "[yt2html] Video: 1080p, 25 fps av1 + en aac, mp4, ~309 MB" in capsys.readouterr().out
+    assert " av1 + en aac, mp4, " in row(page(tmp_path).read_text("utf-8"), "Video file")
+
+
+def test_subtitles_hint_after_429(tmp_path, subtitles, capsys):
+    subtitles["sub_answers"] = {"pl": [TooMany("HTTP Error 429: Too Many Requests")]}
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:pl"]) == 1
+    assert ("Subtitles FAILED: pl: HTTP Error 429: Too Many Requests YouTube keeps refusing the "
+            "translation; try again later, or with --cookies-from-browser firefox after opening "
+            "the video with auto-translated subtitles in that browser.") in capsys.readouterr().out

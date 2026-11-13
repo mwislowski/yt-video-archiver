@@ -76,6 +76,9 @@ IMAGE_RETRIES = 3
 # 429 it is retried after a further pause.
 TRANSLATION_WAIT = 65
 TRANSLATION_RETRY_WAITS = (60, 120)
+TRANSLATION_HINT = (" YouTube keeps refusing the translation; try again later, or with "
+                    "--cookies-from-browser firefox after opening the video with "
+                    "auto-translated subtitles in that browser.")
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -1049,10 +1052,7 @@ def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
         except Exception as error:
             if is_too_many_requests(error) and attempt < len(TRANSLATION_RETRY_WAITS):
                 continue
-            hint = (" YouTube keeps refusing the translation; try again later, or with "
-                    "--cookies-from-browser firefox after opening the video with "
-                    "auto-translated subtitles in that browser."
-                    if is_too_many_requests(error) else "")
+            hint = TRANSLATION_HINT if is_too_many_requests(error) else ""
             raise TranscriptError(f"could not download the translation into '{target}' "
                                   f"({error}).{hint}")
     if not cues:
@@ -3015,6 +3015,12 @@ class FormatChoice:
         # A video with a single language has nothing to mark its tracks by:
         # that is the original.
         self._single = len({audio_language(f) for f in self.audio}) == 1
+        # No language in the audio formats (a single track): the original
+        # language as the transcript knows it (the watch page's default
+        # captions for that track), the same guess the Transcript row shows.
+        self._inferred = (transcript_language(info)
+                          if self.audio and all(not f.get("language") for f in self.audio)
+                          else None)
         self._has_original = any(audio_kind(f) == "original"
                                  or f.get("language_preference") == 10 for f in self.audio)
         self.original = next((self.track(f) for f in self.audio
@@ -3072,7 +3078,7 @@ class FormatChoice:
 
     def track(self, fmt: dict) -> tuple[str, str | None]:
         """An audio format's track: (language, role)."""
-        return audio_language(fmt), self.role_of(fmt)
+        return fmt.get("language") or self._inferred or UNKNOWN_LANGUAGE, self.role_of(fmt)
 
     def best(self, formats: list[dict]) -> dict:
         """The best of alike formats: the highest frame rate, then the largest."""
@@ -3169,7 +3175,7 @@ def video_overview(info: dict) -> dict | None:
               if v["format"].get("format_id") == downloaded.get("video_format")]
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
              "rows": rows, "picks": picks, "chosen": chosen,
-             "audio": (track_text(audio_language(main_audio),
+             "audio": (track_text(track(main_audio)[0],
                               codec_name(main_audio.get("acodec"), AUDIO_CODECS))
                        if main_audio else None)}
 
@@ -3229,8 +3235,7 @@ def video_overview(info: dict) -> dict | None:
         known = code != UNKNOWN_LANGUAGE   # unknown: no code, the name "unknown"
         if row.get("alone"):
             cells = [None] * len(audio_keys)
-            names = info.get(TRANSLATIONS_KEY) or {}
-            name = names.get(code) or names.get(code.split("-")[0]) or code
+            name = language_name(info, [], code)
         else:
             cells = [esc(human_size(format_size(info, audio_for(row["key"], codec, premium))))
                      if audio_for(row["key"], codec, premium) else None
@@ -3367,8 +3372,9 @@ def language_name(info: dict, formats: list[dict], code: str) -> str:
     """The English name of an audio track's language: from yt-dlp's format
     note of a single-file format ("English (US) original (default), medium"
     -> "English (US)"; HLS notes are in the track's own language, so not
-    used), else from YouTube's list of translation languages (full code,
-    then the language alone), else the code."""
+    used), else from the name of the author's subtitles in that code
+    ("Portuguese (Brazil)"), else from YouTube's list of translation
+    languages (full code, then the language alone), else the code."""
     for f in formats:
         if is_hls(f):
             continue
@@ -3376,6 +3382,9 @@ def language_name(info: dict, formats: list[dict], code: str) -> str:
                       (f.get("format_note") or "").split(",")[0]).strip()
         if name and name != code and name.lower() not in QUALITY_WORDS:
             return name
+    for f in (info.get("subtitles") or {}).get(code) or []:
+        if f.get("name"):
+            return f["name"]
     names = info.get(TRANSLATIONS_KEY) or {}
     return names.get(code) or names.get(code.split("-")[0]) or code
 
@@ -4593,7 +4602,11 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     notes.add("requested")   # the next video waits a moment first
     started = time.monotonic()
     fresh = fetch_formats(source, args)
-    choice = video_choice(fresh)
+    # the page's data (made now) knows the transcript's track and YouTube's
+    # translation languages; the fresh list has neither
+    data = {**fresh, CAPTION_KEY: (page_info or {}).get(CAPTION_KEY),
+            TRANSLATIONS_KEY: (page_info or {}).get(TRANSLATIONS_KEY)}
+    choice = video_choice(data)
     if choice is None:
         raise VideoSkipped("no video or audio formats in the list (YouTube sometimes sends "
                            "none for a while; try again later).")
@@ -4617,7 +4630,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     failures = 0
     if take_image:
         audio_codec = codec_name(audio.get("acodec"), AUDIO_CODECS)
-        audio_code = audio_language(audio)
+        audio_code = choice.track(audio)[0]
         log(f"Video: {variant['quality']} {variant['codec']} + "
             f"{track_text(audio_code, audio_codec)}, mp4, {variant['size']}")
         target = folder / f"{page.stem}.mp4"
@@ -4654,8 +4667,6 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     # transcript's choice of track (CAPTION_KEY) comes from the page's data.
     subs = []
     if spec["subs"]:
-        data = {**fresh, CAPTION_KEY: (page_info or {}).get(CAPTION_KEY),
-                TRANSLATIONS_KEY: (page_info or {}).get(TRANSLATIONS_KEY)}
         wanted_subs, messages, source = resolve_subs(data, spec["subs"])
         if messages:
             log("Subtitles: " + "; ".join(messages) + ".")
@@ -4673,7 +4684,8 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                 srt = download_srt(url, args, kind == "translated",
                                    started + TRANSLATION_WAIT)
             except Exception as error:
-                log(f"Subtitles FAILED: {code}: {failure_reason(error)}")
+                log(f"Subtitles FAILED: {code}: {failure_reason(error)}"
+                    + (TRANSLATION_HINT if is_too_many_requests(error) else ""))
                 failures += 1
                 continue
             if not srt.strip():
@@ -4756,15 +4768,15 @@ def timedtext_url(formats: list[dict]) -> str | None:
 def subtitle_tracks(info: dict) -> dict:
     """The subtitles a download can take: {"author": {code: url},
     "auto-generated": {code: url}} (automatic ones: yt-dlp's "-orig" tracks,
-    made from one audio track's speech), SRT addresses only."""
+    made from one audio track's speech), SRT addresses only, by code."""
     # (live chat replays have no subtitles address, so they drop out too)
     author = {code: timedtext_url(fmts) for code, fmts in (info.get("subtitles") or {}).items()
               if fmts}
     auto = {code.removesuffix("-orig"): timedtext_url(fmts)
             for code, fmts in (info.get("automatic_captions") or {}).items()
             if code.endswith("-orig") and fmts}
-    return {"author": {c: u for c, u in author.items() if u},
-            "auto-generated": {c: u for c, u in auto.items() if u}}
+    return {"author": {c: u for c, u in sorted(author.items()) if u},
+            "auto-generated": {c: u for c, u in sorted(auto.items()) if u}}
 
 
 def resolve_subs(info: dict, requests: list) -> tuple[list, list[str], tuple | None]:
