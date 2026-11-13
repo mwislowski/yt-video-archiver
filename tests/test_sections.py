@@ -149,7 +149,7 @@ def test_player_tile_panel_and_script(info):
     assert html.count('<aside class="player"') == 1
     assert 'data-extensions="mp4 webm m4v mkv"' in html
     assert [b.split('"')[0] for b in html.split('data-speed="')[1:]] == \
-        ["0.5", "0.75", "1", "1.25", "1.5"]
+        ["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"]
     assert html.count("<script>") == 1 and yt2html.PLAYER_JS in html
 
 

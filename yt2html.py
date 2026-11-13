@@ -1600,7 +1600,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 /* the repeat arrow is a small glyph: larger, the button keeps its height */
 .player button[data-do=repeat]{font-size:19px}
 .player button.main{width:72px;background:var(--accent);color:var(--on-accent)}
-.player .speed button{width:52px;padding:4px 0;font-size:12px}
+.player .speed button{width:48px;padding:4px 0;font-size:12px}
 .player .speed button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
 /* Follow row: as high as the speeds, both buttons as wide as "Stop following" */
 .player .buttons.follow button{width:116px;padding:4px 0;font-size:12px}
@@ -2091,24 +2091,28 @@ def read_page_metadata(path: Path) -> dict[str, str]:
 PLAYER_TILE = ('<button class="fact play" type="button"><div class="value">▶ Play</div>'
                '<div class="label">Player</div></button>')
 
-PLAYER_SPEEDS = ("0.5", "0.75", "1", "1.25", "1.5")
+# 0.25×: for language learning; 1.75× and 2×: lectures and podcasts
+PLAYER_SPEEDS = ("0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2")
 VIDEO_EXTENSIONS = ("mp4", "webm", "m4v", "mkv")
 
 
 def render_player(video_names: list[str], video_files: list[str] | None = None,
                   qualities: dict[str, str] | None = None, language: str | None = None,
-                  audio_tracks: list[tuple[str, str]] | None = None) -> str:
+                  audio_tracks: list[tuple[str, str, str]] | None = None,
+                  original_label: str = "") -> str:
     """The player panel; hidden until the script finds a video file next to
     the page: `video_files` first (files with the video's id found next to the
     page when it was built), then the page's own name and `video_names`, each
     with every video extension (for videos downloaded later). `qualities`
     ({"1920x1080": "1080p"}) and `language` (of the audio in the video) give
     the tile its label once the file's size is known. `audio_tracks`
-    ([(code, file)]: the extra tracks --video downloaded with the page) add a
-    row of switches under the others: the original first, then one per
-    track, only one on at a time."""
-    speeds = "".join(f'<button type="button" data-speed="{v}" aria-pressed="{str(v == "1").lower()}">'
-                     f'{v}×</button>' for v in PLAYER_SPEEDS)
+    ([(code, file, spoken name)]: the extra tracks --video downloaded with
+    the page) add a row of switches under the others: the original first
+    (`original_label` its spoken name), then one per track, only one on at a
+    time. Buttons that show symbols or codes have an aria-label: the name
+    screen readers and voice control use, invisible on the page."""
+    speeds = "".join(f'<button type="button" data-speed="{v}" aria-pressed="{str(v == "1").lower()}" '
+                     f'aria-label="Speed {v}">{v}×</button>' for v in PLAYER_SPEEDS)
     return (
         f'<aside class="player" aria-label="Local video player" '
         f'data-files="{esc(json.dumps(video_files or [], ensure_ascii=False))}" '
@@ -2120,13 +2124,18 @@ def render_player(video_names: list[str], video_files: list[str] | None = None,
         '<input type="range" min="0" max="0" step="0.1" value="0" aria-label="Position">'
         '<span class="total">0:00</span></div>'
         '<div class="buttons">'
-        '<button type="button" data-do="start" title="To the start (Ctrl+←)">|◀</button>'
-        '<button type="button" data-do="back" title="10 s back (←)">−10 s</button>'
+        '<button type="button" data-do="start" title="To the start (Ctrl+←)" '
+        'aria-label="To the start">|◀</button>'
+        '<button type="button" data-do="back" title="10 s back (←)" '
+        'aria-label="10 seconds back">−10 s</button>'
         '<button type="button" data-do="repeat" title="Previous sentence (Shift+←); '
-        'click again for one more">↺</button>'
-        '<button type="button" data-do="toggle" class="main" title="Play / pause (space)">▶</button>'
-        '<button type="button" data-do="forward" title="10 s forward (→)">+10 s</button>'
-        '<button type="button" data-do="end" title="To the end (Ctrl+→)">▶|</button>'
+        'click again for one more" aria-label="Previous sentence">↺</button>'
+        '<button type="button" data-do="toggle" class="main" title="Play / pause (space)" '
+        'aria-label="Play">▶</button>'
+        '<button type="button" data-do="forward" title="10 s forward (→)" '
+        'aria-label="10 seconds forward">+10 s</button>'
+        '<button type="button" data-do="end" title="To the end (Ctrl+→)" '
+        'aria-label="To the end">▶|</button>'
         '</div>'
         f'<div class="buttons speed">{speeds}</div>'
         '<div class="buttons follow">'
@@ -2144,10 +2153,11 @@ def render_player(video_names: list[str], video_files: list[str] | None = None,
         '<div class="line translation"></div><div class="line next"></div>'
         '<div class="line next2"></div></div>'
         + (('<div class="buttons audio">'
-            f'<button type="button" class="original" data-audio="" aria-pressed="true">'
-            f'{esc(language or "orig")}</button>'
-            + "".join(f'<button type="button" data-audio="{esc(file)}" aria-pressed="false">'
-                      f'{esc(code)}</button>' for code, file in audio_tracks)
+            f'<button type="button" class="original" data-audio="" aria-pressed="true" '
+            f'aria-label="{esc(original_label or "Original audio")}">{esc(language or "orig")}</button>'
+            + "".join(f'<button type="button" data-audio="{esc(file)}" aria-pressed="false" '
+                      f'aria-label="{esc(label)}">{esc(code)}</button>'
+                      for code, file, label in audio_tracks)
             + '</div>') if audio_tracks else '')
         + '</aside>')
 
@@ -2493,7 +2503,8 @@ PLAYER_JS = r"""
     if (Math.abs(off) > 1) { dub.currentTime = video.currentTime; gaps = []; return; }
     if (Math.abs(off) > 0.08) nudging = true;
     else if (Math.abs(off) < 0.02) nudging = false;
-    var rate = video.playbackRate * (nudging ? (off > 0 ? 0.97 : 1.03) : 1);
+    // never below 0.25×: Firefox mutes slower sound, so at 0.25× only faster
+    var rate = Math.max(0.25, video.playbackRate * (nudging ? (off > 0 ? 0.97 : 1.03) : 1));
     if (dub.playbackRate !== rate) dub.playbackRate = rate;
   }, 250);
   seek.addEventListener('input', function () { jump(Number(seek.value)); });
@@ -2503,8 +2514,12 @@ PLAYER_JS = r"""
     update(false);
   });
   video.addEventListener('seeked', function () { update(false); });
-  video.addEventListener('play', function () { toggle.textContent = '❚❚'; });
-  video.addEventListener('pause', function () { toggle.textContent = '▶'; });
+  video.addEventListener('play', function () {
+    toggle.textContent = '❚❚'; toggle.setAttribute('aria-label', 'Pause');
+  });
+  video.addEventListener('pause', function () {
+    toggle.textContent = '▶'; toggle.setAttribute('aria-label', 'Play');
+  });
   video.addEventListener('enterpictureinpicture', function () { body.classList.add('pip'); });
   video.addEventListener('leavepictureinpicture', function () { body.classList.remove('pip'); });
   if ('mediaSession' in navigator) {  // ±10 s in the browser's own picture-in-picture window
@@ -3731,11 +3746,19 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     body.append("</main>")
     overview = video_overview(info)
     in_video = overview["in_video"] if overview else None
-    extra_audio = [(a["audio"], a["file"])
+    # spoken names of the audio switches: the language as in the languages table
+    # (by code and role: one language may have two tracks)
+    names = {(html.unescape(r[0]), html.unescape(r[2] or "")): html.unescape(r[1])
+             for r in (overview["languages"]["rows"] if overview else []) if r[0]}
+    extra_audio = [(a["audio"], a["file"],
+                    f"{names.get((a['audio'], a.get('role') or ''), a['audio'])}, "
+                    f"{a.get('role') or 'audio'}")
                    for a in (info.get(VIDEO_KEY) or {}).get("extra_audio") or []]
+    original = in_video[0] if in_video and in_video[0] != UNKNOWN_LANGUAGE else None
     body.insert(0, render_player(video_names(info), video_files, player_qualities(info),
-                                 in_video[0] if in_video and in_video[0] != UNKNOWN_LANGUAGE
-                                 else None, extra_audio))
+                                 original, extra_audio,
+                                 f"{names.get((original, in_video[1] or ''), original)}, original"
+                                 if original else "Original audio"))
     body.append(f"<script>{PLAYER_JS}</script>")
 
     return "\n".join([

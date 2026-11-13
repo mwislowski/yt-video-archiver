@@ -452,26 +452,43 @@ def test_audio_needs_no_image_within_the_limit(tmp_path, youtube):
 def test_player_audio_switches(info):
     # none without extra tracks
     assert 'class="buttons audio"' not in yt2html.render_player(["x"], language="en")
-    html = yt2html.render_player(["x"], language="en-US",
-                                 audio_tracks=[("pl", "T [id].pl.auto-dubbed.m4a"), ("de-DE", "a&b.m4a")])
+    html = yt2html.render_player(["x"], language="en-US", original_label="English (US), original",
+                                 audio_tracks=[("pl", "T [id].pl.auto-dubbed.m4a", "Polish, auto-dubbed"),
+                                               ("de-DE", "a&b.m4a", "German (DE), auto-dubbed")])
     row_html = re.search(r'<div class="buttons audio">(.*?)</div>', html).group(1)
+    # codes on the buttons; the language and role only as the spoken name (aria-label)
     assert row_html == (
-        '<button type="button" class="original" data-audio="" aria-pressed="true">en-US</button>'
-        '<button type="button" data-audio="T [id].pl.auto-dubbed.m4a" aria-pressed="false">pl</button>'
-        '<button type="button" data-audio="a&amp;b.m4a" aria-pressed="false">de-DE</button>')
+        '<button type="button" class="original" data-audio="" aria-pressed="true" '
+        'aria-label="English (US), original">en-US</button>'
+        '<button type="button" data-audio="T [id].pl.auto-dubbed.m4a" aria-pressed="false" '
+        'aria-label="Polish, auto-dubbed">pl</button>'
+        '<button type="button" data-audio="a&amp;b.m4a" aria-pressed="false" '
+        'aria-label="German (DE), auto-dubbed">de-DE</button>')
     assert html.index('class="now-playing"') < html.index('class="buttons audio"')   # the last row
     # an original of an unknown language
-    assert '>orig</button>' in yt2html.render_player(["x"], audio_tracks=[("pl", "p.m4a")])
-    assert ">a&lt;b</button>" in yt2html.render_player(["x"], audio_tracks=[("a<b", "p.m4a")])
+    assert 'aria-label="Original audio">orig</button>' in yt2html.render_player(
+        ["x"], audio_tracks=[("pl", "p.m4a", "Polish, dubbed")])
+    assert 'aria-label="a&lt;b">a&lt;b</button>' in yt2html.render_player(
+        ["x"], audio_tracks=[("a<b", "p.m4a", "a<b")])
     # the page: the tracks --video downloaded with it, not files found next to it
     info["formats"] = json.loads(json.dumps(DUBS))
     assert 'class="buttons audio"' not in render_page(info)
     info[yt2html.VIDEO_KEY] = {"date": "2026-11-12", "parameters": "audio:pl", "extra_audio": [
         {"audio": "pl", "role": "dubbed", "file": "T.pl.dubbed.m4a", "size": 1, "audio_format": "140-1"}]}
     page_html = render_page(info)
-    assert ('<button type="button" class="original" data-audio="" aria-pressed="true">en</button>'
-            '<button type="button" data-audio="T.pl.dubbed.m4a" aria-pressed="false">pl</button>'
-            in page_html)
+    assert ('<button type="button" class="original" data-audio="" aria-pressed="true" '
+            'aria-label="en, original">en</button>'
+            '<button type="button" data-audio="T.pl.dubbed.m4a" aria-pressed="false" '
+            'aria-label="pl, dubbed">pl</button>' in page_html)   # names: the table's (here codes)
+    # with names in the data (yt-dlp's format note), the table's language name
+    for f in info["formats"]:
+        if f["format_id"] == "140-1":
+            f["format_note"] = "Polish, medium"
+        if f["format_id"] == "140":
+            f["format_note"] = "English original (default), medium"
+    page_html = render_page(info)
+    assert 'aria-label="Polish, dubbed">pl</button>' in page_html
+    assert 'aria-label="English, original">en</button>' in page_html
     # its own colour in both themes, the original a little wider
     assert ".player .buttons.audio button[aria-pressed=true]{background:var(--audio);" in yt2html.CSS
     assert ".player .buttons.audio button.original{width:72px}" in yt2html.CSS
@@ -682,3 +699,18 @@ def test_video_formats_lists_subtitles(info):
     assert lines[-3:] == ["subtitles (srt):", "  by the author: en, pt-BR", "  auto-generated: en, de"]
     info["subtitles"], info["automatic_captions"] = {}, {}
     assert yt2html.format_list(info)[-1] == "subtitles: none"
+
+
+def test_player_spoken_names_and_speeds():
+    html = yt2html.render_player(["x"])
+    for label in ("To the start", "10 seconds back", "Previous sentence", "Play",
+                  "10 seconds forward", "To the end"):
+        assert f'aria-label="{label}">' in html
+    assert re.findall(r'aria-label="Speed ([0-9.]+)">', html) == list(yt2html.PLAYER_SPEEDS)
+    assert yt2html.PLAYER_SPEEDS == ("0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2")
+    js = yt2html.PLAYER_JS
+    # the play button's spoken name follows its symbol
+    assert "toggle.textContent = '❚❚'; toggle.setAttribute('aria-label', 'Pause');" in js
+    assert "toggle.textContent = '▶'; toggle.setAttribute('aria-label', 'Play');" in js
+    # the extra track never slower than 0.25× (Firefox mutes slower sound)
+    assert "var rate = Math.max(0.25, video.playbackRate * (nudging" in js
