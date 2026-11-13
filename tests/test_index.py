@@ -74,7 +74,8 @@ def render(info):
     ({"comment_count": None}, "interrupted"),                 # Ctrl+C in yt-dlp
     ({yt2html.LIMIT_KEY: 2, yt2html.YT_COUNT_KEY: "50"}, "limited"),
     ({yt2html.LIMIT_KEY: 200}, "complete"),                   # limit not reached
-    ({"comments": None, "comment_count": None}, "turned-off"),
+    ({"comments": None, "comment_count": None}, "unavailable"),   # no reason known
+    ({"comments": None, yt2html.COMMENTS_MESSAGE_KEY: "Comments are turned off."}, "turned-off"),
 ])
 def test_comment_status(info, change, status):
     assert yt2html.comment_status({**info, **change}) == status
@@ -114,6 +115,7 @@ def test_metadata_of_a_page_not_made_by_yt2html(tmp_path):
       "yt2html:comments-youtube": ""}, "312 comments · interrupted"),
     ({"yt2html:comments-status": "not-downloaded"}, "Comments not downloaded"),
     ({"yt2html:comments-status": "turned-off"}, "Comments turned off"),
+    ({"yt2html:comments-status": "unavailable"}, "Comments unavailable"),
     ({}, ""),
 ])
 def test_comments_summary(meta, text):

@@ -106,6 +106,10 @@ EXTRAS_KEY = "yt2html_description_extras"
 # `comment_count` with the number of downloaded comments when it fetches them.
 YT_COUNT_KEY = "yt2html_youtube_comment_count"
 
+# YouTube's message in place of the comments ("Comments are turned off."),
+# None when there is none.
+COMMENTS_MESSAGE_KEY = "yt2html_comments_message"
+
 # The --max-comments value used when fetching (None = no limit).
 LIMIT_KEY = "yt2html_max_comments"
 
@@ -156,8 +160,8 @@ TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
 WATCH_PAGE_KEY = "yt2html_watch_page"
 
 # Keys filled from the watch page; all None when the page cannot be read.
-PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, LICENSE_KEY, CAPTION_KEY, TRANSLATIONS_KEY,
-             CHANNEL_AVATAR_KEY)
+PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, COMMENTS_MESSAGE_KEY, LICENSE_KEY, CAPTION_KEY,
+             TRANSLATIONS_KEY, CHANNEL_AVATAR_KEY)
 
 
 # --------------------------------------------------------------------------
@@ -273,6 +277,7 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
                                            info.get("duration"))
     info[EXTRAS_KEY] = parse_description_extras(data)
     info[YT_COUNT_KEY] = parse_comment_count(data)
+    info[COMMENTS_MESSAGE_KEY] = parse_comments_message(data)
     info[LICENSE_KEY] = parse_license(data)
     info[CHANNEL_AVATAR_KEY] = parse_channel_avatar(data)
     if cards:
@@ -356,6 +361,26 @@ def parse_comment_count(data: dict) -> str | None:
                                                "comment-item-section"):
             header = (renderer.get("header") or {}).get("engagementPanelTitleHeaderRenderer") or {}
             text = text_of(header.get("contextualInfo")).strip()
+            if text:
+                return text
+    return None
+
+
+def parse_comments_message(data: dict) -> str | None:
+    """YouTube's message in place of the comments, from the comment section
+    of the watch page (itemSectionRenderer "comment-item-section" with a
+    messageRenderer): "Comments are turned off." without the "Learn more"
+    link. None when the section holds comments, or there is no section."""
+    results = (((data.get("contents") or {}).get("twoColumnWatchNextResults") or {})
+               .get("results") or {}).get("results") or {}
+    for item in results.get("contents") or []:
+        section = item.get("itemSectionRenderer") or {}
+        if section.get("sectionIdentifier") != "comment-item-section":
+            continue
+        for part in section.get("contents") or []:
+            runs = ((part.get("messageRenderer") or {}).get("text") or {}).get("runs") or []
+            text = "".join(run.get("text", "") for run in runs
+                           if "navigationEndpoint" not in run).strip()
             if text:
                 return text
     return None
@@ -2050,11 +2075,12 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
 def comment_status(info: dict) -> str:
     """How the comment download ended, for the page's metadata and the index:
     complete, limited (--max-comments reached), interrupted (Ctrl+C),
-    not-downloaded (--no-comments) or turned-off (by the author)."""
+    not-downloaded (--no-comments), turned-off (YouTube's message in place
+    of the comments) or unavailable (no comments, reason unknown)."""
     if "comments" not in info:
         return "not-downloaded"
     if info.get("comments") is None:
-        return "turned-off"
+        return "turned-off" if info.get(COMMENTS_MESSAGE_KEY) else "unavailable"
     if comments_interrupted(info):
         return "interrupted"
     downloaded = len(info["comments"])
@@ -2884,8 +2910,8 @@ def about_comments(info: dict) -> str:
     status = comment_status(info)
     if status == "not-downloaded":
         return "left out"
-    if status == "turned-off":
-        return "turned off or unavailable"
+    if status in ("turned-off", "unavailable"):
+        return status.replace("-", " ")
     comments = info["comments"]
     if not comments and status == "complete":
         return "no comments"
@@ -3808,19 +3834,20 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         count_text, expected = youtube_comment_count(info)
         shown = (f" (YouTube shows {count_text})"
                  if expected is not None and expected != len(comments) else "")
-        # A download cut short by --max-comments must not claim "No comments."
-        limit = info.get(LIMIT_KEY)
-        limited = (limit is not None and len(comments) >= limit
-                   and (expected is None or expected > len(comments)))
+        status = comment_status(info)
         body.append("<h2>Comments</h2>")
-        body.append(f'<div class="note">{format_int(len(comments))} downloaded{shown}: '
-                    f'{format_int(len(roots))} threads, {format_int(replies)} replies · '
-                    f'oldest first · comment dates are relative to '
-                    f'{archived.strftime(DATE_FORMAT)}</div>')
+        # Nothing to count: only why. A download cut short by --max-comments
+        # or Ctrl+C must not claim "No comments.", and keeps its numbers.
         if info.get("comments") is None:
-            body.append('<div class="note">Comments are turned off or unavailable.</div>')
-        elif not comments and not limited:
+            body.append(f'<div class="note">'
+                        f'{esc(info.get(COMMENTS_MESSAGE_KEY) or "Comments are unavailable.")}</div>')
+        elif not comments and status == "complete" and not shown:
             body.append('<div class="note">No comments.</div>')
+        else:
+            body.append(f'<div class="note">{format_int(len(comments))} downloaded{shown}'
+                        + (f': {format_int(len(roots))} threads, {format_int(replies)} replies · '
+                           f'oldest first · comment dates are relative to '
+                           f'{archived.strftime(DATE_FORMAT)}' if comments else '') + '</div>')
         for c in roots:
             body.append(render_comment(c, children, avatars, video_id, duration, uploader))
         body.append("</section>")
@@ -3976,8 +4003,8 @@ def comments_summary(meta: dict[str, str]) -> str:
     status = meta.get("yt2html:comments-status")
     if status == "not-downloaded":
         return "Comments not downloaded"
-    if status == "turned-off":
-        return "Comments turned off"
+    if status in ("turned-off", "unavailable"):
+        return "Comments " + status.replace("-", " ")
     try:
         count = int(meta.get("yt2html:comments-downloaded") or 0)
     except ValueError:

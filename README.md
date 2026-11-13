@@ -160,7 +160,8 @@ For each video the index shows its position, its original title linking to its p
 | `200 of 1 204 comments · limited` | the download was limited (`--max-comments`) |
 | `312 of 318 comments · interrupted` | the download was stopped with `Ctrl+C` |
 | `Comments not downloaded` | made with `--no-comments` |
-| `Comments turned off` | the author has turned comments off |
+| `Comments turned off` | the author has turned comments off (YouTube says so on the video page) |
+| `Comments unavailable` | there are no comments to download and YouTube did not say why |
 
 Videos without a page have a grey title without a link, and instead of the date the reason (hover over *Failed* to see YouTube's message):
 
@@ -276,7 +277,7 @@ At the bottom of every page, *About this copy* is folded to a single grey line w
 ## Good to know
 
 - Comments take most of the time: YouTube serves about 20 per request, so 10,000 comments take a few minutes. `Ctrl+C` stops downloading them and still makes the page from the comments fetched so far; such a page counts as finished on the next run (use `--overwrite` for that video to get all comments). With several videos or a playlist the run stops there; run the same command again to continue with the videos that have no page yet.
-- The number of downloaded comments is usually a bit lower than YouTube's count (deleted or hidden comments); the page shows both. A limited download (`--max-comments`) shows as fewer downloaded comments (*About this copy* says whether they were limited or interrupted); `No comments.` appears only when the video really has none.
+- The number of downloaded comments is usually a bit lower than YouTube's count (deleted or hidden comments); the page shows both. A limited download (`--max-comments`) shows as fewer downloaded comments (*About this copy* says whether they were limited or interrupted); `No comments.` appears only when the video really has none. When comments are turned off, the section says so in YouTube's words (`Comments are turned off.`), or `Comments are unavailable.` when YouTube did not say why; a section with nothing to count has no line of numbers.
 - Comment times are as YouTube showed them on the download day (`3 years ago`); hover over one to see the estimated date. Subscriber counts are rounded by YouTube (`1.23M`); views and likes are exact.
 - YouTube's automatic captions mark a change of speaker with `>>`; the page shows a grey mark instead (a grey ` | ` in the continuous transcript) and leaves it out in the lines under the video.
 - The transcript is the one YouTube's *Show transcript* opens: the captions of the video's original language, also for auto-dubbed videos. The AI summary is in the language of the video.

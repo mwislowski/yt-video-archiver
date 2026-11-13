@@ -60,9 +60,15 @@ def test_avatar_embedded_once_per_author(info):
     assert '--hue:' in html
 
 
+def comments_section(html):
+    """What the Comments section holds under its heading."""
+    return html.split("<h2>Comments</h2>")[1].split("</section>")[0].strip()
+
+
 def test_comment_count_note(info):
     html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
-    assert "7 downloaded (YouTube shows 9)" in html
+    assert ("7 downloaded (YouTube shows 9): 4 threads, 3 replies · oldest first · comment "
+            "dates are relative to 05.11.2026") in html
     assert "No comments." not in html
 
 
@@ -70,14 +76,23 @@ def test_no_comments_note_only_when_really_none(info):
     info.update(comments=[], comment_count=0)
     info[yt2html.YT_COUNT_KEY] = "0"
     html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
-    assert "No comments." in html
+    assert comments_section(html) == '<div class="note">No comments.</div>'   # nothing to count
+    # YouTube counts some, none came (hidden, held for review): the numbers, not "No comments."
+    info[yt2html.YT_COUNT_KEY] = "5"
+    html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
+    assert '<div class="note">0 downloaded (YouTube shows 5)</div>' in html and "No comments." not in html
+    # Ctrl+C before the first comment: the numbers too
+    info.update(comment_count=None)
+    info[yt2html.YT_COUNT_KEY] = "0"
+    html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
+    assert '<div class="note">0 downloaded</div>' in html and "No comments." not in html
 
 
 def test_limited_download_does_not_claim_no_comments(info):
     info.update(comments=[], comment_count=0)
     info[yt2html.LIMIT_KEY] = 0
     html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
-    assert "0 downloaded (YouTube shows 9)" in html
+    assert '<div class="note">0 downloaded (YouTube shows 9)</div>' in html   # no order, no dates
     assert "No comments." not in html
     # no CLI parameters on the page, except in the Command row of "About this copy"
     import re
@@ -91,6 +106,14 @@ def test_no_comments_section_with_no_comments_option(info):
 
 
 def test_comments_turned_off(info):
+    # YouTube's message from the watch page, alone: no numbers, order or dates
     info["comments"] = None
+    info[yt2html.COMMENTS_MESSAGE_KEY] = "Comments are turned off."
     html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
-    assert "Comments are turned off or unavailable." in html
+    assert comments_section(html) == '<div class="note">Comments are turned off.</div>'
+    # without it, the reason is not known
+    info[yt2html.COMMENTS_MESSAGE_KEY] = None
+    html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
+    assert comments_section(html) == '<div class="note">Comments are unavailable.</div>'
+    info[yt2html.COMMENTS_MESSAGE_KEY] = "a <b>"
+    assert "a &lt;b&gt;" in yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))

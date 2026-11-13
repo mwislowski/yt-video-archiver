@@ -248,7 +248,7 @@ def test_browser_name_has_no_profile():
 
 def test_video_page_status(info, fake_ydl):
     yt2html.add_watch_page_data(fake_ydl(webpage=watch_page({}, {})), info)
-    assert info[yt2html.WATCH_PAGE_KEY] == "read"
+    assert info[yt2html.WATCH_PAGE_KEY] == "read" and info[yt2html.COMMENTS_MESSAGE_KEY] is None
     assert row(render(info), "Video page") == "read"
     yt2html.add_watch_page_data(fake_ydl(webpage=watch_page({})), info)
     assert info[yt2html.WATCH_PAGE_KEY] == "partial"
@@ -259,8 +259,9 @@ def test_video_page_status(info, fake_ydl):
         def urlopen(self, url):
             raise OSError("offline")
 
+    info[yt2html.COMMENTS_MESSAGE_KEY] = "x"
     yt2html.add_watch_page_data(Broken(), info)
-    assert info[yt2html.WATCH_PAGE_KEY] == "failed"
+    assert info[yt2html.WATCH_PAGE_KEY] == "failed" and info[yt2html.COMMENTS_MESSAGE_KEY] is None
     text = row(render(info), "Video page")
     assert text.startswith("the video page could not be read: this copy may lack the AI summary")
     assert "the channel avatar only from the author's comments" in text
@@ -408,7 +409,9 @@ def test_comments_left_out_turned_off_or_none(info):
     info[yt2html.YT_COUNT_KEY] = "0"
     assert row(render(info), "Comments") == "no comments"
     info["comments"] = None
-    assert row(render(info), "Comments") == "turned off or unavailable"
+    assert row(render(info), "Comments") == "unavailable"
+    info[yt2html.COMMENTS_MESSAGE_KEY] = "Comments are turned off."
+    assert row(render(info), "Comments") == "turned off"
     del info["comments"]
     assert row(render(info), "Comments") == "left out"
 

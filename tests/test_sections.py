@@ -96,6 +96,28 @@ def test_redirect_links_are_unwrapped():
     assert yt2html.unwrap_redirect(url) == "https://creativecommons.org/"
 
 
+def comment_section(*contents):
+    return {"contents": {"twoColumnWatchNextResults": {"results": {"results": {"contents": [
+        {"videoPrimaryInfoRenderer": {}},
+        {"itemSectionRenderer": {"sectionIdentifier": "other", "contents": [
+            {"messageRenderer": {"text": {"runs": [{"text": "Not this"}]}}}]}},
+        {"itemSectionRenderer": {"sectionIdentifier": "comment-item-section",
+                                 "contents": list(contents)}}]}}}}}
+
+
+def test_comments_message_from_page():
+    # as on okT1dSP6gQQ (13.11.2026): the message and a "Learn more" link
+    message = {"messageRenderer": {"text": {"runs": [
+        {"text": "Comments are turned off. "},
+        {"text": "Learn more", "navigationEndpoint": {"urlEndpoint": {
+            "url": "https://support.google.com/youtube/answer/9706180?hl=en"}}}]}}}
+    assert yt2html.parse_comments_message(comment_section(message)) == "Comments are turned off."
+    # comments (a continuation) in the section, or no section: no message
+    assert yt2html.parse_comments_message(comment_section({"continuationItemRenderer": {}})) is None
+    assert yt2html.parse_comments_message(comment_section({"messageRenderer": {}})) is None
+    assert yt2html.parse_comments_message({}) is None
+
+
 def test_comment_count_from_page():
     assert yt2html.parse_comment_count({"engagementPanels": [comments_panel("116")]}) == "116"
     assert yt2html.youtube_comment_count({yt2html.YT_COUNT_KEY: "1,234"}) == ("1 234", 1234)

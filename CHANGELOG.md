@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- Comments: when YouTube shows a message in place of the comments (read from the video page), the section gives it in YouTube's words (`Comments are turned off.`), else `Comments are unavailable.`; *About this copy* and the index say `turned off` or `unavailable` accordingly (before: `turned off or unavailable` in every case). A section with nothing to count (turned off, unavailable, no comments) has no line of numbers; when no comment came for another reason (a limit, `Ctrl+C`, comments YouTube counts but does not send), the line keeps only the numbers (`0 downloaded (YouTube shows 120)`), without the order and the dates.
+
 ## [0.9.0] - 2026-11-13
 
 ### Added
