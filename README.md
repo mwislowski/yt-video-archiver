@@ -2,7 +2,7 @@
 
 `yt2html` saves a YouTube video page as **one self-contained HTML file** for offline use, in the spirit of the SingleFile browser extension: description, chapters, transcript and all comments, readable without YouTube and without an internet connection. It uses [yt-dlp](https://github.com/yt-dlp/yt-dlp); no AI, no browser, no API key.
 
-The video itself and its subtitles are **not** downloaded; download them separately (e.g. with yt-dlp). The page gets the same base name as yt-dlp's default video file name, `Title [video id].html`, so both can sit side by side.
+With `--video` it also downloads the video itself as an mp4 next to the page, and on request extra audio tracks and subtitles (needs ffmpeg; see *Downloading the video*). The page gets the same base name as yt-dlp's default video file name, `Title [video id].html`, so a video downloaded separately (e.g. with yt-dlp) can sit beside it too.
 
 ## What the page contains
 
@@ -16,7 +16,7 @@ The video itself and its subtitles are **not** downloaded; download them separat
 - **Transcript**, already open, split by chapters; as continuous text, with timestamps, or side by side with a translation.
 - **License**, if it is not the standard YouTube one (e.g. Creative Commons).
 - **All comments**, oldest first, every thread fully expanded, with likes, pinned and creator marks.
-- **A player for your downloaded copy of the video**, if it lies next to the page (see below).
+- **A player for your downloaded copy of the video**, if it lies next to the page (downloaded with `--video` or separately; see below).
 - **Video formats**, folded near the bottom: the qualities, codecs and approximate sizes YouTube offers for the video, its audio tracks (original, dubbed, auto-dubbed, audio description) and subtitles (see below).
 - **About this copy**, folded at the bottom: how this copy was made and what it lacks (see below).
 
@@ -222,7 +222,7 @@ So a video downloaded later works without making the page again if it has the pa
 - **Other audio** (a working version): when `--video` downloaded extra tracks together with the page (`audio:pl`), a last row of switches shows their codes, the original first (a little wider, on at the start). One is on at a time; with a track on, the video plays muted and the track follows it, also when seeking, pausing or changing the speed. Only the tracks in the page's data get a switch: a track added later, for a page that already existed, needs the page made again with it (`--overwrite --video audio:pl`; the file there is kept, not downloaded again). Renamed tracks play too: the page tries the file with the video's id and the track's ending found when the page was made, then its own name with that ending (`01 Title [id].pl.dubbed.m4a` next to `01 Title [id].html`), then the name the track was saved under. A track none of these finds is greyed out. The transcript and the subtitles stay those of the original.
 - A separate video window (picture in picture) is available through the browser itself: right-click the video in Chrome or Edge, or use Firefox's own button on the video; the page returns to its normal layout meanwhile.
 - On narrow windows and phones the player stays at the top and the page scrolls below it.
-- Browsers play mp4 with H.264 video and AAC audio everywhere (the yt-dlp command in the table above downloads it). Videos in HEVC/H.265 do not play in Firefox; `.mkv` plays only in some browsers.
+- Browsers play mp4 with H.264 video and AAC audio everywhere; `--video` downloads mp4 with AV1 (else H.264) and AAC, which Chrome, Edge and Firefox play too (Safari plays AV1 only with a hardware decoder). Videos in HEVC/H.265 do not play in Firefox; `.mkv` plays only in some browsers.
 
 **Timestamps play the local copy.** While the player is open, a click on a timestamp plays your copy from that moment instead of opening YouTube (the timestamps turn turquoise). This works everywhere the page has timestamps:
 
