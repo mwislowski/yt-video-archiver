@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-13
+
 ### Changed
 
 - Comments: when YouTube shows a message in place of the comments (read from the video page), the section gives it in YouTube's words (`Comments are turned off.`), else `Comments are unavailable.`; *About this copy* and the index say `turned off` or `unavailable` accordingly (before: `turned off or unavailable` in every case). A section with nothing to count (turned off, unavailable, no comments) has no line of numbers; when no comment came for another reason (a limit, `Ctrl+C`, comments YouTube counts but does not send), the line keeps only the numbers (`0 downloaded (YouTube shows 120)`), without the order and the dates.
@@ -142,7 +144,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.0...v0.7.1

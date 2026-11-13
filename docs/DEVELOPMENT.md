@@ -25,7 +25,7 @@ uv tool install --editable PATH\TO\yt-video-archiver
 An editable install changes the everyday command with every edit, experiments included. For a stable everyday command, install a release instead and work on the code with `uv run yt2html` in the project folder:
 
 ```powershell
-uv tool install git+https://github.com/mwislowski/yt-video-archiver@v0.9.0          # a tested release
+uv tool install git+https://github.com/mwislowski/yt-video-archiver@v0.9.1          # a tested release
 uv tool install --force git+https://github.com/mwislowski/yt-video-archiver@v1.0.0  # later: switch to a newer one
 ```
 
@@ -368,7 +368,7 @@ The first run installs pytest into the project's `.venv` (the `dev` dependency g
 
 The offline tests use only synthetic data shaped like the real structures (`conftest.py`): builders such as `marker_panel()`, `player_bar()`, `people_item()`, a full `info` fixture, and `FakeYDL`, which answers caption and translation requests (also with HTTP 429 or empty answers). Image downloads and `time.sleep` are switched off for them, so no test waits or touches the network.
 
-**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast, the original-language transcript of an auto-dubbed video and the data behind *About this copy* (`epoch`, yt-dlp's `_version`, the video page status, the thumbnail size; `Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`), info cards and the channel avatar (`EBQzfbqFKN0`), resolved link cards (`dkh1A_mAhY8`):
+**Online checks** (`test_online.py`, marked `online`, skipped by default) download the reference videos and check what the program reads from YouTube's pages: description chapters, AI summary, podcast, the original-language transcript of an auto-dubbed video and the data behind *About this copy* (`epoch`, yt-dlp's `_version`, the video page status, the thumbnail size; `Z8lf5oWKfj0`), auto chapters (`qyqCTMirNWg`), Walkthroughs and a Polish transcript (`hz6-3-7GGyI`), People mentioned (`9uSXOr-AdAU`), license (`KZtvWKpXPro`), info cards and the channel avatar (`EBQzfbqFKN0`), resolved link cards (`dkh1A_mAhY8`), YouTube's message for turned-off comments (`okT1dSP6gQQ`); the transcript only where a test asks for it with `--transcript` (the others check that none is downloaded without it):
 
 ```powershell
 uv run pytest --online -m online
