@@ -1048,12 +1048,12 @@ def test_video_formats_name_the_audio_languages(info):
 def test_video_file_row_with_a_video_next_to_the_page(capsys, tmp_path, info):
     info["formats"] = video_formats_example()
     html = render(info, video_files=["My title [TESTVIDEO01].mp4"], video_size=293_000_000)
-    assert row(html, "Video file") == ("a video file next to the page: My title [TESTVIDEO01].mp4, "
+    assert row(html, "Video file") == ("next to the page: video My title [TESTVIDEO01].mp4, "
                                        "293 MB; Deno at download: unknown (data saved by an older "
                                        "version)")
     del info["formats"]
     assert row(render(info, video_files=["a&b [TESTVIDEO01].webm"]), "Video file") == (
-        "a video file next to the page: a&amp;b [TESTVIDEO01].webm; no video or audio formats in the data")
+        "next to the page: video a&amp;b [TESTVIDEO01].webm; no video or audio formats in the data")
     # when the page is made, the file is found by the id and measured
     info["formats"] = video_formats_example()
     saved = tmp_path / "x.info.json"
@@ -1062,7 +1062,7 @@ def test_video_file_row_with_a_video_next_to_the_page(capsys, tmp_path, info):
     assert yt2html.main(["--from-json", str(saved), "-o", str(tmp_path)]) == 0
     html = next(tmp_path.glob("*.html")).read_text("utf-8")
     assert row(html, "Video file").startswith(
-        "a video file next to the page: Renamed [TESTVIDEO01].mp4, 2 MB; Deno at download:")
+        "next to the page: video Renamed [TESTVIDEO01].mp4, 2 MB; Deno at download:")
 
 
 # --------------------------------------------------------------------------

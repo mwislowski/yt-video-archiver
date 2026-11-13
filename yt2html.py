@@ -135,9 +135,14 @@ CHANNEL_AVATAR_KEY = "yt2html_channel_avatar"
 # {yt2html: version, cookies_from_browser: browser name or None}.
 DOWNLOAD_KEY = "yt2html_download"
 
-# A video downloaded with --video in the same run as the data: {date,
-# parameters, file, size, quality, codec, video_format, audio, audio_codec,
-# audio_format}; the Video file row and the yellow marks come from it.
+# The files --video took or found next to the page, in the same run as the
+# data: {date, parameters, video: {file, size, date?, quality, codec,
+# video_format, audio, audio_codec, audio_format}, extra_audio: [{audio,
+# role, file, size, date?, audio_format?}], subtitles: [{code, kind, file,
+# size, date?, source?}]}. An entry with a date was downloaded that day (now,
+# or in an earlier run whose saved data describe the same file); one without
+# was only found next to the page. The Video file row and the yellow marks
+# come from it.
 VIDEO_KEY = "yt2html_video"
 
 # The playlist the video was archived from: {id, title, position, count}
@@ -2098,7 +2103,7 @@ VIDEO_EXTENSIONS = ("mp4", "webm", "m4v", "mkv")
 
 def render_player(video_names: list[str], video_files: list[str] | None = None,
                   qualities: dict[str, str] | None = None, language: str | None = None,
-                  audio_tracks: list[tuple[str, str, str]] | None = None,
+                  audio_tracks: list[tuple[str, str, str, str, str]] | None = None,
                   original_label: str = "") -> str:
     """The player panel; hidden until the script finds a video file next to
     the page: `video_files` first (files with the video's id found next to the
@@ -2106,8 +2111,12 @@ def render_player(video_names: list[str], video_files: list[str] | None = None,
     with every video extension (for videos downloaded later). `qualities`
     ({"1920x1080": "1080p"}) and `language` (of the audio in the video) give
     the tile its label once the file's size is known. `audio_tracks`
-    ([(code, file, spoken name)]: the extra tracks --video downloaded with
-    the page) add a row of switches under the others: the original first
+    ([(code, file, spoken name, file found, suffix)]: the extra tracks in the
+    data, each with the file --video saved, the file with the video's id and
+    the track's ending found next to the page when it was built, and that
+    ending, ".pl.dubbed.m4a") add a row of switches under the others: the
+    script tries the file found, the page's own name with the ending, then
+    the file saved, so renamed tracks play too. The original first
     (`original_label` its spoken name), then one per track, only one on at a
     time. Buttons that show symbols or codes have an aria-label: the name
     screen readers and voice control use, invisible on the page."""
@@ -2155,9 +2164,10 @@ def render_player(video_names: list[str], video_files: list[str] | None = None,
         + (('<div class="buttons audio">'
             f'<button type="button" class="original" data-audio="" aria-pressed="true" '
             f'aria-label="{esc(original_label or "Original audio")}">{esc(language or "orig")}</button>'
-            + "".join(f'<button type="button" data-audio="{esc(file)}" aria-pressed="false" '
+            + "".join(f'<button type="button" data-audio="{esc(file)}" data-found="{esc(found)}" '
+                      f'data-suffix="{esc(suffix)}" aria-pressed="false" '
                       f'aria-label="{esc(label)}">{esc(code)}</button>'
-                      for code, file, label in audio_tracks)
+                      for code, file, label, found, suffix in audio_tracks)
             + '</div>') if audio_tracks else '')
         + '</aside>')
 
@@ -2460,22 +2470,32 @@ PLAYER_JS = r"""
   // measured and averaged over the last second (Firefox reports the time
   // coarsely); a correction (3 % faster or slower) starts above 80 ms and
   // ends below 20 ms, so the speed changes rarely (each change can click);
-  // only more than 1 s off sets the track to the video's time. A track that
-  // cannot be read is switched off for good.
+  // only more than 1 s off sets the track to the video's time. The file is
+  // tried under the name found when the page was built, the page's own name
+  // with the track's ending, then the name it was saved under; a track none
+  // of them reads is switched off for good.
   var dub = null, gaps = [], nudging = false;
   function setAudio(button) {
     if (dub) { dub.pause(); dub = null; }
     video.muted = false;
     if (button.dataset.audio) {
-      dub = new Audio(encodeURIComponent(button.dataset.audio));
-      dub.onerror = function () {
-        button.disabled = true;
-        setAudio(panel.querySelector('[data-audio=""]'));
+      var names = [button.dataset.found, page + button.dataset.suffix, button.dataset.audio]
+        .filter(function (name, i, list) { return name && list.indexOf(name) === i; });
+      var load = function (i) {
+        var track = new Audio(encodeURIComponent(names[i]));
+        track.onerror = function () {
+          if (dub !== track) return;   // switched to another track meanwhile
+          if (i + 1 < names.length) { load(i + 1); return; }
+          button.disabled = true;
+          setAudio(panel.querySelector('[data-audio=""]'));
+        };
+        dub = track;
+        track.currentTime = video.currentTime;
+        track.playbackRate = video.playbackRate;
+        if (!video.paused) track.play().catch(function () {});
       };
       video.muted = true;
-      dub.currentTime = video.currentTime;
-      dub.playbackRate = video.playbackRate;
-      if (!video.paused) dub.play().catch(function () {});
+      load(0);
     }
     all('[data-audio]', panel).forEach(function (other) {
       other.setAttribute('aria-pressed', String(other === button));
@@ -2554,6 +2574,37 @@ def video_files_for(info: dict, folder: Path) -> list[str]:
         log(f"Note: several videos for [{info.get('id')}] in {folder}: "
             + ", ".join(p.name for p in files) + f"; the page tries {files[0].name} first")
     return [p.name for p in files]
+
+
+def audio_suffix(key: tuple) -> str:
+    """The ending of an extra track's file: ".pl.dubbed.m4a" (code and role,
+    so a language with two versions gives two files; without a role only the
+    code)."""
+    code, role = key
+    return f".{code}{'.' + role if role else ''}.m4a"
+
+
+def sub_suffix(code: str, kind: str) -> str:
+    return f".{code}.{kind}.srt"
+
+
+def file_by_suffix(folder: Path, ident: str | None, suffix: str, what: str) -> Path | None:
+    """The file next to the page with the video's id and this ending, by the
+    rule for all files with an id (files_with_id()): renamed files are found
+    as long as both parts stay."""
+    return file_with_id(folder, ident, (suffix.lower(),), what)
+
+
+def audio_files_for(info: dict, folder: Path) -> dict:
+    """The files of the extra tracks in the data, found next to the page
+    when it is built: {(code, role): file name}."""
+    found = {}
+    for track in (info.get(VIDEO_KEY) or {}).get("extra_audio") or []:
+        key = (track["audio"], track.get("role"))
+        path = file_by_suffix(folder, info.get("id"), audio_suffix(key), "audio files")
+        if path:
+            found[key] = path.name
+    return found
 
 
 def video_names(info: dict) -> list[str]:
@@ -3172,7 +3223,7 @@ def video_overview(info: dict) -> dict | None:
     picks = [(variants[0]["row"], variants[0]["column"])] if variants and main_audio else []
     # What --video downloaded (yellow): its image cell and its audio's cell.
     chosen = [(v["row"], v["column"]) for v in variants
-              if v["format"].get("format_id") == downloaded.get("video_format")]
+              if v["format"].get("format_id") == (downloaded.get("video") or {}).get("video_format")]
     image = {"columns": [label(k) for k in columns] + (["HLS (sizes unknown)"] if hls else []),
              "rows": rows, "picks": picks, "chosen": chosen,
              "audio": (track_text(track(main_audio)[0],
@@ -3265,15 +3316,21 @@ def video_overview(info: dict) -> dict | None:
         else "unknown (YouTube listed no translation languages)")
     translations = [s for s in downloaded.get("subtitles") or [] if s["kind"] == "translated"]
     if translations:   # "; downloaded: de, pl (from en)": always one source, the transcript's
+        sources = [s["source"] for s in translations if s.get("source")]
         translation += ("; downloaded: " + ", ".join(f'<span class="chosen">{esc(s["code"])}</span>'
                                                      for s in translations)
-                        + f" (from {esc(translations[0]['source'])})")
-    audio_chosen = []   # the track in the video and the extra tracks downloaded
-    taken = {downloaded.get("audio_format")} | {a.get("audio_format")
-                                                for a in downloaded.get("extra_audio") or []}
+                        + (f" (from {esc(sources[0])})" if sources else ""))
+    # the track in the video and the extra tracks: by their format when the
+    # data say which, else (a file only found) the track's aac, as --video takes it
+    extra = downloaded.get("extra_audio") or []
+    taken = ({(downloaded.get("video") or {}).get("audio_format")}
+             | {a.get("audio_format") for a in extra})
+    found = {(a["audio"], a.get("role")) for a in extra if not a.get("audio_format")}
+    audio_chosen = []
     for f in audio:
         key = (codec_name(f.get("acodec"), AUDIO_CODECS), is_premium(f))
-        if f.get("format_id") in taken and key in audio_keys:
+        if ((f.get("format_id") in taken or (track(f) in found and key == ("aac", False)))
+                and key in audio_keys):
             audio_chosen.append((table_rows.index(rows_of[tracks.index(track(f))]),
                                  audio_keys.index(key)))
     languages_table = {"columns": [codec + (" Premium" if premium else "")
@@ -3452,40 +3509,58 @@ def render_video_formats(info: dict) -> str:
 
 def about_video_file(info: dict, video_files: list[str] | None = None,
                      video_size: int | None = None) -> str:
-    """The "Video file" row: the video downloaded with --video in the same
-    run as the data (date, variant, size), else a video file found next to
-    the page when it was built (the first one, with its size), else "not
-    downloaded"; then how the list of formats came about (Deno, signed in).
-    The planned default shows in the tables (marked) and in --video-formats,
-    not here."""
+    """The "Video file" row: the files --video downloaded, by day (variant
+    and size of the video, the extra tracks, the subtitles), then the files
+    only found next to the page (a video file found when the page was built
+    counts too), else "not downloaded"; then how the list of formats came
+    about (Deno, signed in). The planned default shows in the tables (marked)
+    and in --video-formats, not here."""
     overview = video_overview(info)
     downloaded = info.get(VIDEO_KEY) or {}
-    day = dt.date.fromisoformat(downloaded["date"]).strftime(DATE_FORMAT) if downloaded else ""
-    if downloaded.get("video_format"):
-        audio = track_text(downloaded.get("audio") or UNKNOWN_LANGUAGE,
-                           esc(downloaded.get("audio_codec") or ""))
-        found = (f"downloaded {day}: {esc(downloaded['quality'])} {esc(downloaded['codec'])} + "
-                 f"{audio}, mp4, {esc(human_size(downloaded.get('size')).lstrip('~'))}")
-    elif video_files:
-        found = (f"a video file next to the page: {esc(video_files[0])}"
-                 + (f", {esc(human_size(video_size).lstrip('~'))}" if video_size else ""))
-    else:
-        found = "not downloaded"
+    video = downloaded.get("video")
     extra = downloaded.get("extra_audio") or []
-    if extra:   # "extra audio m4a: pl (auto-dubbed), de-DE (auto-dubbed), 138 MB"
-        found += (f"; extra audio m4a{'' if downloaded.get('video_format') else ' ' + day}: "
-                  + ", ".join(esc(a["audio"]) + (f" ({esc(a['role'])})" if a.get("role") else "")
-                              for a in extra)
-                  + f", {esc(human_size(sum(a['size'] for a in extra)).lstrip('~'))}")
     subs = downloaded.get("subtitles") or []
-    if subs:   # "subtitles srt: en (author), pl (translated from en)"; no sizes (small)
-        found += (f"; subtitles srt{'' if downloaded.get('video_format') or extra else ' ' + day}: "
-                  + ", ".join(f"{esc(s['code'])} ("
-                              + (f"translated from {esc(s['source'])}" if s["kind"] == "translated"
-                                 else esc(s["kind"])) + ")" for s in subs))
+
+    def size(value):
+        return esc(human_size(value).lstrip("~"))
+
+    def files(video_text, tracks, subtitles):
+        # "…; extra audio m4a: pl (dubbed), 69 MB; subtitles srt: en (author)"
+        parts = [video_text] if video_text else []
+        if tracks:
+            parts.append("extra audio m4a: "
+                         + ", ".join(esc(a["audio"]) + (f" ({esc(a['role'])})" if a.get("role") else "")
+                                     for a in tracks)
+                         + f", {size(sum(a['size'] for a in tracks))}")
+        if subtitles:   # no sizes (small)
+            parts.append("subtitles srt: "
+                         + ", ".join(f"{esc(s['code'])} ("
+                                     + ("translated" + (f" from {esc(s['source'])}" if s.get("source")
+                                                        else "") if s["kind"] == "translated"
+                                        else esc(s["kind"])) + ")" for s in subtitles))
+        return "; ".join(parts)
+
+    groups = []
+    for day in sorted({e["date"] for e in [video or {}, *extra, *subs] if e.get("date")}):
+        same = video and video.get("date") == day
+        text = (f"{esc(video['quality'])} {esc(video['codec'])} + "
+                f"{track_text(video.get('audio') or UNKNOWN_LANGUAGE, esc(video.get('audio_codec') or ''))}"
+                f", mp4, {size(video.get('size'))}") if same else ""
+        groups.append(f"downloaded {dt.date.fromisoformat(day).strftime(DATE_FORMAT)}: "
+                      + files(text, [a for a in extra if a.get("date") == day],
+                              [s for s in subs if s.get("date") == day]))
+    text = ""
+    if not (video and video.get("date")):   # a video file only found
+        name, found_size = ((video_files[0], video_size) if video_files else
+                            (video["file"], video.get("size")) if video else (None, None))
+        text = (f"video {esc(name)}" + (f", {size(found_size)}" if found_size else "")) if name else ""
+    found = files(text, [a for a in extra if not a.get("date")], [s for s in subs if not s.get("date")])
+    if found:
+        groups.append(f"next to the page: {found}")
+    text = "; ".join(groups) or "not downloaded"
     if overview is None:
-        return f"{found}; {NO_FORMATS}"
-    text = f"{found}; Deno at download: {overview['deno']}"
+        return f"{text}; {NO_FORMATS}"
+    text += f"; Deno at download: {overview['deno']}"
     if overview["signed_in"]:
         text += "; signed in, so YouTube offered no HLS formats"
     return text
@@ -3648,11 +3723,13 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 extra_images: dict[str, str] | None = None,
                 theme: str = "auto", no_avatars: bool = False,
                 from_json: bool = False, built: dt.datetime | None = None,
-                video_files: list[str] | None = None, video_size: int | None = None) -> str:
+                video_files: list[str] | None = None, video_size: int | None = None,
+                audio_files: dict | None = None) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
     `avatar_uris` and `extra_images` ({image url: data URI}). `no_avatars`,
     `from_json` and `built` (the build time, default now) are only described
-    in "About this copy"."""
+    in "About this copy". `video_files` and `audio_files` ({(code, role):
+    file}) are what was found next to the page."""
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -3761,7 +3838,9 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
              for r in (overview["languages"]["rows"] if overview else []) if r[0]}
     extra_audio = [(a["audio"], a["file"],
                     f"{names.get((a['audio'], a.get('role') or ''), a['audio'])}, "
-                    f"{a.get('role') or 'audio'}")
+                    f"{a.get('role') or 'audio'}",
+                    (audio_files or {}).get((a["audio"], a.get("role")), ""),
+                    audio_suffix((a["audio"], a.get("role"))))
                    for a in (info.get(VIDEO_KEY) or {}).get("extra_audio") or []]
     original = in_video[0] if in_video and in_video[0] != UNKNOWN_LANGUAGE else None
     body.insert(0, render_player(video_names(info), video_files, player_qualities(info),
@@ -4438,6 +4517,11 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         return None
     output_dir.mkdir(parents=True, exist_ok=True)
     target = found or output_path(info, output_dir)
+    if args.video is not None:
+        # what the saved data said about the files next to the page, read
+        # before --save-json replaces it: --video keeps what still holds
+        outcome["previous"] = previous_video(
+            file_with_id(output_dir, info.get("id"), (".info.json",), "saved data files"))
 
     def save_json(verb: str = "Saved") -> None:
         if args.save_json and not args.from_json:
@@ -4466,13 +4550,15 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     def write_page() -> None:
         video_files = video_files_for(info, output_dir)
         video_size = (output_dir / video_files[0]).stat().st_size if video_files else None
+        audio_files = audio_files_for(info, output_dir)
         page = render_page(info, thumbnail, avatar_uris, archived,
                            show_snapshot=not args.no_snapshot,
                            theme=args.theme,
                            transcript_spec=args.transcript,
                            extra_images=extra_images,
                            no_avatars=args.no_avatars, from_json=args.from_json,
-                           video_files=video_files, video_size=video_size)
+                           video_files=video_files, video_size=video_size,
+                           audio_files=audio_files)
         write_atomically(target, page)
 
     def rebuild() -> None:
@@ -4567,24 +4653,59 @@ def download_srt(url: str, args: argparse.Namespace, translated: bool,
     return b""   # not reached
 
 
+def previous_video(path: Path | None) -> dict:
+    """What saved data (an .info.json file) say about the files --video took
+    (VIDEO_KEY), or {} when there is no such file or it cannot be read."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get(VIDEO_KEY) or {} if path else {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def described(entry: dict, earlier: list, *same: str) -> dict:
+    """A file found next to the page, with what earlier saved data say about
+    it (when it was downloaded, from which format) if they describe the same
+    file: the same size and the same `same` fields (code and role, code and
+    kind). Its name is the current one."""
+    for old in earlier:
+        if (old.get("date") and old.get("size") == entry["size"]
+                and all(old.get(key) == entry.get(key) for key in same)):
+            return {**old, **entry}
+    return entry
+
+
 def download_video(source: str, args: argparse.Namespace, page: Path,
-                   notes: set, page_info: dict | None = None) -> tuple[dict, list] | None:
+                   notes: set, page_info: dict | None = None,
+                   previous: dict | None = None) -> tuple[dict, list | None, bool]:
     """--video for one video whose page is `page`: a fresh list of formats
     (the addresses in older data expire), the variant within the limit
     (FormatChoice), checks, then yt-dlp downloads and merges it into an mp4
-    named like the page. Returns the result (VIDEO_KEY) and the fresh list
-    of formats, or None when a video file is already next to the page. Raises VideoSkipped when the
-    video cannot be taken; yt-dlp's errors pass on. `notes` keeps the notes
-    told once per run."""
+    named like the page; then the extra tracks and subtitles. Files already
+    next to the page (by the video's id and their ending, whatever the rest
+    of the name) are kept, unless `overwrite`, and described too, with the
+    details `previous` (the saved data's VIDEO_KEY) gives for the same file.
+    Returns the result (VIDEO_KEY), the fresh list of formats (None when none
+    was needed) and whether anything was downloaded. Raises VideoSkipped
+    when the video cannot be taken; yt-dlp's errors pass on. `notes` keeps
+    the notes told once per run."""
     spec = args.video
     folder = page.parent
-    existing = video_files_for({"id": video_id_from_url(source) or source_id(page)}, folder)
+    ident = video_id_from_url(source) or source_id(page)
+    previous = previous or {}
+    today = dt.date.today().isoformat()
+    result = {"date": today, "parameters": spec["text"]}
+    new = False
+    existing = video_files_for({"id": ident}, folder)
     take_image = not existing or spec["overwrite"]
     if not take_image:
         log(f"Video skipped (file exists): {folder / existing[0]}. "
             "Add overwrite to --video to download it again.")
+        old = previous.get("video")
+        result["video"] = described({"file": existing[0],
+                                     "size": (folder / existing[0]).stat().st_size},
+                                    [old] if old else [])
         if not spec["audio"] and not spec["subs"]:
-            return None
+            return result, None, False
     # ffmpeg joins image and sound and fixes m4a; subtitles need none
     if (take_image or spec["audio"]) and not shutil.which("ffmpeg"):
         raise VideoSkipped(f"ffmpeg not found (it joins image and sound). "
@@ -4626,22 +4747,25 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
         return opts
 
-    result = {"date": dt.date.today().isoformat(), "parameters": spec["text"]}
     failures = 0
     if take_image:
         audio_codec = codec_name(audio.get("acodec"), AUDIO_CODECS)
         audio_code = choice.track(audio)[0]
         log(f"Video: {variant['quality']} {variant['codec']} + "
             f"{track_text(audio_code, audio_codec)}, mp4, {variant['size']}")
-        target = folder / f"{page.stem}.mp4"
+        # again: into the mp4 that is there, whatever its name
+        target = next((folder / name for name in existing if name.lower().endswith(".mp4")),
+                      folder / f"{page.stem}.mp4")
         yt_download(fresh, options(f"{variant['format']['format_id']}+{audio['format_id']}",
-                                   page.stem))
+                                   target.stem))
         size = target.stat().st_size
         log(f"Saved video: {target} ({human_size(size).lstrip('~')})")
-        result.update({"file": target.name, "size": size, "quality": variant["quality"],
-                       "codec": variant["codec"], "video_format": variant["format"]["format_id"],
-                       "audio": None if audio_code == UNKNOWN_LANGUAGE else audio_code,
-                       "audio_codec": audio_codec, "audio_format": audio["format_id"]})
+        result["video"] = {"file": target.name, "size": size, "date": today,
+                           "quality": variant["quality"], "codec": variant["codec"],
+                           "video_format": variant["format"]["format_id"],
+                           "audio": None if audio_code == UNKNOWN_LANGUAGE else audio_code,
+                           "audio_codec": audio_codec, "audio_format": audio["format_id"]}
+        new = True
     # The extra audio tracks: separate m4a files, each on its own.
     wanted, messages = resolve_audio(choice, spec["audio"])
     if messages:
@@ -4649,18 +4773,23 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         log("  Tracks to add: " + ("; ".join(extra_track_lines(choice.extra)) or "none"))
     extra = []
     for key in wanted:
-        fmt, name = choice.audio_for(key, "aac"), audio_name(page, key)
-        if name.exists() and not spec["overwrite"]:
+        fmt = choice.audio_for(key, "aac")
+        there = file_by_suffix(folder, ident, audio_suffix(key), "audio files")
+        name = there or audio_name(page, key)
+        entry = {"audio": key[0], "role": key[1], "file": name.name}
+        if there and not spec["overwrite"]:
             log(f"Audio skipped (file exists): {name}. Add overwrite to --video to download "
                 "it again.")
+            extra.append(described({**entry, "size": name.stat().st_size},
+                                   previous.get("extra_audio") or [], "audio", "role"))
             continue
         log(f"Audio: {key[0]}" + (f" ({key[1]})" if key[1] else "")
             + f", m4a, {human_size(format_size(fresh, fmt))}")
         yt_download(fresh, options(fmt["format_id"], name.stem))
         size = name.stat().st_size
         log(f"Saved audio: {name} ({human_size(size).lstrip('~')})")
-        extra.append({"audio": key[0], "role": key[1], "file": name.name, "size": size,
-                      "audio_format": fmt["format_id"]})
+        extra.append({**entry, "size": size, "date": today, "audio_format": fmt["format_id"]})
+        new = True
     if extra:
         result["extra_audio"] = extra
     # Subtitles: SRT files as YouTube gives them, each on its own; the
@@ -4672,10 +4801,14 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             log("Subtitles: " + "; ".join(messages) + ".")
             log("  Subtitles to take: " + subs_offer(data, source))
         for code, kind, url in wanted_subs:
-            name = sub_name(page, code, kind)
-            if name.exists() and not spec["overwrite"]:
+            there = file_by_suffix(folder, ident, sub_suffix(code, kind), "subtitle files")
+            name = there or sub_name(page, code, kind)
+            if there and not spec["overwrite"]:
                 log(f"Subtitles skipped (file exists): {name}. Add overwrite to --video to "
                     "download them again.")
+                subs.append(described({"code": code, "kind": kind, "file": name.name,
+                                       "size": name.stat().st_size},
+                                      previous.get("subtitles") or [], "code", "kind"))
                 continue
             log(f"Subtitles: {code} ("
                 + (f"machine translation from {base_language(source[0])}"
@@ -4693,15 +4826,15 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                 continue
             name.write_bytes(srt)
             log(f"Saved subtitles: {name} ({human_size(len(srt)).lstrip('~')})")
-            subs.append({"code": code, "kind": kind, "file": name.name, "size": len(srt)}
+            subs.append({"code": code, "kind": kind, "file": name.name, "size": len(srt),
+                         "date": today}
                         | ({"source": base_language(source[0])} if kind == "translated" else {}))
+            new = True
     if subs:
         result["subtitles"] = subs
     if failures:
         result["_failures"] = failures   # told to the run, not saved
-    if not take_image and not extra and not subs:
-        return (None, None) if failures else None
-    return result, fresh.get("formats")
+    return result, fresh.get("formats"), new
 
 
 AUDIO_PRIORITY = ("dubbed", "auto-dubbed")   # audio:CODE without a role, in this order
@@ -4843,14 +4976,12 @@ def fetch_subtitles(url: str, args: argparse.Namespace) -> bytes:
 
 
 def sub_name(page: Path, code: str, kind: str) -> Path:
-    return page.parent / f"{page.stem}.{code}.{kind}.srt"
+    return page.parent / (page.stem + sub_suffix(code, kind))
 
 
 def audio_name(page: Path, key: tuple) -> Path:
-    """An extra track's file: "Title [id].pl.auto-dubbed.m4a" (code and role,
-    so a language with two versions gives two files)."""
-    code, role = key
-    return page.parent / f"{page.stem}.{code}{'.' + role if role else ''}.m4a"
+    """An extra track's file: "Title [id].pl.auto-dubbed.m4a"."""
+    return page.parent / (page.stem + audio_suffix(key))
 
 
 def source_id(page: Path) -> str | None:
@@ -5251,7 +5382,8 @@ def main(argv=None) -> int:
         """--video after the page: the video file, then the page again (when it
         was made now) with the fresh list of formats and the result."""
         try:
-            done = download_video(source, args, outcome["target"], notes, outcome.get("info"))
+            result, formats, new = download_video(source, args, outcome["target"], notes,
+                                                  outcome.get("info"), outcome.get("previous"))
         except VideoSkipped as reason:
             log(f"Video skipped: {reason}")
             videos["skipped"] += 1
@@ -5266,20 +5398,12 @@ def main(argv=None) -> int:
                 "to retry.")
             videos["failed"] += 1
             return
-        if done is None:
-            videos["skipped"] += 1
-            return
-        result, formats = done
-        if result is None:   # nothing new, and some subtitles failed
-            videos["failed"] += 1
-            return
-        if result.pop("_failures", 0):
-            videos["failed"] += 1
-        else:
-            videos["downloaded"] += 1
-        if outcome.get("rebuild"):
+        videos["failed" if result.pop("_failures", 0) else "downloaded" if new
+               else "skipped"] += 1
+        if outcome.get("rebuild"):   # a page made now describes the files, downloaded or found
             info = outcome["info"]
-            info["formats"] = formats   # the list the video was chosen from
+            if formats:
+                info["formats"] = formats   # the list the video was chosen from
             info[VIDEO_KEY] = result
             outcome["rebuild"]()
 

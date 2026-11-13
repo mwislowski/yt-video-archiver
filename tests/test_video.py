@@ -173,9 +173,10 @@ def test_video_after_the_page(tmp_path, youtube, capsys):
     # the data: the result and the list it was chosen from
     saved = json.loads(html_path.with_suffix(".info.json").read_text("utf-8"))
     assert saved[yt2html.VIDEO_KEY] == {
-        "date": dt.date.today().isoformat(), "parameters": "", "file": video.name,
-        "size": 1234, "quality": "1080p, 25 fps", "codec": "av1", "video_format": "399",
-        "audio": "en", "audio_codec": "aac", "audio_format": "140"}
+        "date": dt.date.today().isoformat(), "parameters": "", "video": {
+            "file": video.name, "size": 1234, "date": dt.date.today().isoformat(),
+            "quality": "1080p, 25 fps", "codec": "av1", "video_format": "399",
+            "audio": "en", "audio_codec": "aac", "audio_format": "140"}}
     assert [f["format_id"] for f in saved["formats"]] == [f["format_id"] for f in FORMATS] + ["135"]
     # the Command row describes the page, not the video
     assert "--video" not in row(html, "Command")
@@ -291,10 +292,11 @@ def test_video_notes_once(tmp_path, youtube, monkeypatch, capsys):
     assert youtube["sleeps"] == [9.0] and out.count("Waiting 9 s before the next video...") == 1
     assert ("Done: 2 saved, 0 skipped (page exists), 0 failed. Videos: 2 downloaded, "
             "0 skipped, 0 failed.") in out
-    # again: nothing asked of YouTube, so no pause
+    # again: nothing asked of YouTube, so no pause; the files there count as skipped
     youtube["sleeps"].clear()
     yt2html.main([playlist, "-o", str(tmp_path), "--video"])
     assert youtube["sleeps"] == []
+    assert "Videos: 0 downloaded, 2 skipped, 0 failed." in capsys.readouterr().out
 
 
 def test_video_title_with_percent_and_unknown_language(tmp_path, youtube, monkeypatch):
@@ -307,7 +309,7 @@ def test_video_title_with_percent_and_unknown_language(tmp_path, youtube, monkey
     html_path = page(tmp_path)
     assert html_path.name.startswith("100% real") and html_path.with_suffix(".mp4").exists()
     saved = json.loads(html_path.with_suffix(".info.json").read_text("utf-8"))
-    assert saved[yt2html.VIDEO_KEY]["audio"] is None        # no language in the data
+    assert saved[yt2html.VIDEO_KEY]["video"]["audio"] is None   # no language in the data
     assert " av1 + aac, mp4, " in row(html_path.read_text("utf-8"), "Video file")
 
 
@@ -398,7 +400,7 @@ def test_audio_with_the_video(tmp_path, youtube, capsys):
     saved = json.loads(html_path.with_suffix(".info.json").read_text("utf-8"))
     assert saved[yt2html.VIDEO_KEY]["extra_audio"] == [
         {"audio": "pl", "role": "dubbed", "file": track.name, "size": 1234,
-         "audio_format": "140-1"}]
+         "date": dt.date.today().isoformat(), "audio_format": "140-1"}]
 
 
 def test_audio_files_on_their_own(tmp_path, youtube, capsys):
@@ -418,10 +420,16 @@ def test_audio_files_on_their_own(tmp_path, youtube, capsys):
     assert "Audio skipped (file exists): " in out and "Add overwrite to --video" in out
     assert len(youtube["downloads"]) == 1
     args = yt2html.parse_args([URL, "-o", str(tmp_path), "--video", "audio:de"])
-    assert yt2html.download_video(URL, args, page(tmp_path), set()) is None   # nothing new
+    result, _, new = yt2html.download_video(URL, args, page(tmp_path), set())
+    assert not new and result["extra_audio"] == [            # nothing new, both described
+        {"audio": "de-DE", "role": "auto-dubbed", "file": page(tmp_path).stem
+         + ".de-DE.auto-dubbed.m4a", "size": 1234}]
+    assert result["video"] == {"file": page(tmp_path).stem + ".mp4", "size": 1}
+    (tmp_path / (page(tmp_path).stem + ".de-DE.auto-dubbed.m4a")).unlink()
+    assert yt2html.download_video(URL, args, page(tmp_path), set())[2]   # the track: new
     yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de,overwrite"])
-    assert [o["format"] for o in youtube["downloads"][1:]] == ["399+140", "140-3"]
-    assert all(o["overwrites"] for o in youtube["downloads"][1:])
+    assert [o["format"] for o in youtube["downloads"][-2:]] == ["399+140", "140-3"]
+    assert all(o["overwrites"] for o in youtube["downloads"][-2:])
 
 
 def test_audio_only_with_a_new_page(tmp_path, youtube, monkeypatch):
@@ -433,8 +441,8 @@ def test_audio_only_with_a_new_page(tmp_path, youtube, monkeypatch):
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl.auto-dubbed"]) == 0
     html = Path(name).read_text("utf-8")
     assert row(html, "Video file").startswith(
-        f"a video file next to the page: {Path(name).stem}.mp4, &lt;1 MB; "
-        f"extra audio m4a {TODAY}: pl (auto-dubbed), &lt;1 MB; ")
+        f"downloaded {TODAY}: extra audio m4a: pl (auto-dubbed), &lt;1 MB; "
+        f"next to the page: video {Path(name).stem}.mp4, &lt;1 MB; ")
     assert marked(html, "chosen") == ["~9 MB"]          # only the track downloaded now
 
 
@@ -453,23 +461,27 @@ def test_player_audio_switches(info):
     # none without extra tracks
     assert 'class="buttons audio"' not in yt2html.render_player(["x"], language="en")
     html = yt2html.render_player(["x"], language="en-US", original_label="English (US), original",
-                                 audio_tracks=[("pl", "T [id].pl.auto-dubbed.m4a", "Polish, auto-dubbed"),
-                                               ("de-DE", "a&b.m4a", "German (DE), auto-dubbed")])
+                                 audio_tracks=[("pl", "T [id].pl.auto-dubbed.m4a", "Polish, auto-dubbed",
+                                                "01 T [id].pl.auto-dubbed.m4a", ".pl.auto-dubbed.m4a"),
+                                               ("de-DE", "a&b.m4a", "German (DE), auto-dubbed", "",
+                                                ".de-DE.auto-dubbed.m4a")])
     row_html = re.search(r'<div class="buttons audio">(.*?)</div>', html).group(1)
     # codes on the buttons; the language and role only as the spoken name (aria-label)
     assert row_html == (
         '<button type="button" class="original" data-audio="" aria-pressed="true" '
         'aria-label="English (US), original">en-US</button>'
-        '<button type="button" data-audio="T [id].pl.auto-dubbed.m4a" aria-pressed="false" '
-        'aria-label="Polish, auto-dubbed">pl</button>'
-        '<button type="button" data-audio="a&amp;b.m4a" aria-pressed="false" '
+        '<button type="button" data-audio="T [id].pl.auto-dubbed.m4a" '
+        'data-found="01 T [id].pl.auto-dubbed.m4a" data-suffix=".pl.auto-dubbed.m4a" '
+        'aria-pressed="false" aria-label="Polish, auto-dubbed">pl</button>'
+        '<button type="button" data-audio="a&amp;b.m4a" data-found="" '
+        'data-suffix=".de-DE.auto-dubbed.m4a" aria-pressed="false" '
         'aria-label="German (DE), auto-dubbed">de-DE</button>')
     assert html.index('class="now-playing"') < html.index('class="buttons audio"')   # the last row
     # an original of an unknown language
     assert 'aria-label="Original audio">orig</button>' in yt2html.render_player(
-        ["x"], audio_tracks=[("pl", "p.m4a", "Polish, dubbed")])
+        ["x"], audio_tracks=[("pl", "p.m4a", "Polish, dubbed", "", ".pl.dubbed.m4a")])
     assert 'aria-label="a&lt;b">a&lt;b</button>' in yt2html.render_player(
-        ["x"], audio_tracks=[("a<b", "p.m4a", "a<b")])
+        ["x"], audio_tracks=[("a<b", "p.m4a", "a<b", "", ".a<b.m4a")])
     # the page: the tracks --video downloaded with it, not files found next to it
     info["formats"] = json.loads(json.dumps(DUBS))
     assert 'class="buttons audio"' not in render_page(info)
@@ -478,7 +490,8 @@ def test_player_audio_switches(info):
     page_html = render_page(info)
     assert ('<button type="button" class="original" data-audio="" aria-pressed="true" '
             'aria-label="en, original">en</button>'
-            '<button type="button" data-audio="T.pl.dubbed.m4a" aria-pressed="false" '
+            '<button type="button" data-audio="T.pl.dubbed.m4a" data-found="" '
+            'data-suffix=".pl.dubbed.m4a" aria-pressed="false" '
             'aria-label="pl, dubbed">pl</button>' in page_html)   # names: the table's (here codes)
     # with names in the data (yt-dlp's format note), the table's language name
     for f in info["formats"]:
@@ -495,7 +508,10 @@ def test_player_audio_switches(info):
     assert "--audio:#5b47c4" in yt2html.LIGHT_VARIABLES
     # the script: the video muted, the track follows it, a bad file switched off
     js = yt2html.PLAYER_JS
-    assert "video.muted = true;" in js and "dub = new Audio(encodeURIComponent(button.dataset.audio));" in js
+    assert "video.muted = true;" in js and "new Audio(encodeURIComponent(names[i]));" in js
+    # the names tried: the file found, the page's own name with the ending, the file saved
+    assert ("[button.dataset.found, page + button.dataset.suffix, button.dataset.audio]" in js)
+    assert "if (i + 1 < names.length) { load(i + 1); return; }" in js
     assert "button.disabled = true;" in js and "setAudio(panel.querySelector('[data-audio=\"\"]'));" in js
     # averaged over a second, corrected only between 80 and 20 ms (each speed
     # change can click), set to the video's time only when a second off
@@ -640,8 +656,9 @@ def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
             'subtitles; downloaded: <span class="chosen">pl</span> (from en)</div>') in html
     saved = json.loads(html_path.with_suffix(".info.json").read_text("utf-8"))
     assert saved[yt2html.VIDEO_KEY]["subtitles"] == [
-        {"code": "en", "kind": "author", "file": en.name, "size": 38},
-        {"code": "pl", "kind": "translated", "file": pl.name, "size": 38, "source": "en"}]
+        {"code": "en", "kind": "author", "file": en.name, "size": 38, "date": dt.date.today().isoformat()},
+        {"code": "pl", "kind": "translated", "file": pl.name, "size": 38,
+         "date": dt.date.today().isoformat(), "source": "en"}]
 
 
 def test_subtitles_retry_empty_and_failure(tmp_path, subtitles, capsys):
@@ -669,8 +686,8 @@ def test_subtitles_on_their_own(tmp_path, subtitles, monkeypatch, capsys):
     assert "ffmpeg" not in out and subtitles["downloads"] == []
     # only subtitles new: still something downloaded
     args = yt2html.parse_args([URL, "-o", str(tmp_path), "--video", "sub:pt"])
-    result, _ = yt2html.download_video(URL, args, page(tmp_path), set())
-    assert [s["code"] for s in result["subtitles"]] == ["pt-BR"]
+    result, _, new = yt2html.download_video(URL, args, page(tmp_path), set())
+    assert new and [s["code"] for s in result["subtitles"]] == ["pt-BR"]
     # again: the file is there; overwrite takes it again (and the video: ffmpeg)
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:de"]) == 0
     assert "Subtitles skipped (file exists): " in capsys.readouterr().out
@@ -689,8 +706,8 @@ def test_subtitles_only_with_a_new_page(tmp_path, subtitles, monkeypatch):
     name.with_suffix(".mp4").write_bytes(b"v")
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:de"]) == 0
     assert row(name.read_text("utf-8"), "Video file").startswith(
-        f"a video file next to the page: {name.stem}.mp4, &lt;1 MB; subtitles srt {TODAY}: "
-        "de (auto-generated); ")
+        f"downloaded {TODAY}: subtitles srt: de (auto-generated); "
+        f"next to the page: video {name.stem}.mp4, &lt;1 MB; ")
 
 
 def test_video_formats_lists_subtitles(info):
@@ -765,3 +782,190 @@ def test_subtitles_hint_after_429(tmp_path, subtitles, capsys):
     assert ("Subtitles FAILED: pl: HTTP Error 429: Too Many Requests YouTube keeps refusing the "
             "translation; try again later, or with --cookies-from-browser firefox after opening "
             "the video with auto-translated subtitles in that browser.") in capsys.readouterr().out
+
+
+# Files already next to the page: renamed, kept and described ------------------------
+
+def rename_all(folder, prefix):
+    """The user's numbering: every file of the video gets the same prefix."""
+    for path in sorted(folder.glob("*TESTVIDEO01*")):
+        path.rename(path.with_name(prefix + path.name))
+
+
+def test_overwrite_keeps_what_the_files_were(tmp_path, youtube, capsys):
+    # day 1: page, video and a track, with the data; day 2: the page again
+    youtube["fresh"] = DUBS
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--save-json"])
+    first = page(tmp_path).read_text("utf-8")
+    capsys.readouterr()
+    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl",
+                         "--save-json"]) == 0
+    out = capsys.readouterr().out
+    assert len(youtube["downloads"]) == 2                     # nothing downloaded again
+    assert "Audio skipped (file exists)" in out and "Updated page" in out
+    html = page(tmp_path).read_text("utf-8")
+    # the page made again says what it said: the day, the variant, the switch, yellow
+    assert row(html, "Video file") == row(first, "Video file")
+    assert marked(html, "chosen") == marked(first, "chosen") == ["~309 MB", "~9 MB", "~9 MB"]
+    assert 'data-audio="' + page(tmp_path).stem + '.pl.dubbed.m4a"' in html
+    saved = json.loads(page(tmp_path).with_suffix(".info.json").read_text("utf-8"))
+    assert saved[yt2html.VIDEO_KEY]["video"]["video_format"] == "399"
+    assert saved[yt2html.VIDEO_KEY]["extra_audio"][0]["audio_format"] == "140-1"
+
+
+def test_renamed_files_are_found_and_described(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--save-json"])
+    rename_all(tmp_path, "01 ")
+    capsys.readouterr()
+    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl",
+                         "--save-json"]) == 0
+    assert len(youtube["downloads"]) == 2                     # recognised under the new names
+    html_path = page(tmp_path)
+    assert html_path.name.startswith("01 ")                   # the page keeps its name
+    html = html_path.read_text("utf-8")
+    track = html_path.stem + ".pl.dubbed.m4a"
+    assert f'data-audio="{track}" data-found="{track}"' in html
+    assert row(html, "Video file").startswith(f"downloaded {TODAY}: 1080p, 25 fps av1 + en aac, mp4, "
+                                              "&lt;1 MB; extra audio m4a: pl (dubbed), &lt;1 MB; ")
+    assert sorted(p.name[:3] for p in tmp_path.iterdir()) == ["01 "] * 4   # html, json, mp4, m4a
+
+
+def test_a_rebuild_finds_renamed_tracks(tmp_path, youtube):
+    youtube["fresh"] = DUBS
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--save-json"])
+    old = page(tmp_path).stem
+    rename_all(tmp_path, "02 ")
+    assert yt2html.main(["--from-json", "TESTVIDEO01", "-o", str(tmp_path)]) == 0
+    html = page(tmp_path).read_text("utf-8")
+    # the saved name stays as the last try; the file found by id and ending comes first
+    assert f'data-audio="{old}.pl.dubbed.m4a" data-found="02 {old}.pl.dubbed.m4a"' in html
+    # gone: nothing found, the page's own name and the saved one are still tried
+    (tmp_path / f"02 {old}.pl.dubbed.m4a").unlink()
+    yt2html.main(["--from-json", "TESTVIDEO01", "-o", str(tmp_path)])
+    assert f'data-audio="{old}.pl.dubbed.m4a" data-found="" ' in page(tmp_path).read_text("utf-8")
+
+
+def test_files_found_without_saved_data(tmp_path, youtube):
+    # downloaded without --save-json: made again, the files are only found
+    youtube["fresh"] = DUBS + [dub("251-9", "pl", "dubbed", "opus")]
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl"])
+    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl"]) == 0
+    html = page(tmp_path).read_text("utf-8")
+    assert row(html, "Video file").startswith(
+        f"next to the page: video {page(tmp_path).stem}.mp4, &lt;1 MB; "
+        "extra audio m4a: pl (dubbed), &lt;1 MB; Deno at download")
+    # yellow: the track's aac (code and role are certain), not the image (its variant is not)
+    assert marked(html, "chosen") == ["~9 MB"]
+    assert ('<td>pl</td><td>pl</td><td>dubbed</td><td class="size chosen">~9 MB</td>'
+            '<td class="size">~9 MB</td>') in html             # its opus not
+    assert 'data-audio="' + page(tmp_path).stem + '.pl.dubbed.m4a"' in html
+
+
+def test_renamed_subtitles_are_found_and_described(tmp_path, subtitles, capsys):
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en", "--save-json"])
+    rename_all(tmp_path, "04 ")
+    before = len(subtitles["subs"])
+    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "sub:en",
+                         "--save-json"]) == 0
+    assert len(subtitles["subs"]) == before                  # not downloaded again
+    saved = json.loads(page(tmp_path).with_suffix(".info.json").read_text("utf-8"))
+    assert saved[yt2html.VIDEO_KEY]["subtitles"] == [
+        {"code": "en", "kind": "author", "file": page(tmp_path).stem + ".en.author.srt", "size": 38,
+         "date": dt.date.today().isoformat()}]
+    # named unlike the page: found by the id and the ending
+    srt = next(tmp_path.glob("*.en.author.srt"))
+    srt.rename(tmp_path / "subs [TESTVIDEO01].en.author.srt")
+    capsys.readouterr()
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en"])
+    assert len(subtitles["subs"]) == before
+    assert (f"Subtitles skipped (file exists): {tmp_path / 'subs [TESTVIDEO01].en.author.srt'}"
+            in capsys.readouterr().out)
+
+
+def test_the_video_only_found_keeps_the_list_of_formats(tmp_path, youtube):
+    yt2html.main([URL, "-o", str(tmp_path), "--video"])
+    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video"]) == 0
+    assert youtube["fetches"] == 1                            # no list needed for a file there
+    html = page(tmp_path).read_text("utf-8")
+    assert row(html, "Video file").endswith("; Deno at download: yes")
+    assert marked(html, "planned") == ["~309 MB", "~9 MB"]   # the page's own list of formats
+
+
+def test_subtitles_found_without_saved_data(tmp_path, subtitles):
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en,sub:pl"])
+    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "sub:en,sub:pl"]) == 0
+    html = page(tmp_path).read_text("utf-8")
+    assert "; subtitles srt: en (author), pl (translated); " in row(html, "Video file")
+    assert '<span class="chosen">en</span>' in html
+    # a translation only found: its source is not known
+    assert 'downloaded: <span class="chosen">pl</span></div>' in html
+
+
+def test_described_only_the_same_file():
+    old = [{"audio": "pl", "role": "dubbed", "file": "a.m4a", "size": 5, "date": "2026-11-12",
+            "audio_format": "140-1"}]
+    entry = {"audio": "pl", "role": "dubbed", "file": "01 a.m4a", "size": 5}
+    assert yt2html.described(entry, old, "audio", "role") == {**old[0], "file": "01 a.m4a"}
+    assert yt2html.described({**entry, "size": 6}, old, "audio", "role") == {**entry, "size": 6}
+    assert yt2html.described({**entry, "role": None}, old, "audio", "role") == {**entry, "role": None}
+    assert yt2html.described(entry, [{**old[0], "date": None}], "audio", "role") == entry
+
+
+def test_previous_video(tmp_path):
+    assert yt2html.previous_video(None) == {}
+    path = tmp_path / "x.info.json"
+    path.write_text("not json", encoding="utf-8")
+    assert yt2html.previous_video(path) == {}
+    path.write_text("[1]", encoding="utf-8")
+    assert yt2html.previous_video(path) == {}
+    path.write_text(json.dumps({yt2html.VIDEO_KEY: {"date": "2026-11-12"}}), encoding="utf-8")
+    assert yt2html.previous_video(path) == {"date": "2026-11-12"}
+
+
+def test_overwrite_downloads_into_the_renamed_files(tmp_path, youtube):
+    youtube["fresh"] = DUBS
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl"])
+    stem = page(tmp_path).stem
+    for ext in (".mp4", ".pl.dubbed.m4a"):   # only the video and the track renamed
+        (tmp_path / (stem + ext)).rename(tmp_path / ("03 " + stem + ext))
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,overwrite"])
+    names = [o["outtmpl"]["default"] for o in youtube["downloads"][2:]]
+    assert names == [str(tmp_path / f"03 {stem}.%(ext)s"), str(tmp_path / f"03 {stem}.pl.dubbed.%(ext)s")]
+
+
+def test_audio_files_for(tmp_path):
+    info = {"id": "TESTVIDEO01", yt2html.VIDEO_KEY: {"extra_audio": [
+        {"audio": "pt-BR", "role": "dubbed", "file": "x", "size": 1},
+        {"audio": "pl", "role": None, "file": "y", "size": 1},
+        {"audio": "de", "role": "auto-dubbed", "file": "z", "size": 1}]}}
+    (tmp_path / "1 T [TESTVIDEO01].PT-BR.DUBBED.M4A").write_bytes(b"a")   # any case
+    (tmp_path / "1 T [TESTVIDEO01].pl.m4a").write_bytes(b"a")
+    (tmp_path / "1 T [TESTVIDEO01].pl.dubbed.m4a").write_bytes(b"a")    # another version
+    (tmp_path / "T [OTHERVIDEO].de.auto-dubbed.m4a").write_bytes(b"a")  # another video
+    assert yt2html.audio_files_for(info, tmp_path) == {
+        ("pt-BR", "dubbed"): "1 T [TESTVIDEO01].PT-BR.DUBBED.M4A",
+        ("pl", None): "1 T [TESTVIDEO01].pl.m4a"}
+
+
+def test_video_file_row_by_day():
+    info = {"id": "TESTVIDEO01", yt2html.VIDEO_KEY: {
+        "date": "2026-11-13", "parameters": "audio:de",
+        "video": {"file": "v.mp4", "size": 293 * MB, "date": "2026-11-12", "quality": "1080p, 30 fps",
+                  "codec": "av1", "video_format": "399", "audio": "en", "audio_codec": "aac",
+                  "audio_format": "140"},
+        "extra_audio": [{"audio": "de", "role": "auto-dubbed", "file": "d.m4a", "size": 70 * MB,
+                         "date": "2026-11-13", "audio_format": "140-3"},
+                        {"audio": "pl", "role": "dubbed", "file": "p.m4a", "size": 69 * MB}],
+        "subtitles": [{"code": "en", "kind": "author", "file": "e.srt", "size": 9,
+                       "date": "2026-11-12"}]}}
+    assert yt2html.about_video_file(info, ["01 v.mp4"], 293 * MB) == (
+        "downloaded 12.11.2026: 1080p, 30 fps av1 + en aac, mp4, 293 MB; subtitles srt: en (author); "
+        "downloaded 13.11.2026: extra audio m4a: de (auto-dubbed), 70 MB; "
+        "next to the page: extra audio m4a: pl (dubbed), 69 MB; no video or audio formats in the data")
+    # the video only found: from the data when nothing was found when building
+    info[yt2html.VIDEO_KEY]["video"] = {"file": "v.mp4", "size": 2 * MB}
+    assert yt2html.about_video_file(info).startswith("downloaded 12.11.2026: subtitles srt: en (author); "
+                                                     "downloaded 13.11.2026: extra audio m4a: de (auto-dubbed)"
+                                                     ", 70 MB; next to the page: video v.mp4, 2 MB; extra")
+    assert yt2html.about_video_file({"id": "x"}) == "not downloaded; no video or audio formats in the data"
