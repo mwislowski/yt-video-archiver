@@ -119,9 +119,9 @@ def test_fetch_info_keeps_the_download_settings(monkeypatch, info):
 
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", Fake)
     monkeypatch.setattr(yt2html.shutil, "which", lambda name: None)  # whatever this computer has
-    args = yt2html.parse_args(["u", "--transcript", "none",
-                               "--cookies-from-browser", "firefox:/home/me/profile"])
-    fetched = yt2html.fetch_info("u", args)
+    args = yt2html.parse_args(["u", "--cookies-from-browser", "firefox:/home/me/profile"])
+    monkeypatch.setattr(yt2html, "fetch_transcript", lambda *a, **k: pytest.fail("no --transcript"))
+    fetched = yt2html.fetch_info("u", args)                  # no --transcript: not downloaded
     assert fetched[yt2html.DOWNLOAD_KEY] == {"yt2html": yt2html.__version__,
                                              "cookies_from_browser": "firefox",
                                              "deno": False}
@@ -139,6 +139,8 @@ def command(html: str) -> str:
 
 def test_command_with_defaults_is_the_id_alone(info):
     info[yt2html.CARDS_KEY] = []
+    assert command(render(info)) == "yt2html TESTVIDEO01 --transcript"   # alone: plain
+    del info[yt2html.TRANSCRIPT_KEY]                                      # no option: none
     assert command(render(info)) == "yt2html TESTVIDEO01"
 
 
@@ -152,18 +154,38 @@ def test_command_has_the_settings_that_shaped_the_page(info):
                              "--cookies-from-browser firefox")
 
 
+def test_command_with_the_video(info):
+    # what --video took belongs to the copy: right after the id, without "again" (how, not what)
+    info[yt2html.CARDS_KEY] = []
+    info[yt2html.VIDEO_KEY] = {"date": "2026-11-13", "parameters": "720p30, again, audio:pl"}
+    assert command(render(info)) == "yt2html TESTVIDEO01 --video 720p30,audio:pl --transcript"
+    info[yt2html.VIDEO_KEY]["parameters"] = "again"
+    assert command(render(info)) == "yt2html TESTVIDEO01 --video --transcript"
+    # the default left out, as "--transcript" stands for plain; a frame rate limit is not it
+    info[yt2html.VIDEO_KEY]["parameters"] = "1080p,audio:pl"
+    assert command(render(info)) == "yt2html TESTVIDEO01 --video audio:pl --transcript"
+    info[yt2html.VIDEO_KEY]["parameters"] = "1080p30"
+    assert command(render(info)) == "yt2html TESTVIDEO01 --video 1080p30 --transcript"
+    info[yt2html.VIDEO_KEY]["parameters"] = ""
+    del info[yt2html.TRANSCRIPT_KEY]
+    assert command(render(info)) == "yt2html TESTVIDEO01 --video"
+
+
 def test_command_left_out_comments_and_transcript(info):
     info[yt2html.CARDS_KEY] = []
     del info["comments"]
-    del info[yt2html.TRANSCRIPT_KEY]  # --transcript none at download
-    assert command(render(info)) == "yt2html TESTVIDEO01 --no-comments --transcript none"
-    info[yt2html.TRANSCRIPT_KEY] = None  # tried, but the video has none
+    del info[yt2html.TRANSCRIPT_KEY]  # no --transcript at download
     assert command(render(info)) == "yt2html TESTVIDEO01 --no-comments"
+    info[yt2html.TRANSCRIPT_KEY] = None  # asked for, but the video has none
+    assert command(render(info)) == "yt2html TESTVIDEO01 --no-comments --transcript"
+    # asked for at download, not shown now
+    assert command(render(info, transcript_spec=[])) == "yt2html TESTVIDEO01 --no-comments"
 
 
 def test_command_with_an_id_starting_with_a_dash_uses_the_address(info):
     info.update(id="-Tk4nW8sYq0")
     info[yt2html.CARDS_KEY] = []
+    del info[yt2html.TRANSCRIPT_KEY]
     assert command(render(info)) == "yt2html https://www.youtube.com/watch?v=-Tk4nW8sYq0"
 
 

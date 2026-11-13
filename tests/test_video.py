@@ -88,17 +88,17 @@ def page(folder):
     ("", (None, None, False)),
     ("720p", (720, None, False)),          # any frame rate, the highest first
     ("720P30", (720, 30, False)),          # any case of letters
-    (" overwrite , 480p ", (480, None, True)),
+    (" again , 480p ", (480, None, True)),
     ("1080p60", (1080, 60, False)),
 ])
 def test_video_parameters(value, expected):
     spec = yt2html.video_spec(value)
-    assert (spec["height"], spec["fps"], spec["overwrite"]) == expected
+    assert (spec["height"], spec["fps"], spec["again"]) == expected
     assert spec["text"] == value.strip().lower()
 
 
 @pytest.mark.parametrize("value, message", [
-    (URL, "is not a parameter (use a quality such as 720p or 720p30, audio:CODE, sub:CODE or overwrite); "
+    (URL, "is not a parameter (use a quality such as 720p or 720p30, audio:CODE, sub:CODE or again); "
           "the video's address goes before --video"),
     ("audio:pl!", "'audio:pl!': write audio:CODE or audio:CODE.ROLE"),
     ("audio:pl.auto_dubbed", "write audio:CODE or audio:CODE.ROLE, e.g. audio:pl"),
@@ -108,8 +108,8 @@ def test_video_parameters(value, expected):
     ("2160p", "'2160p' is above 1080p; yt2html downloads up to 1080p"),
     ("720p,480p", "give one quality only"),
     ("720p0", "no such frame rate"),
-    ("overwrite,overwrite", "'overwrite' is given more than once"),
-    ("720p,,overwrite", "empty item"),
+    ("again,again", "'again' is given more than once"),
+    ("720p,,again", "empty item"),
 ])
 def test_video_parameter_errors(value, message):
     with pytest.raises(argparse.ArgumentTypeError, match=re.escape(message)):
@@ -178,8 +178,8 @@ def test_video_after_the_page(tmp_path, youtube, capsys):
             "quality": "1080p, 25 fps", "codec": "av1", "video_format": "399",
             "audio": "en", "audio_codec": "aac", "audio_format": "140"}}
     assert [f["format_id"] for f in saved["formats"]] == [f["format_id"] for f in FORMATS] + ["135"]
-    # the Command row describes the page, not the video
-    assert "--video" not in row(html, "Command")
+    # the Command row: the files belong to the copy, right after the id
+    assert row(html, "Command").startswith("yt2html TESTVIDEO01 --video")
 
 
 def test_video_limit_and_both_marks(tmp_path, youtube):
@@ -209,11 +209,11 @@ def test_video_file_already_there(tmp_path, youtube, capsys):
     assert yt2html.main([URL, "-o", str(tmp_path), "--video"]) == 0
     out = capsys.readouterr().out
     assert "Skipped (page exists)" in out
-    assert f"Video skipped (file exists): {page(tmp_path).with_suffix('.mp4')}. Add overwrite " \
+    assert f"Video skipped (file exists): {page(tmp_path).with_suffix('.mp4')}. Add \"again\" " \
            "to --video to download it again." in out
     assert youtube["fetches"] == 1
-    # overwrite: downloaded again, yt-dlp told to overwrite
-    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "overwrite"]) == 0
+    # again: downloaded again, yt-dlp told to overwrite
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "again"]) == 0
     assert youtube["fetches"] == 2 and youtube["downloads"][-1]["overwrites"] is True
 
 
@@ -257,11 +257,11 @@ def test_video_nothing_to_take(tmp_path, youtube, capsys):
     assert ("Video skipped: no AV1 or H.264 image up to 480p (see Video formats on the page)."
             in capsys.readouterr().out)
     youtube["fresh"] = [{"format_id": "sb0", "ext": "mhtml", "vcodec": "none", "acodec": "none"}]
-    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "overwrite"]) == 0
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "again"]) == 0
     assert ("Video skipped: no video or audio formats in the list (YouTube sometimes sends "
             "none for a while; try again later)." in capsys.readouterr().out)
     youtube["fresh"] = [vfmt("399", 1080, "av01.0.08M.08", 300 * MB)]
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "overwrite"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "again"])
     assert "Video skipped: no audio track in the list." in capsys.readouterr().out
     assert not youtube["downloads"]
 
@@ -358,7 +358,6 @@ def test_audio_parameters():
     ("audio:fr", '"audio:fr" not available'),         # no aac format to add
     ("audio:fil", '"audio:fil" not available'),
     ("audio:it.commentary", '"audio:it.commentary" not available'),
-    ("audio:jp", '"audio:jp" not recognised'),        # not a language code
     ("audio:pl.autodubbed", '"audio:pl.autodubbed" not recognised'),
     ("audio:en", '"audio:en" is already in the video'),
     ("audio:en.original", '"audio:en.original" is already in the video'),
@@ -371,23 +370,44 @@ def test_audio_resolution(info, text, expected):
                                  else ([], [expected]))
 
 
-def test_audio_asked_twice_is_taken_once(info):
+def test_audio_one_track_twice(info):
+    # two codes for one track (the language finds its region): taken once, with a message
     info["formats"] = json.loads(json.dumps(DUBS))
     choice = yt2html.video_choice(info)
-    found, _ = yt2html.resolve_audio(choice, yt2html.video_spec("audio:pl,audio:PL.dubbed")["audio"])
-    assert found == [("pl", "dubbed")]
+    found, messages = yt2html.resolve_audio(choice, yt2html.video_spec("audio:de,audio:de-DE")["audio"])
+    assert found == [("de-DE", "auto-dubbed")]
+    assert messages == ['"audio:de-DE" gives the same track as "audio:de"; taken once']
+    # two roles of one language: two tracks
+    found, _ = yt2html.resolve_audio(choice, yt2html.video_spec("audio:pl.dubbed,audio:pl.auto-dubbed")["audio"])
+    assert found == [("pl", "dubbed"), ("pl", "auto-dubbed")]
+
+
+@pytest.mark.parametrize("value, message", [
+    ("audio:jp", "'audio:jp': 'jp' is not a language code (e.g. pl, en, pt-BR)"),
+    ("sub:jp.author", "'sub:jp.author': 'jp' is not a language code"),
+    ("audio:pl,audio:PL", "'audio:PL' is given more than once"),
+    ("sub:pl.translated,sub:PL.Translated", "'sub:PL.Translated' is given more than once"),
+    ("audio:pl,audio:pl.dubbed", "'audio:pl' and 'audio:pl.dubbed': give the language alone or "
+                                 "with a role each time, not both"),
+    ("sub:pl.author,sub:pl", "'sub:pl.author' and 'sub:pl': give the language alone or with a "
+                             "kind each time, not both"),
+])
+def test_audio_and_sub_items_checked_at_once(value, message):
+    # a mistyped language or an unclear repetition: before anything is fetched
+    with pytest.raises(argparse.ArgumentTypeError, match=re.escape(message)):
+        yt2html.video_spec(value)
 
 
 def test_audio_with_the_video(tmp_path, youtube, capsys):
     youtube["fresh"] = DUBS
-    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:jp,audio:en",
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:en",
                          "--save-json"]) == 0
     html_path = page(tmp_path)
     track = html_path.with_name(html_path.stem + ".pl.dubbed.m4a")
     assert track.exists() and html_path.with_suffix(".mp4").exists()
     assert [o["format"] for o in youtube["downloads"]] == ["399+140", "140-1"]
     out = capsys.readouterr().out
-    assert ('[yt2html] Audio: "audio:jp" not recognised; "audio:en" is already in the video.\n'
+    assert ('[yt2html] Audio: "audio:en" is already in the video.\n'
             "[yt2html]   Tracks to add: dubbed: es-ES, es-US, pl; auto-dubbed: de-DE, pl; "
             "descriptive: ru; commentary: ja\n") in out
     assert "[yt2html] Audio: pl (dubbed), m4a, ~9 MB" in out
@@ -414,10 +434,10 @@ def test_audio_files_on_their_own(tmp_path, youtube, capsys):
     assert "Video skipped (file exists)" in out and "Saved audio:" in out
     assert [o["format"] for o in youtube["downloads"]] == ["140-3"]
     assert "Updated page" not in out                   # the page existed: left as it is
-    # again: both there, nothing downloaded; overwrite takes both again
+    # again: both there, nothing downloaded; "again" takes both again
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de"]) == 0
     out = capsys.readouterr().out
-    assert "Audio skipped (file exists): " in out and "Add overwrite to --video" in out
+    assert "Audio skipped (file exists): " in out and 'Add "again" to --video' in out
     assert len(youtube["downloads"]) == 1
     args = yt2html.parse_args([URL, "-o", str(tmp_path), "--video", "audio:de"])
     result, _, new = yt2html.download_video(URL, args, page(tmp_path), set())
@@ -427,7 +447,7 @@ def test_audio_files_on_their_own(tmp_path, youtube, capsys):
     assert result["video"] == {"file": page(tmp_path).stem + ".mp4", "size": 1}
     (tmp_path / (page(tmp_path).stem + ".de-DE.auto-dubbed.m4a")).unlink()
     assert yt2html.download_video(URL, args, page(tmp_path), set())[2]   # the track: new
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de,overwrite"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de,again"])
     assert [o["format"] for o in youtube["downloads"][-2:]] == ["399+140", "140-3"]
     assert all(o["overwrites"] for o in youtube["downloads"][-2:])
 
@@ -512,6 +532,10 @@ def test_player_audio_switches(info):
     # the names tried: the file found, the page's own name with the ending, the file saved
     assert ("[button.dataset.found, page + button.dataset.suffix, button.dataset.audio]" in js)
     assert "if (i + 1 < names.length) { load(i + 1); return; }" in js
+    # looked for as soon as the video is found: a track without a file greyed out at once
+    assert "if (!body.classList.contains('has-video')) all('[data-audio]', panel).forEach(findTrack);" in js
+    assert "if (i >= names.length) { button.disabled = true; return; }" in js
+    assert "button.dataset.file = names[i];" in js and "return button.dataset.file ? [button.dataset.file]" in js
     assert "button.disabled = true;" in js and "setAudio(panel.querySelector('[data-audio=\"\"]'));" in js
     # averaged over a second, corrected only between 80 and 20 ms (each speed
     # change can click), set to the video's time only when a second off
@@ -573,7 +597,6 @@ def test_sub_parameters():
     ("sub:en.translated", '"sub:en.translated" not available'),   # the transcript's own language
     ("sub:pt-PT", '"sub:pt-PT" not available'),   # another region, and not in YouTube's list
     ("sub:my", '"sub:my" not available'),          # only an HLS playlist
-    ("sub:jp", '"sub:jp" not recognised'),
 ])
 def test_sub_resolution(text, expected):
     found, messages, source = yt2html.resolve_subs(sub_data(), yt2html.video_spec(text)["subs"])
@@ -583,9 +606,10 @@ def test_sub_resolution(text, expected):
 
 def test_sub_details():
     data = sub_data()
-    # asked twice: once
-    found, _, _ = yt2html.resolve_subs(data, yt2html.video_spec("sub:pl,sub:pl.translated")["subs"])
-    assert [f[:2] for f in found] == [("pl", "translated")]
+    # two codes for one file: once, with a message
+    found, messages, _ = yt2html.resolve_subs(data, yt2html.video_spec("sub:pt,sub:pt-BR")["subs"])
+    assert [f[:2] for f in found] == [("pt-BR", "author")]
+    assert messages == ['"sub:pt-BR" gives the same subtitles as "sub:pt"; taken once']
     # without YouTube's list (the watch page not read): any recognised language may be tried
     data[yt2html.TRANSLATIONS_KEY] = None
     found, _, _ = yt2html.resolve_subs(data, yt2html.video_spec("sub:fi")["subs"])
@@ -630,7 +654,7 @@ class TooMany(Exception):
 
 
 def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
-    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en,sub:pl,sub:jp,sub:fi",
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en,sub:pl,sub:fi",
                          "--save-json"]) == 0
     html_path = page(tmp_path)
     en = html_path.with_name(html_path.stem + ".en.author.srt")
@@ -639,7 +663,7 @@ def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
     assert subtitles["subs"] == [TT + "en&fmt=srt", TT + "en&kind=asr&fmt=srt&tlang=pl"]
     out = capsys.readouterr().out
     # "fi": not in YouTube's list of translation languages (from the page's data)
-    assert ('[yt2html] Subtitles: "sub:jp" not recognised; "sub:fi" not available.\n'
+    assert ('[yt2html] Subtitles: "sub:fi" not available.\n'
             '[yt2html]   Subtitles to take: by the '
             "author: en, pt-BR; auto-generated: de, en; other languages as a machine translation\n"
             in out)
@@ -688,14 +712,14 @@ def test_subtitles_on_their_own(tmp_path, subtitles, monkeypatch, capsys):
     args = yt2html.parse_args([URL, "-o", str(tmp_path), "--video", "sub:pt"])
     result, _, new = yt2html.download_video(URL, args, page(tmp_path), set())
     assert new and [s["code"] for s in result["subtitles"]] == ["pt-BR"]
-    # again: the file is there; overwrite takes it again (and the video: ffmpeg)
+    # again: the file is there; "again" takes it again (and the video: ffmpeg)
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:de"]) == 0
     assert "Subtitles skipped (file exists): " in capsys.readouterr().out
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:de,overwrite"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:de,again"])
     assert "Video skipped: ffmpeg not found" in capsys.readouterr().out
     monkeypatch.setattr(yt2html.shutil, "which", lambda name: name)
     before = len(subtitles["subs"])
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:de,overwrite"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:de,again"])
     assert len(subtitles["subs"]) == before + 1 and subtitles["downloads"]
 
 
@@ -923,13 +947,13 @@ def test_previous_video(tmp_path):
     assert yt2html.previous_video(path) == {"date": "2026-11-12"}
 
 
-def test_overwrite_downloads_into_the_renamed_files(tmp_path, youtube):
+def test_again_downloads_into_the_renamed_files(tmp_path, youtube):
     youtube["fresh"] = DUBS
     yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl"])
     stem = page(tmp_path).stem
     for ext in (".mp4", ".pl.dubbed.m4a"):   # only the video and the track renamed
         (tmp_path / (stem + ext)).rename(tmp_path / ("03 " + stem + ext))
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,overwrite"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,again"])
     names = [o["outtmpl"]["default"] for o in youtube["downloads"][2:]]
     assert names == [str(tmp_path / f"03 {stem}.%(ext)s"), str(tmp_path / f"03 {stem}.pl.dubbed.%(ext)s")]
 

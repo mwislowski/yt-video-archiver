@@ -1,6 +1,7 @@
 """Transcript: choosing the track, captions, versions, bilingual and translations."""
 
 import argparse
+import re
 import datetime as dt
 
 import pytest
@@ -109,24 +110,36 @@ class TestFetching:
             yt2html.fetch_transcript(fake_ydl(fail_translations=9), english_info(), ["pl"])
 
     @pytest.mark.parametrize("target, kwargs, message", [
-        ("fr", {}, "Available: de, pl"),
+        ("fr", {}, "(available: de, pl)"),
         ("en", {}, "language of the transcript itself"),
         ("pl", {"empty_translation": True}, "no translation into 'pl'"),
     ])
-    def test_translation_errors(self, fake_ydl, target, kwargs, message):
-        with pytest.raises(yt2html.TranscriptError, match=message):
-            yt2html.fetch_transcript(fake_ydl(**kwargs), english_info(), [target])
+    def test_translation_not_there(self, fake_ydl, target, kwargs, message, capsys):
+        # what YouTube does not have: the transcript without it, with the reason
+        transcript = yt2html.fetch_transcript(fake_ydl(**kwargs), english_info(), [target, "de"])
+        assert target not in transcript["translations"]
+        assert ("de" in transcript["translations"]) is not bool(kwargs)   # the others still come
+        assert message in transcript["missing"][target]
+        assert f"No translation into '{target}': " in capsys.readouterr().out
 
     def test_no_transcript(self, fake_ydl):
-        assert yt2html.fetch_transcript(fake_ydl(), {}) is None
-        with pytest.raises(yt2html.TranscriptError):
-            yt2html.fetch_transcript(fake_ydl(), {}, ["pl"])
+        info = {}
+        assert yt2html.fetch_transcript(fake_ydl(), info, ["pl"]) is None   # a note, no error
+        assert info[yt2html.TRANSCRIPT_MISSING_KEY] == "the video has no captions"
+
+    def test_failed_download_stops(self, fake_ydl):
+        class Broken(fake_ydl):
+            def urlopen(self, url):
+                raise OSError("offline")
+        # may pass: nothing saved, so the next run tries again
+        with pytest.raises(yt2html.TranscriptError, match=r"could not download the transcript \(offline\); nothing was saved"):
+            yt2html.fetch_transcript(Broken(), english_info())
 
 
 class TestSpec:
     @pytest.mark.parametrize("value, expected", [
         ("plain", [("plain", None)]),
-        ("none", []),
+        ("", [("plain", None)]),            # the option alone
         ("timestamps,plain", [("timestamps", None), ("plain", None)]),
         (" plain , bilingual:pl,bilingual:pt-BR ",
          [("plain", None), ("bilingual", "pl"), ("bilingual", "pt-BR")]),
@@ -134,7 +147,7 @@ class TestSpec:
         ("Plain,TIMESTAMPS,Bilingual:PL,bilingual:pt-br,bilingual:ZH-HANS,bilingual:es-419",
          [("plain", None), ("timestamps", None), ("bilingual", "pl"), ("bilingual", "pt-BR"),
           ("bilingual", "zh-Hans"), ("bilingual", "es-419")]),
-        ("None", []),
+        (" ", [("plain", None)]),
     ])
     def test_valid(self, value, expected):
         assert yt2html.transcript_spec(value) == expected
@@ -145,11 +158,23 @@ class TestSpec:
             "pl", "pt-BR", "zh-Hans", "es-419", "fil"]
 
     @pytest.mark.parametrize("value", [
-        "", "plain,", "plain,plain", "none,plain", "bilingual", "bilingual:",
+        "plain,", "plain,plain", "none,plain", "bilingual", "bilingual:",
         "bilingual:polish!", "plain:pl", "block", "bilingual:pl,bilingual:pl", "bilingual:pl,bilingual:PL",
+        "bilingual:jp",
     ])
     def test_invalid(self, value):
         with pytest.raises(argparse.ArgumentTypeError):
+            yt2html.transcript_spec(value)
+
+    @pytest.mark.parametrize("value, message", [
+        # anything unknown, "none" too (without the option there is no transcript)
+        ("none", "'none' is not a parameter (use plain, timestamps or bilingual:CODE)"),
+        ("https://www.youtube.com/watch?v=x", "is not a parameter (use plain, timestamps or "
+                                              "bilingual:CODE); the video's address goes before --transcript"),
+        ("bilingual:jp", "'bilingual:jp': 'jp' is not a language code (e.g. pl, en, pt-BR)"),
+    ])
+    def test_messages(self, value, message):
+        with pytest.raises(argparse.ArgumentTypeError, match=re.escape(message)):
             yt2html.transcript_spec(value)
 
 

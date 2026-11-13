@@ -1026,7 +1026,13 @@ def parse_json3_captions(data: dict) -> list[dict]:
 
 
 class TranscriptError(Exception):
-    """The requested transcript (translation) cannot be made; nothing is saved."""
+    """The requested transcript or translation could not be downloaded (a
+    failure that may pass); nothing is saved, so the next run tries again."""
+
+
+class TranslationUnavailable(Exception):
+    """YouTube has no such translation of the transcript (it will not come
+    by trying again): the page is made without it, with a note."""
 
 
 def download_cues(ydl: yt_dlp.YoutubeDL, url: str) -> list[dict]:
@@ -1061,16 +1067,17 @@ def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
     keep the original timing. YouTube refuses such requests (HTTP 429) for
     about a minute after the video data was fetched, so this waits until
     `not_before` (a time.monotonic() value) and retries after 429.
-    Raises TranscriptError if the translation cannot be had.
+    Raises TranslationUnavailable when YouTube has no such translation,
+    TranscriptError when the download fails.
     """
     languages = info.get(TRANSLATIONS_KEY)
     if base_language(target) == base_language(transcript["language"]):
-        raise TranscriptError(f"'{target}' is the language of the transcript itself "
-                              f"({transcript['name']}); choose another language.")
+        raise TranslationUnavailable(f"'{target}' is the language of the transcript itself "
+                                     f"({transcript['name']})")
     if languages is not None and target not in languages:
         available = ", ".join(sorted(languages)) or "none"
-        raise TranscriptError(f"YouTube offers no translation of this transcript into "
-                              f"'{target}'. Available: {available}.")
+        raise TranslationUnavailable(f"YouTube offers no translation of this transcript into "
+                                     f"'{target}' (available: {available})")
     name = (languages or {}).get(target, target)
     log(f"Downloading transcript translation ({name}, auto-translated)...")
     wait(not_before - time.monotonic(), "YouTube refuses translations requested too soon")
@@ -1084,9 +1091,9 @@ def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
                 continue
             hint = TRANSLATION_HINT if is_too_many_requests(error) else ""
             raise TranscriptError(f"could not download the translation into '{target}' "
-                                  f"({error}).{hint}")
+                                  f"({error}); nothing was saved.{hint}")
     if not cues:
-        raise TranscriptError(f"YouTube returned no translation into '{target}'.")
+        raise TranslationUnavailable(f"YouTube returned no translation into '{target}'")
     return {"language": target, "name": name, "cues": cues}
 
 
@@ -1108,16 +1115,13 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     YouTube's own transcript panel (get_transcript API) requires a token that
     only a real browser can produce, so the same text is taken from the
     caption track the panel shows, through the URLs yt-dlp has extracted.
-    With `translate_to` (a list of language codes), any failure raises
-    TranscriptError instead of leaving the transcript out.
+    What YouTube does not have (no captions, a translation it does not
+    offer) leaves the page without it, with the reason for "About this copy";
+    a failed download raises TranscriptError, so that nothing is saved and
+    the next run tries again (a page counts as finished once it is there).
     """
     def unavailable(reason: str) -> None:
-        # A requested translation needs the transcript: stop; otherwise the
-        # page is simply made without a transcript (the reason is kept for
-        # "About this copy").
         info[TRANSCRIPT_MISSING_KEY] = reason
-        if translate_to:
-            raise TranscriptError(f"{reason}; nothing was saved.")
         log(f"No transcript: {reason}.")
 
     track = choose_caption_track(info)
@@ -1133,16 +1137,21 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     try:
         cues = download_cues(ydl, fmt["url"])
     except Exception as error:
-        return unavailable(f"could not download it ({error})")
+        raise TranscriptError(f"could not download the transcript ({error}); nothing was saved.")
     if not cues:
         return unavailable("YouTube returned it empty")
     original = transcript_language(info)
     transcript = {"language": lang, "name": name, "kind": kind, "cues": cues,
                   "original": bool(original) and base_language(original) == base_language(lang)}
     if translate_to:
-        transcript["translations"] = {
-            target: fetch_translation(ydl, info, transcript, fmt["url"], target, not_before)
-            for target in translate_to}
+        transcript["translations"] = {}
+        for target in translate_to:
+            try:
+                transcript["translations"][target] = fetch_translation(
+                    ydl, info, transcript, fmt["url"], target, not_before)
+            except TranslationUnavailable as reason:
+                log(f"No translation into '{target}': {reason}.")
+                transcript.setdefault("missing", {})[target] = str(reason)
     return transcript
 
 
@@ -1936,7 +1945,7 @@ def render_transcripts(transcript: dict, chapters: list[dict], video_id: str,
         elif version == "timestamps":
             sections.append(render_transcript(transcript, chapters, video_id, True,
                                               note_suffix="with timestamps" if several else ""))
-        elif version == "bilingual":
+        elif language in translations:   # a bilingual version YouTube could not give: none
             sections.append(render_bilingual_transcript(transcript, translations[language],
                                                         chapters, video_id))
     return sections
@@ -2252,6 +2261,7 @@ PLAYER_JS = r"""
   }
   video.addEventListener('loadedmetadata', function () {
     video.onerror = null;
+    if (!body.classList.contains('has-video')) all('[data-audio]', panel).forEach(findTrack);
     body.classList.add('has-video');
     if (video.videoWidth) labelTile();
     seek.max = video.duration;
@@ -2498,15 +2508,36 @@ PLAYER_JS = r"""
   // ends below 20 ms, so the speed changes rarely (each change can click);
   // only more than 1 s off sets the track to the video's time. The file is
   // tried under the name found when the page was built, the page's own name
-  // with the track's ending, then the name it was saved under; a track none
-  // of them reads is switched off for good.
+  // with the track's ending, then the name it was saved under (or the one
+  // findTrack() found); a track none of them reads is switched off for good.
   var dub = null, gaps = [], nudging = false;
+  function trackNames(button) {
+    return button.dataset.file ? [button.dataset.file]
+      : [button.dataset.found, page + button.dataset.suffix, button.dataset.audio]
+        .filter(function (name, i, list) { return name && list.indexOf(name) === i; });
+  }
+  // Each track's file is looked for as soon as the video is found, under the
+  // same names: the first that loads is kept (data-file); a track none of
+  // them reads is greyed out at once. The switch stays in the page, so a
+  // file put back works the next time the page is opened.
+  function findTrack(button) {
+    if (!button.dataset.audio) return;
+    var names = trackNames(button);
+    var test = function (i) {
+      if (i >= names.length) { button.disabled = true; return; }
+      var probe = new Audio();
+      probe.preload = 'metadata';
+      probe.onloadedmetadata = function () { probe.onerror = null; button.dataset.file = names[i]; };
+      probe.onerror = function () { test(i + 1); };
+      probe.src = encodeURIComponent(names[i]);
+    };
+    test(0);
+  }
   function setAudio(button) {
     if (dub) { dub.pause(); dub = null; }
     video.muted = false;
     if (button.dataset.audio) {
-      var names = [button.dataset.found, page + button.dataset.suffix, button.dataset.audio]
-        .filter(function (name, i, list) { return name && list.indexOf(name) === i; });
+      var names = trackNames(button);
       var load = function (i) {
         var track = new Audio(encodeURIComponent(names[i]));
         track.onerror = function () {
@@ -2779,7 +2810,7 @@ def about_playlist(info: dict) -> str:
 
 def format_transcript_spec(spec: list[tuple[str, str | None]]) -> str:
     return ",".join(version if language is None else f"{version}:{language}"
-                    for version, language in spec) or "none"
+                    for version, language in spec)
 
 
 def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
@@ -2792,6 +2823,10 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
     # drop a "--" before it, so the full address is used instead.
     parts = ["yt2html", video_id if video_id and not video_id.startswith("-")
              else f"{YOUTUBE}/watch?v={video_id}"]
+    if VIDEO_KEY in info:   # the files are part of the copy; "again" is not (how, not what)
+        kept = [item.strip() for item in info[VIDEO_KEY].get("parameters", "").split(",")
+                if item.strip() and item.strip() not in ("again", f"{DEFAULT_MAX_HEIGHT}p")]
+        parts += ["--video"] + ([",".join(kept)] if kept else [])
     if "comments" not in info:
         parts.append("--no-comments")
     elif info.get(LIMIT_KEY) is not None:
@@ -2800,9 +2835,9 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
         parts.append("--no-cards")
     if no_avatars:
         parts.append("--no-avatars")
-    versions = format_transcript_spec(spec if TRANSCRIPT_KEY in info else [])
-    if versions != "plain":
-        parts += ["--transcript", versions]
+    if TRANSCRIPT_KEY in info and spec:   # the option alone means plain
+        versions = format_transcript_spec(spec)
+        parts += ["--transcript"] + ([versions] if versions != "plain" else [])
     if theme != "auto":
         parts += ["--theme", theme]
     if not show_snapshot:
@@ -2902,8 +2937,16 @@ def about_transcript(info: dict, spec: list) -> str:
         return f'{esc((translations.get(language) or {}).get("name") or language)} (auto-translated)'
 
     versions = [f"bilingual with {translated(language)}" if version == "bilingual" else version
-                for version, language in spec]
-    return f"{esc(name)} ({features}); {plural(len(versions), 'version')}: {', '.join(versions)}"
+                for version, language in spec if version != "bilingual" or language in translations]
+    text = f"{esc(name)} ({features}); {plural(len(versions), 'version')}: {', '.join(versions)}"
+    missing = transcript.get("missing") or {}
+    absent = [language for version, language in spec
+              if version == "bilingual" and language not in translations]
+    if absent:   # "not available: bilingual:fi (YouTube offers no translation …)"
+        text += "; not available: " + ", ".join(
+            f"bilingual:{esc(language)}" + (f" ({esc(missing[language])})" if language in missing
+                                            else "") for language in absent)
+    return text
 
 
 def about_comments(info: dict) -> str:
@@ -4528,9 +4571,10 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     if args.from_json:
         narrow_saved_comments(info, args)
 
-    available = translations_of(info.get(TRANSCRIPT_KEY) or {})
-    for language in bilingual_languages(args.transcript):
-        if language not in available:
+    saved = info.get(TRANSCRIPT_KEY) or {}
+    known = set(translations_of(saved)) | set(saved.get("missing") or {})
+    for language in bilingual_languages(args.transcript) if args.from_json else []:
+        if language not in known:
             raise TranscriptError(f"no transcript translation into '{language}' "
                                   f"in the data; nothing was saved.")
 
@@ -4709,7 +4753,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     (FormatChoice), checks, then yt-dlp downloads and merges it into an mp4
     named like the page; then the extra tracks and subtitles. Files already
     next to the page (by the video's id and their ending, whatever the rest
-    of the name) are kept, unless `overwrite`, and described too, with the
+    of the name) are kept, unless `again`, and described too, with the
     details `previous` (the saved data's VIDEO_KEY) gives for the same file.
     Returns the result (VIDEO_KEY), the fresh list of formats (None when none
     was needed) and whether anything was downloaded. Raises VideoSkipped
@@ -4723,10 +4767,10 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     result = {"date": today, "parameters": spec["text"]}
     new = False
     existing = video_files_for({"id": ident}, folder)
-    take_image = not existing or spec["overwrite"]
+    take_image = not existing or spec["again"]
     if not take_image:
         log(f"Video skipped (file exists): {folder / existing[0]}. "
-            "Add overwrite to --video to download it again.")
+            'Add "again" to --video to download it again.')
         old = previous.get("video")
         result["video"] = described({"file": existing[0],
                                      "size": (folder / existing[0]).stat().st_size},
@@ -4768,7 +4812,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     def options(fmt: str, name: str) -> dict:
         opts = {"format": fmt, "merge_output_format": "mp4",
                 "outtmpl": {"default": str(folder / name.replace("%", "%%")) + ".%(ext)s"},
-                "overwrites": spec["overwrite"], "noplaylist": True,
+                "overwrites": spec["again"], "noplaylist": True,
                 "quiet": True, "noprogress": False}
         if args.cookies_from_browser:
             opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
@@ -4780,7 +4824,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         audio_code = choice.track(audio)[0]
         log(f"Video: {variant['quality']} {variant['codec']} + "
             f"{track_text(audio_code, audio_codec)}, mp4, {variant['size']}")
-        # again: into the mp4 that is there, whatever its name
+        # again: into the mp4 that is there, whatever its name (the parameter "again")
         target = next((folder / name for name in existing if name.lower().endswith(".mp4")),
                       folder / f"{page.stem}.mp4")
         yt_download(fresh, options(f"{variant['format']['format_id']}+{audio['format_id']}",
@@ -4804,9 +4848,9 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         there = file_by_suffix(folder, ident, audio_suffix(key), "audio files")
         name = there or audio_name(page, key)
         entry = {"audio": key[0], "role": key[1], "file": name.name}
-        if there and not spec["overwrite"]:
-            log(f"Audio skipped (file exists): {name}. Add overwrite to --video to download "
-                "it again.")
+        if there and not spec["again"]:
+            log(f'Audio skipped (file exists): {name}. Add "again" to --video to download '
+                'it again.')
             extra.append(described({**entry, "size": name.stat().st_size},
                                    previous.get("extra_audio") or [], "audio", "role"))
             continue
@@ -4830,9 +4874,9 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         for code, kind, url in wanted_subs:
             there = file_by_suffix(folder, ident, sub_suffix(code, kind), "subtitle files")
             name = there or sub_name(page, code, kind)
-            if there and not spec["overwrite"]:
-                log(f"Subtitles skipped (file exists): {name}. Add overwrite to --video to "
-                    "download them again.")
+            if there and not spec["again"]:
+                log(f'Subtitles skipped (file exists): {name}. Add "again" to --video to '
+                    'download them again.')
                 subs.append(described({"code": code, "kind": kind, "file": name.name,
                                        "size": name.stat().st_size},
                                       previous.get("subtitles") or [], "code", "kind"))
@@ -4884,15 +4928,14 @@ def resolve_audio(choice: FormatChoice, requests: list) -> tuple[list, list[str]
     variant each time: the first by role, then code); with a role exactly
     that one (the four known ones, or a kind this video has). Only tracks
     with an ordinary aac format can be added; each once."""
-    known = {code for code, _ in choice.tracks}
     roles = set(AUDIO_ROLES) | {role for _, role in choice.tracks if role}
-    found, messages = [], []
+    found, messages, asked = [], [], {}
     for code, role, text in requests:
         # the code is written the usual way (standard_code()), as in the data;
         # a code with a region never equals a bare language, so "de-AT" stays
         same = ([key for key in choice.tracks if key[0] == code]
                 or [key for key in choice.tracks if base_language(key[0]) == code])
-        if not recognised_code(code, known) or (role and role not in roles):
+        if role and role not in roles:
             messages.append(f'"{text}" not recognised')
             continue
         if role:
@@ -4905,8 +4948,11 @@ def resolve_audio(choice: FormatChoice, requests: list) -> tuple[list, list[str]
             messages.append(f'"{text}" is already in the video')
         elif not fits or fits[0] not in choice.extra:
             messages.append(f'"{text}" not available')
-        elif fits[0] not in found:
+        elif fits[0] in asked:   # "de" and "de-DE": one track
+            messages.append(f'"{text}" gives the same track as "{asked[fits[0]]}"; taken once')
+        else:
             found.append(fits[0])
+            asked[fits[0]] = text
     return found, messages
 
 
@@ -4953,11 +4999,8 @@ def resolve_subs(info: dict, requests: list) -> tuple[list, list[str], tuple | N
     if picked:
         url = timedtext_url(picked[2])
         source = (picked[1], url) if url else None
-    known = set(tracks["author"]) | set(tracks["auto-generated"]) | set(info.get(TRANSLATIONS_KEY) or {})
+    asked = {}
     for code, sort, text in requests:
-        if not recognised_code(code, known):
-            messages.append(f'"{text}" not recognised')
-            continue
         take = None
         for kind in [sort] if sort else SUB_KINDS:
             if kind == "translated":
@@ -4975,8 +5018,11 @@ def resolve_subs(info: dict, requests: list) -> tuple[list, list[str], tuple | N
                 break
         if not take:
             messages.append(f'"{text}" not available')
-        elif take[:2] not in [f[:2] for f in found]:
+        elif take[:2] in asked:   # "pt" and "pt-BR": one file
+            messages.append(f'"{text}" gives the same subtitles as "{asked[take[:2]]}"; taken once')
+        else:
             found.append(take)
+            asked[take[:2]] = text
     return found, messages, source
 
 
@@ -5031,33 +5077,34 @@ TRANSCRIPT_VERSIONS = ("plain", "timestamps", "bilingual")
 
 
 def transcript_spec(value: str) -> list[tuple[str, str | None]]:
-    """Parse --transcript: "plain,timestamps,bilingual:pl" or "none".
+    """Parse --transcript: "" (the option alone: plain) or comma-separated
+    versions, "plain,timestamps,bilingual:pl". Without the option there is no
+    transcript ([], the parser's default).
 
-    Returns the versions in the given order as (version, language) pairs;
-    [] means no transcript. Any case of letters ("Plain", "bilingual:PT-br"). Raises ArgumentTypeError for unknown versions,
-    a bilingual version without a valid language code, a language on any
-    other version, repeated versions and "none" combined with anything.
+    Returns the versions in the given order as (version, language) pairs.
+    Any case of letters ("Plain", "bilingual:PT-br"). Raises ArgumentTypeError
+    (before anything is fetched) for unknown versions ("none" too: without
+    the option there is no transcript), also for an address
+    taken as versions ("--transcript URL"), a bilingual version without a
+    language code, a language on any other version and repeated versions.
     """
+    if not value.strip():
+        return [("plain", None)]
     items = [item.strip().lower() for item in value.split(",")]
     if any(not item for item in items):
         raise argparse.ArgumentTypeError(f"empty item in '{value}' (check the commas)")
-    if "none" in items:
-        if len(items) > 1:
-            raise argparse.ArgumentTypeError("'none' cannot be combined with other versions")
-        return []
     spec = []
     for item in items:
         version, _, language = item.partition(":")
         if version not in TRANSCRIPT_VERSIONS:
             raise argparse.ArgumentTypeError(
-                f"unknown version '{version}' (use plain, timestamps, bilingual:LANG or none)")
+                f"'{item}' is not a parameter (use plain, timestamps or bilingual:CODE); "
+                f"the video's address goes before --transcript")
         if version == "bilingual":
             if not language:
                 raise argparse.ArgumentTypeError(
                     "'bilingual' needs a language code, e.g. bilingual:pl")
-            if not LANGUAGE_CODE.fullmatch(language):
-                raise argparse.ArgumentTypeError(
-                    f"'{language}' is not a language code (e.g. pl, en, pt-BR)")
+            check_code(language, item)
         elif language or ":" in item:
             raise argparse.ArgumentTypeError(f"'{version}' takes no language ('{item}')")
         entry = (version, standard_code(language) if language else None)
@@ -5067,18 +5114,31 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
     return spec
 
 
+def check_code(code: str, item: str) -> None:
+    """A language code in a parameter must be one: written as a code and
+    known to yt-dlp's ISO 639-1 table or of three letters ("jp" is not), so a
+    mistyped language stops the run before anything is fetched. Whether the
+    video has it is checked later."""
+    if not LANGUAGE_CODE.fullmatch(code) or not recognised_code(code, set()):
+        raise argparse.ArgumentTypeError(
+            f"'{item}': '{code}' is not a language code (e.g. pl, en, pt-BR)")
+
+
 VIDEO_QUALITY = re.compile(r"(\d+)p(\d+)?")
 
 
 def video_spec(value: str) -> dict:
     """Parse --video: "" (the default), or comma-separated parameters: a
     quality as an upper limit ("720p": up to 720p at any frame rate;
-    "720p30": up to 720p and 30 fps; at most 1080p), "overwrite" and
-    extra audio tracks ("audio:pl", "audio:pl.auto-dubbed") and subtitles
-    ("sub:pl", "sub:pl.translated"), repeated for more (the code is written
-    the usual way); any case of letters. Raises ArgumentTypeError (before anything is fetched),
-    also for an address taken as parameters ("--video URL")."""
-    spec = {"height": None, "fps": None, "overwrite": False, "audio": [], "subs": [],
+    "720p30": up to 720p and 30 fps; at most 1080p), "again" (download the
+    files that are there again) and extra audio tracks ("audio:pl",
+    "audio:pl.auto-dubbed") and subtitles ("sub:pl", "sub:pl.translated"),
+    one item for each (the code is written the usual way); any case of
+    letters. Raises ArgumentTypeError (before anything is fetched), also for
+    an address taken as parameters ("--video URL"), a code that is no
+    language code, and a repeated item: the same one twice, or a language
+    both alone and with a role (kind): what was meant is not clear."""
+    spec = {"height": None, "fps": None, "again": False, "audio": [], "subs": [],
             "text": value.strip().lower()}
     if not spec["text"]:
         return spec
@@ -5095,7 +5155,8 @@ def video_spec(value: str) -> dict:
                 raise argparse.ArgumentTypeError(
                     f"'{item}': write audio:CODE or audio:CODE.ROLE, e.g. audio:pl or "
                     f"audio:pl.auto-dubbed")
-            spec["audio"].append((standard_code(code), role.lower() or None, item))
+            check_code(code, item)
+            add_once(spec["audio"], (standard_code(code), role.lower() or None, item))
         elif kind.lower() == "sub" and rest:
             # sub:CODE or sub:CODE.KIND (author, auto-generated, translated)
             code, _, sort = rest.partition(".")
@@ -5103,11 +5164,12 @@ def video_spec(value: str) -> dict:
                 raise argparse.ArgumentTypeError(
                     f"'{item}': write sub:CODE or sub:CODE.KIND (KIND: "
                     f"{', '.join(SUB_KINDS)}), e.g. sub:pl or sub:pl.translated")
-            spec["subs"].append((standard_code(code), sort.lower() or None, item))
-        elif item.lower() == "overwrite":
-            if spec["overwrite"]:
-                raise argparse.ArgumentTypeError("'overwrite' is given more than once")
-            spec["overwrite"] = True
+            check_code(code, item)
+            add_once(spec["subs"], (standard_code(code), sort.lower() or None, item))
+        elif item.lower() == "again":
+            if spec["again"]:
+                raise argparse.ArgumentTypeError("'again' is given more than once")
+            spec["again"] = True
         elif quality and int(quality.group(1)) in QUALITY_LADDER:
             height, fps = int(quality.group(1)), quality.group(2)
             if height > DEFAULT_MAX_HEIGHT:
@@ -5122,8 +5184,21 @@ def video_spec(value: str) -> dict:
         else:
             raise argparse.ArgumentTypeError(
                 f"'{item}' is not a parameter (use a quality such as 720p or 720p30, "
-                f"audio:CODE, sub:CODE or overwrite); the video's address goes before --video")
+                f"audio:CODE, sub:CODE or again); the video's address goes before --video")
     return spec
+
+
+def add_once(items: list, new: tuple) -> None:
+    """Add (code, role or kind, text) to the audio: or sub: items, refusing
+    the same one twice and a code both alone and with a role (kind)."""
+    for code, sort, text in items:
+        if code == new[0] and sort == new[1]:
+            raise argparse.ArgumentTypeError(f"'{new[2]}' is given more than once")
+        if code == new[0] and (sort is None or new[1] is None):
+            raise argparse.ArgumentTypeError(
+                f"'{text}' and '{new[2]}': give the language alone or with a "
+                f"{'role' if text.lower().startswith('audio') else 'kind'} each time, not both")
+    items.append(new)
 
 
 def plural(n: int, word: str) -> str:
@@ -5267,12 +5342,14 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="do not embed the avatars of comment authors (letter "
                              "placeholders instead); the channel's avatar stays")
     parser.add_argument(
-        "--transcript", type=transcript_spec, default=[("plain", None)], metavar="VERSIONS",
-        help="transcript versions, comma-separated, shown in this order: "
-             "plain (continuous text, the default), timestamps (one line per caption), "
-             "bilingual:LANG (timestamps with YouTube's translation into LANG in a "
-             "second column, e.g. bilingual:pl; stops with an error if not available), "
-             "or none. Example: --transcript plain,bilingual:pl")
+        "--transcript", nargs="?", const="", type=transcript_spec, default=[],
+        metavar="VERSIONS",
+        help="also add the transcript (without this option the page has none): alone, "
+             "as continuous text; or versions, comma-separated, shown in this order: "
+             "plain (continuous text), timestamps (one line per caption), bilingual:CODE "
+             "(timestamps with YouTube's translation into that language in a second "
+             "column, e.g. bilingual:pl; left out with a note if YouTube has none). "
+             "Write the address first: yt2html URL --transcript plain,bilingual:pl")
     parser.add_argument("--theme", choices=THEMES, default="auto", type=str.lower,
                         help="colour theme of the page: auto (default; follows the light/dark "
                              "setting of the device it is opened on, like YouTube's "
@@ -5314,8 +5391,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "SRT file (sub:pl: the author's, else auto-generated, else a "
                              "machine translation of the transcript's subtitles; "
                              "sub:pl.author, .auto-generated or .translated for that kind) "
-                             "and overwrite (download again "
-                             "although the file is there). "
+                             "and again (download again the files "
+                             "that are already there). "
                              "Write the address first: yt2html URL --video 720p30")
     parser.add_argument("--video-formats", action="store_true",
                         help="only list, for each video, the qualities a download can take "
@@ -5331,7 +5408,7 @@ def parse_args(argv=None) -> argparse.Namespace:
             ("--index-only", args.index_only), ("--save-json", args.save_json),
             ("--no-comments", args.no_comments), ("--max-comments", args.max_comments is not None),
             ("--no-cards", args.no_cards), ("--no-avatars", args.no_avatars),
-            ("--transcript", args.transcript != [("plain", None)]),
+            ("--transcript", bool(args.transcript)),
             ("--theme", args.theme != "auto"), ("--no-snapshot", args.no_snapshot),
             ("--video", args.video is not None)) if on]
         if used:

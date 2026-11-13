@@ -154,7 +154,7 @@ def test_fetch_info_passes_no_cards(monkeypatch, info):
         def sanitize_info(self, i): return i
 
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", Fake)
-    yt2html.fetch_info("u", yt2html.parse_args(["u", "--no-cards", "--transcript", "none"]))
+    yt2html.fetch_info("u", yt2html.parse_args(["u", "--no-cards"]))
     assert seen == {"cards": False}
 
 
