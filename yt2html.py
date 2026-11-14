@@ -158,9 +158,21 @@ PLAYLIST_KEY = "yt2html_playlist"
 # Why the transcript is missing when TRANSCRIPT_KEY is None.
 TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
 
-# What --update-json added to the saved data: [{date, yt2html, added: [text]}]
-# ("translation pl", "subtitles pl (translated)"); the copy's date stays.
+# What --update-json and --refresh-json did to the saved data: [{date, yt2html,
+# added: [text] ("translation pl", "subtitles pl (translated)"), refreshed:
+# true for --refresh-json, comments: {new, gone, back} when the comments were
+# refreshed}]; the copy's date stays.
 UPDATES_KEY = "yt2html_updates"
+
+# In a saved comment (--refresh-json): the day it was first not on YouTube,
+# the times it was missing and came back ([{from, until}]), and its earlier
+# texts ([{text, until}]).
+MISSING_SINCE_KEY = "yt2html_missing_since"
+MISSING_HISTORY_KEY = "yt2html_missing"
+EDITS_KEY = "yt2html_edits"
+
+# What --refresh-json takes anew besides the comments: the counts.
+REFRESHED_KEYS = ("view_count", "like_count", "channel_follower_count", YT_COUNT_KEY)
 
 # The watch page: "read", "partial" (without the player data) or "failed".
 WATCH_PAGE_KEY = "yt2html_watch_page"
@@ -1549,6 +1561,7 @@ CSS = """
 :root{
   --bg:#0f0f0f; --text:#f1f1f1; --muted:#aaaaaa; --panel:#272727;
   --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
+  --tag-bg:#b4b4b4; --tag-fg:#2b2b2b;
   --accent:#0e8f85; --on-accent:#fff; --accent-text:#3cc8b4;
   --accent-soft:rgba(14,143,133,.28); --hover:brightness(1.15);
   --planned:#9cc3e8; --chosen:#ffd54a; --audio:#6d5bd0;
@@ -1649,6 +1662,8 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .comment .author a{color:var(--text)}
 .comment .author.owner{background:var(--chip);border-radius:12px;padding:1px 6px}
 .comment .time{color:var(--muted);margin-left:4px}
+.comment .gone{background:var(--tag-bg);color:var(--tag-fg);font-size:12px;margin-left:8px;
+  padding:1px 7px;border-radius:9px;line-height:16px;white-space:nowrap}
 .comment .pinned{color:var(--muted);font-size:12px;line-height:18px}
 .comment .text{margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
 .comment .foot{color:var(--muted);font-size:12px;line-height:18px;margin-top:4px}
@@ -1799,6 +1814,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 LIGHT_VARIABLES = """
   --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
   --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
+  --tag-bg:#5f5f5f; --tag-fg:#ececec;
   --accent:#0f766e; --accent-text:#0f766e; --accent-soft:rgba(15,118,110,.16);
   --hover:brightness(.92); --planned:#2f6a9e; --chosen:#9a6700; --audio:#5b47c4;
   color-scheme:light;
@@ -1862,8 +1878,12 @@ def render_comment(c: dict, children: dict, avatars: AvatarStyles,
              '<div class="body">']
     if c.get("is_pinned"):
         parts.append(f'<div class="pinned">📌 Pinned by {esc(uploader)}</div>')
+    gone = c.get(MISSING_SINCE_KEY)
+    gone_html = (f'<span class="gone">not on YouTube on {esc(format_date(gone))}</span>'
+                 if gone else "")
     parts.append(f'<div class="head"><span class="author{owner}">{author_html}</span>'
-                 f'{verified}<span class="time"{time_title}>{esc(time_text)}</span></div>')
+                 f'{verified}<span class="time"{time_title}>{esc(time_text)}</span>'
+                 f'{gone_html}</div>')
     parts.append(f'<div class="text">{linkify(c.get("text") or "", video_id, duration)}</div>')
 
     foot = []
@@ -2887,10 +2907,24 @@ def about_downloaded(info: dict, archived: dt.date) -> str:
     if ytdlp:
         programs.append(f"yt-dlp {esc(ytdlp)}")
     text = f"{when} from {source}" + (f" with {' and '.join(programs)}" if programs else "")
-    for update in info.get(UPDATES_KEY) or []:   # --update-json: what came later, and when
-        text += (f"; updated {esc(format_date(update['date']))} with yt2html "
-                 f"{esc(update.get('yt2html') or '?')}: {esc(', '.join(update['added']))}")
+    for update in info.get(UPDATES_KEY) or []:   # what came later, and when
+        items = list(update.get("added") or [])
+        if update.get("refreshed"):
+            items[:0] = ([comments_change(update["comments"])] if "comments" in update
+                         else []) + ["counts"]
+        text += (f"; {'refreshed' if update.get('refreshed') else 'updated'} "
+                 f"{esc(format_date(update['date']))} with yt2html "
+                 f"{esc(update.get('yt2html') or '?')}: {esc(', '.join(items))}")
     return text
+
+
+def comments_change(stats: dict) -> str:
+    """What a refresh changed in the comments: "comments (2 new, 1 no longer on YouTube)"."""
+    parts = [text for count, text in (
+        (stats.get("new"), f"{stats.get('new')} new"),
+        (stats.get("gone"), f"{stats.get('gone')} no longer on YouTube"),
+        (stats.get("back"), f"{stats.get('back')} back on YouTube")) if count]
+    return f"comments ({', '.join(parts) or 'no changes'})"
 
 
 def about_page_built(from_json: bool, built: dt.datetime) -> str:
@@ -3078,8 +3112,27 @@ def about_comments(info: dict) -> str:
               else f"{format_int(len(comments))} downloaded, YouTube's count unknown")
     state = {"complete": "complete", "interrupted": "interrupted (Ctrl+C)",
              "limited": f"limited to {format_int(info.get(LIMIT_KEY) or 0)}"}[status]
+    gone = gone_comments(comments)
     return (f"{amount}; {plural(len(roots), 'thread')}, "
-            f"{replies} {'reply' if replies == 1 else 'replies'}; {state}")
+            f"{replies} {'reply' if replies == 1 else 'replies'}; {state}"
+            + (f"; {format_int(gone)} no longer on YouTube" if gone else ""))
+
+
+def gone_comments(comments: list[dict]) -> int:
+    """How many saved comments --refresh-json no longer found on YouTube."""
+    return sum(1 for c in comments if c.get(MISSING_SINCE_KEY))
+
+
+def last_refresh(info: dict, comments: bool = False) -> dt.date | None:
+    """The day of the last --refresh-json (that refreshed the comments)."""
+    days = [u["date"] for u in info.get(UPDATES_KEY) or []
+            if u.get("refreshed") and (not comments or "comments" in u)]
+    return dt.date.fromisoformat(days[-1]) if days else None
+
+
+def comments_date(info: dict, archived: dt.date) -> dt.date:
+    """The day the comment times ("2 days ago") count from."""
+    return last_refresh(info, comments=True) or archived
 
 
 def about_images(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
@@ -3947,6 +4000,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 + fact("Comments", youtube_comment_count(info)[0] or "—")
                 + (fact("Snapshot", archived.strftime(DATE_FORMAT), extra=True)
                    if show_snapshot else "")
+                + (fact("Refreshed", refreshed.strftime(DATE_FORMAT), extra=True)
+                   if show_snapshot and (refreshed := last_refresh(info)) else "")
                 + "</div>")
 
     description = info.get("description") or ""
@@ -4000,10 +4055,13 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         elif not comments and status == "complete" and not shown:
             body.append('<div class="note">No comments.</div>')
         else:
+            gone = gone_comments(comments)
             body.append(f'<div class="note">{format_int(len(comments))} downloaded{shown}'
                         + (f': {format_int(len(roots))} threads, {format_int(replies)} replies · '
-                           f'oldest first · comment dates are relative to '
-                           f'{archived.strftime(DATE_FORMAT)}' if comments else '') + '</div>')
+                           + (f'{format_int(gone)} no longer on YouTube · ' if gone else '')
+                           + f'oldest first · comment dates are relative to '
+                           f'{comments_date(info, archived).strftime(DATE_FORMAT)}'
+                           if comments else '') + '</div>')
         for c in roots:
             body.append(render_comment(c, children, avatars, video_id, duration, uploader))
         body.append("</section>")
@@ -4685,20 +4743,23 @@ def missing_for_update(info: dict, args: argparse.Namespace) -> tuple[bool, list
 
 
 def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
-                      targets: list[str]) -> list[str]:
+                      targets: list[str], fresh: dict | None = None,
+                      started: float | None = None) -> list[str]:
     """--update-json: the transcript (`whole`) or only its translations into
     `targets`, from fresh player data (no comments, no watch page: caption
-    addresses expire, and the saved data know the track and the languages).
+    addresses expire, and the saved data know the track and the languages);
+    --refresh-json passes the `fresh` data it fetched at `started`.
     Returns what was added, for UPDATES_KEY."""
     opts = {"skip_download": True, "noplaylist": True, "ignore_no_formats_error": True,
             "noprogress": True, "quiet": True, "format": NO_MERGE_FORMAT}
     if args.cookies_from_browser:
         opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
-    log("Fetching the video's data (no comments) for what is missing...")
-    started = time.monotonic()
     with yt_dlp.YoutubeDL(opts) as ydl:
-        fresh = ydl.sanitize_info(ydl.extract_info(f"{YOUTUBE}/watch?v={info.get('id')}",
-                                                   download=False))
+        if fresh is None:
+            log("Fetching the video's data (no comments) for what is missing...")
+            started = time.monotonic()
+            fresh = ydl.sanitize_info(ydl.extract_info(f"{YOUTUBE}/watch?v={info.get('id')}",
+                                                       download=False))
         # the track and the languages as the saved data know them
         data = {**fresh, CAPTION_KEY: info.get(CAPTION_KEY),
                 TRANSLATIONS_KEY: info.get(TRANSLATIONS_KEY)}
@@ -4728,17 +4789,92 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                 if language not in before]
 
 
-def note_update(info: dict, added: list[str]) -> None:
-    """Record what --update-json added today (UPDATES_KEY); the same day and
-    version extend the last record."""
-    if not added:
+def note_update(info: dict, added: list[str], refreshed: bool = False,
+                comments: dict | None = None) -> None:
+    """Record what --update-json or --refresh-json did today (UPDATES_KEY):
+    what was added, whether the data were refreshed and what changed in the
+    comments; the same day and version extend the last record."""
+    if not added and not refreshed:
         return
     today = dt.date.today().isoformat()
     updates = info.setdefault(UPDATES_KEY, [])
     if updates and (updates[-1].get("date"), updates[-1].get("yt2html")) == (today, __version__):
-        updates[-1]["added"] += [item for item in added if item not in updates[-1]["added"]]
+        record = updates[-1]
+        record["added"] += [item for item in added if item not in record["added"]]
     else:
-        updates.append({"date": today, "yt2html": __version__, "added": list(added)})
+        record = {"date": today, "yt2html": __version__, "added": list(added)}
+        updates.append(record)
+    if refreshed:
+        record["refreshed"] = True
+    if comments is not None:
+        record["comments"] = comments
+
+
+def merge_comments(saved: list[dict], fresh: list[dict], complete: bool,
+                   today: str) -> tuple[list[dict], dict]:
+    """--refresh-json: the saved comments with the fresh ones, by id. A fresh
+    comment replaces its saved self (the old text kept in EDITS_KEY when it
+    changed; one missing before comes back, noted in MISSING_HISTORY_KEY),
+    a new one is added, and a saved one YouTube did not send stays, marked
+    with the day (MISSING_SINCE_KEY), but only when the fresh download is
+    complete (with a limit or after Ctrl+C a missing comment proves nothing).
+    The saved ones keep their place after their neighbours, in yt-dlp's
+    order, which breaks ties of the coarse times. Returns the comments and
+    {new, gone, back}."""
+    fresh_ids = {c.get("id") for c in fresh}
+    saved_by_id = {c.get("id"): c for c in saved}
+    stats = {"new": 0, "gone": 0, "back": 0}
+    after = defaultdict(list)       # fresh id (None: the start) -> saved ones gone after it
+    anchor = None
+    for old in saved:
+        if old.get("id") in fresh_ids:
+            anchor = old.get("id")
+            continue
+        if complete and not old.get(MISSING_SINCE_KEY):
+            old = {**old, MISSING_SINCE_KEY: today}
+            stats["gone"] += 1
+        after[anchor].append(old)
+    merged = list(after[None])
+    for new in fresh:
+        old = saved_by_id.get(new.get("id"))
+        comment = dict(new)
+        if old is None:
+            stats["new"] += 1
+        else:
+            history = list(old.get(MISSING_HISTORY_KEY) or [])
+            if old.get(MISSING_SINCE_KEY):
+                history.append({"from": old[MISSING_SINCE_KEY], "until": today})
+                stats["back"] += 1
+            edits = list(old.get(EDITS_KEY) or [])
+            if (old.get("text") or "") != (new.get("text") or ""):
+                edits.append({"text": old.get("text"), "until": today})
+            if history:
+                comment[MISSING_HISTORY_KEY] = history
+            if edits:
+                comment[EDITS_KEY] = edits
+        merged.append(comment)
+        merged += after[new.get("id")]
+    return merged, stats
+
+
+def refresh_saved(info: dict, fresh: dict) -> dict | None:
+    """--refresh-json: the counts from fresh data, and the comments merged
+    (merge_comments()); comments not downloaded now (--no-comments, turned
+    off) leave the saved ones as they are. Returns what changed in the
+    comments, or None when they were not refreshed."""
+    for key in REFRESHED_KEYS:
+        if fresh.get(key) is not None:
+            info[key] = fresh[key]
+    if fresh.get("comments") is None:
+        return None
+    saved = info.get("comments") if isinstance(info.get("comments"), list) else []
+    merged, stats = merge_comments(saved, fresh["comments"], comment_status(fresh) == "complete",
+                                   dt.date.today().isoformat())
+    info["comments"] = merged
+    # None (Ctrl+C) as yt-dlp leaves it; else the number kept, as for a download
+    info["comment_count"] = None if fresh.get("comment_count") is None else len(merged)
+    info[LIMIT_KEY] = fresh.get(LIMIT_KEY)
+    return stats
 
 
 def video_added(result: dict) -> list[str]:
@@ -4773,7 +4909,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     """
     outcome = {} if outcome is None else outcome
     output_dir = Path(args.output_dir)
-    skip_existing = not (args.overwrite or args.load_json or args.update_json)
+    adding = args.update_json or args.refresh_json     # to saved data, if there are any
+    skip_existing = not (args.overwrite or args.load_json or adding)
 
     if skip_existing:
         # Checked before fetching, from the id in the URL: no request needed.
@@ -4787,13 +4924,13 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         raise ValueError(CHANNEL_ERROR)
     write_json = args.write_json
     data_path = (saved_data_path(source, output_dir) if args.load_json else
-                 update_data_path(source, output_dir) if args.update_json else None)
-    updating = args.update_json and data_path is not None
+                 update_data_path(source, output_dir) if adding else None)
+    updating = adding and data_path is not None
     if data_path:
         log(f"Reading {data_path}")
         info = json.loads(data_path.read_text(encoding="utf-8"))
     else:
-        if args.update_json:
+        if adding:
             found = existing_page(output_dir, video_id_from_url(source))
             if found:
                 log(f"Skipped (page exists, no saved data to update): {found}. Use "
@@ -4809,10 +4946,18 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     if info.get("_type") in ("playlist", "multi_video"):
         raise ValueError(PLAYLIST_ERROR)
     if updating:
+        fresh = started = None
+        if args.refresh_json:
+            log(f"Fetching {source} (to refresh the saved data)")
+            started = time.monotonic()
+            # the transcript as the data have it; what it lacks comes below
+            fresh = fetch_info(f"{YOUTUBE}/watch?v={info.get('id')}",
+                               argparse.Namespace(**{**vars(args), "transcript": []}))
+            note_update(info, [], refreshed=True, comments=refresh_saved(info, fresh))
         whole, targets = missing_for_update(info, args)
         if whole or targets:
-            note_update(info, update_transcript(info, args, whole, targets))
-        elif args.video is None:
+            note_update(info, update_transcript(info, args, whole, targets, fresh, started))
+        elif args.video is None and not args.refresh_json:
             log("Nothing to add from YouTube; the page is made from the saved data.")
 
     saved = info.get(TRANSCRIPT_KEY) or {}
@@ -4825,7 +4970,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     # An existing page (possibly renamed by the user) keeps its name when it
     # is made again; otherwise the name follows yt-dlp's video file name.
     found = existing_page(output_dir, info.get("id"))
-    if found and (skip_existing or (args.update_json and not updating)):
+    if found and (skip_existing or (adding and not updating)):
         # The URL did not show the id (unusual form), the fetched data does.
         log(f"Skipped (page exists): {found}")
         outcome["target"] = found
@@ -4896,7 +5041,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
         f"{len(shown().get('comments') or [])} comments)")
     outcome.update(target=target, info=info, rebuild=rebuild, updating=updating)
-    if not data_path and comments_interrupted(info):
+    if (not data_path or args.refresh_json) and comments_interrupted(info):
         log("  Comments were interrupted (Ctrl+C): the page has those fetched so far "
             "and counts as finished; use --overwrite for this video to get all of them.")
         raise CommentsInterrupted
@@ -5526,10 +5671,11 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
     if args.load_json:
         args.sources = [path for source in args.sources for path in expand_pattern(source)]
     else:
-        args.sources = [update_source(path) if args.update_json else source_from_page_name(path)
+        adding = args.update_json or args.refresh_json
+        args.sources = [update_source(path) if adding else source_from_page_name(path)
                         for source in args.sources
                         for path in (expand_pattern(source)
-                                     if args.update_json and "://" not in source else [source])]
+                                     if adding and "://" not in source else [source])]
 
     def new(source: str) -> bool:
         key = source if args.load_json else (video_id_from_url(source) or source)
@@ -5548,7 +5694,7 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
         listed = read_batch_file(path)
         if args.load_json:
             listed = [found for source in listed for found in expand_pattern(source)]
-        elif args.update_json:
+        elif args.update_json or args.refresh_json:
             listed = [update_source(found) for source in listed
                       for found in (expand_pattern(source) if "://" not in source else [source])]
         else:
@@ -5664,6 +5810,11 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "counts and the copy's date stay; the data are saved back and the "
                              "page made again. Without saved data: a full download, as with "
                              "--write-json (a page that exists is skipped)")
+    parser.add_argument("--refresh-json", action="store_true",
+                        help="as --update-json, and also refresh what changes over time: the "
+                             "counts, and the comments merged with the saved ones (new ones "
+                             "added, edited ones updated, those YouTube no longer has kept "
+                             "and marked 'not on YouTube on DD.MM.YYYY'); the copy's date stays")
     parser.add_argument("--load-json", action="store_true",
                         help="build pages only from saved .info.json files (or video ids "
                              "looked up in -o), without YouTube; existing pages are always "
@@ -5673,7 +5824,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         used = [name for name, on in (
             ("--overwrite", args.overwrite), ("--index", args.index),
             ("--index-only", args.index_only), ("--write-json", args.write_json),
-            ("--update-json", args.update_json),
+            ("--update-json", args.update_json), ("--refresh-json", args.refresh_json),
             ("--no-comments", args.no_comments), ("--max-comments", args.max_comments is not None),
             ("--no-cards", args.no_cards), ("--no-avatars", args.no_avatars),
             ("--transcript", bool(args.transcript)),
@@ -5684,14 +5835,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                          f"{', '.join(used)}")
     json_options = [name for name, on in (("--write-json", args.write_json),
                                           ("--update-json", args.update_json),
+                                          ("--refresh-json", args.refresh_json),
                                           ("--load-json", args.load_json)) if on]
     if len(json_options) > 1:
         parser.error(f"{' and '.join(json_options)} cannot be used together (one JSON option "
                      "at a time: --write-json saves with a download, --update-json adds what "
-                     "is missing, --load-json only reads)")
-    if args.update_json and args.overwrite:
-        parser.error("--overwrite downloads everything again and --update-json keeps the saved "
-                     "data; use one of them")
+                     "is missing, --refresh-json also refreshes, --load-json only reads)")
+    for name, on in (("--update-json", args.update_json), ("--refresh-json", args.refresh_json)):
+        if on and args.overwrite:
+            parser.error(f"--overwrite downloads everything again and {name} keeps the saved "
+                         "data; use one of them")
     if args.video is not None and args.load_json:
         parser.error("--video needs YouTube, so it cannot be used with --load-json; "
                      "give the URL instead")

@@ -107,6 +107,7 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | List the qualities a video download can take and the audio tracks it can add, without making a page | `yt2html "URL" --video-formats` |
 | Also save the data the page is made from, to make it again later without YouTube (see *Saved data*) | `yt2html "URL" --write-json` |
 | Add to saved data only what is missing, e.g. a translation YouTube refused before, keeping the comments (see *Saved data*) | `yt2html VIDEO_ID -o "D:\Videos" --update-json --transcript bilingual:pl` |
+| The same, and also refresh the counts and the comments: new ones added, those YouTube no longer has kept and marked (see *Saved data*) | `yt2html VIDEO_ID -o "D:\Videos" --refresh-json --transcript` |
 | Make a page again from saved data only, offline (see *Saved data*) | `yt2html --load-json VIDEO_ID -o "D:\Videos" --transcript` |
 | Versions of the program and yt-dlp | `yt2html --version` |
 | All options | `yt2html --help` |
@@ -135,15 +136,16 @@ Only when the transcript itself cannot be downloaded is nothing saved for that v
 
 ### Saved data
 
-Three options work with the data a page is made from, saved next to it as `Title [id].info.json`: yt-dlp's data of the video (description, counts, formats, comments, …) together with what yt2html adds (the transcript and its translations, the chapters and other timestamp lists, info cards, the extras of the video page, what `--video` downloaded). Only one of them at a time; combining two is an error.
+Four options work with the data a page is made from, saved next to it as `Title [id].info.json`: yt-dlp's data of the video (description, counts, formats, comments, …) together with what yt2html adds (the transcript and its translations, the chapters and other timestamp lists, info cards, the extras of the video page, what `--video` downloaded). Only one of them at a time; combining two is an error.
 
 | Option | What it does | Asks YouTube for | Comments and counts | The copy's date |
 |---|---|---|---|---|
 | `--write-json` | also saves the data with a normal download | everything (a normal download) | downloaded now | today |
 | `--update-json` | adds to saved data what the options ask for and they lack, saves them back, makes the page again | only what is missing; nothing if nothing is | as saved | as saved, with a note of the update |
+| `--refresh-json` | as `--update-json`, and refreshes what changes over time | the video's data with the comments, then what is missing | refreshed; the comments merged with the saved ones | as saved, with a note and a *Refreshed* tile |
 | `--load-json` | makes the page from saved data only | nothing (images aside) | as saved | as saved |
 
-Saving and reading are not symmetric: `--write-json` is an extra to a download (without it the download is the same), while `--update-json` and `--load-json` change where the page comes from.
+Saving and reading are not symmetric: `--write-json` is an extra to a download (without it the download is the same), while `--update-json`, `--refresh-json` and `--load-json` change where the page comes from.
 
 **`--write-json`** saves the file next to the page; an older file of the same name is replaced. Save the data with every download you care about: they let you make the page again later without YouTube (a newer look of the page after an update of yt2html), add what is missing, and they keep what was downloaded (*Video file* row, extra audio switches) when `--video` runs in the same command.
 
@@ -155,6 +157,13 @@ Saving and reading are not symmetric: `--write-json` is an extra to a download (
 - **What it takes:** the same as `--load-json` (a file, `*` and `?` patterns, a video id or the name of the page or video, looked up in `-o`), and also addresses and playlists. The data go back into the file they came from, whatever its name; pages are saved in the `-o` folder.
 - **Without saved data:** a full download, as with `--write-json` (with a message), when the video has no page yet; a page that exists without data is skipped (`Skipped (page exists, no saved data to update)`), since replacing it would download everything again: use `--overwrite --write-json` for that.
 - **Options that shape the page** work as with `--load-json`; `--max-comments N` and `--no-comments` narrow only the page, the file keeps all comments, so a later build without them shows all of them again. `--update-json` with `--overwrite` is an error (one keeps the data, the other downloads everything again).
+
+**`--refresh-json`** does what `--update-json` does and also downloads the video's data again, with the comments, to refresh what changes over time:
+
+- **Counts:** views, likes, subscribers and YouTube's comment count are taken anew. The description, chapters and the rest stay as saved.
+- **Comments, merged by their id:** new ones are added; those still there are taken as they are now (text, likes, time; an earlier text stays in the data); those YouTube no longer sends stay on the page with a grey mark, `not on YouTube on 20.11.2026`, the day of the refresh that first missed them. A comment that is back later loses the mark (the data keep when it was missing). Comments YouTube does not send at all now (turned off, `--no-comments`) leave the saved ones as they are; after a download with `--max-comments` or one stopped with `Ctrl+C` nothing is marked, since missing comments prove nothing then.
+- **On the page:** the comments line and the *Comments* row of *About this copy* add how many are no longer on YouTube; *Downloaded* adds each refresh, e.g. `…; refreshed 20.11.2026 with yt2html …: comments (2 new, 1 no longer on YouTube), counts`; a *Refreshed* tile with the day of the last refresh stands next to *Snapshot* (`--no-snapshot` leaves out both). The copy's date stays.
+- Everything else as for `--update-json`: the sources, without saved data a full download or a skip, the page made again, the data saved back; `Ctrl+C` during the comments stops the run after the page, as with a download. `--refresh-json` with `--overwrite` is an error.
 
 **`--load-json`** makes pages only from such files and asks YouTube for nothing:
 

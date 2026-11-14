@@ -220,7 +220,11 @@ def test_load_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
 @pytest.mark.parametrize("options, message", [
     (["--load-json", "--write-json"], "--write-json and --load-json cannot be used together "
      "(one JSON option at a time: --write-json saves with a download, --update-json adds what "
-     "is missing, --load-json only reads)"),
+     "is missing, --refresh-json also refreshes, --load-json only reads)"),
+    (["--refresh-json", "--update-json"], "--update-json and --refresh-json cannot be used together"),
+    (["--refresh-json", "--overwrite"], "--overwrite downloads everything again and "
+     "--refresh-json keeps the saved data; use one of them"),
+    (["--refresh-json", "--video-formats"], "cannot be used with --refresh-json"),
     (["--update-json", "--write-json"], "--write-json and --update-json cannot be used together"),
     (["--update-json", "--load-json"], "--update-json and --load-json cannot be used together"),
     (["--update-json", "--overwrite"], "--overwrite downloads everything again and "
