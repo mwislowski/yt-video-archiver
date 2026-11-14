@@ -86,8 +86,9 @@ def test_no_transcript_without_the_option(capsys, info_file, tmp_path):
 
 def test_bilingual_missing_at_download_is_a_note(capsys, info, tmp_path):
     # YouTube had no German when the data was saved: rebuilt without it, no error
-    info[yt2html.TRANSCRIPT_KEY]["missing"] = {"de": "YouTube offers no translation of this "
-                                                     "transcript into 'de' (available: pl)"}
+    info[yt2html.TRANSCRIPT_KEY]["missing"] = {"de": {
+        "reason": "YouTube offers no translation of this transcript into 'de' (available: pl)",
+        "refused": False, "date": "2026-11-05"}}
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
     out_dir = tmp_path / "pages"
@@ -216,8 +217,18 @@ def test_load_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
 
 
 
-def test_one_json_option_at_a_time(capsys):
+@pytest.mark.parametrize("options, message", [
+    (["--load-json", "--write-json"], "--write-json and --load-json cannot be used together "
+     "(one JSON option at a time: --write-json saves with a download, --update-json adds what "
+     "is missing, --load-json only reads)"),
+    (["--update-json", "--write-json"], "--write-json and --update-json cannot be used together"),
+    (["--update-json", "--load-json"], "--update-json and --load-json cannot be used together"),
+    (["--update-json", "--overwrite"], "--overwrite downloads everything again and "
+     "--update-json keeps the saved data; use one of them"),
+    (["--update-json", "--video-formats"], "--video-formats makes no page, so it cannot be "
+     "used with --update-json"),
+])
+def test_one_json_option_at_a_time(capsys, options, message):
     with pytest.raises(SystemExit):
-        yt2html.parse_args(["--load-json", "x.info.json", "--write-json"])
-    assert ("--write-json and --load-json cannot be used together: --load-json only reads "
-            "saved data (one of the JSON options at a time)") in capsys.readouterr().err
+        yt2html.parse_args(["x.info.json", *options])
+    assert message in capsys.readouterr().err

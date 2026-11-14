@@ -685,6 +685,7 @@ def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
     assert ('machine-translated subtitles: possible in 3 other languages for each row with '
             'subtitles; downloaded: <span class="chosen">pl</span> (from en)</div>') in html
     saved = json.loads(html_path.with_suffix(".info.json").read_text("utf-8"))
+    assert yt2html.UPDATES_KEY not in saved              # a download, not an update
     assert saved[yt2html.VIDEO_KEY]["subtitles"] == [
         {"code": "en", "kind": "author", "file": en.name, "size": 38, "date": dt.date.today().isoformat()},
         {"code": "pl", "kind": "translated", "file": pl.name, "size": 38,
@@ -1001,3 +1002,31 @@ def test_video_file_row_by_day():
                                                      "downloaded 13.11.2026: extra audio m4a: de (auto-dubbed)"
                                                      ", 70 MB; next to the page: video v.mp4, 2 MB; extra")
     assert yt2html.about_video_file({"id": "x"}) == "not downloaded; no video or audio formats in the data"
+
+
+def test_update_json_records_the_files(tmp_path, subtitles, capsys):
+    # the page and its data first; then --update-json --video adds the files to the data
+    assert yt2html.main([URL, "-o", str(tmp_path), "--write-json"]) == 0
+    data_path = page(tmp_path).with_suffix(".info.json")
+    data = json.loads(data_path.read_text("utf-8"))
+    data[yt2html.LIMIT_KEY] = 7                 # downloaded with a limit (YouTube counts 9)
+    data_path.write_text(json.dumps(data), encoding="utf-8")
+    capsys.readouterr()
+    assert yt2html.main([URL, "-o", str(tmp_path), "--update-json", "--video", "sub:en",
+                         "--max-comments", "100"]) == 0
+    out = capsys.readouterr().out
+    assert "Nothing to add from YouTube" not in out and f"Updated metadata: {data_path}" in out
+    assert out.count("The saved data has only 7 comments") == 1       # told once
+    data = json.loads(data_path.read_text("utf-8"))
+    assert len(data["comments"]) == 7
+    assert [s["code"] for s in data[yt2html.VIDEO_KEY]["subtitles"]] == ["en"]
+    assert data[yt2html.UPDATES_KEY][-1]["added"] == ["video", "subtitles en (author)"]
+    html = page(tmp_path).read_text("utf-8")
+    assert row(html, "Video file").startswith(f"downloaded {TODAY}: 1080p")
+    assert f"; updated {TODAY} with yt2html {yt2html.__version__}: video, subtitles en (author)" in html
+    # again, all files there: nothing new to record
+    assert yt2html.main([URL, "-o", str(tmp_path), "--update-json", "--video", "sub:en",
+                         "--max-comments", "2"]) == 0
+    data = json.loads(data_path.read_text("utf-8"))
+    assert data[yt2html.UPDATES_KEY][-1]["added"] == ["video", "subtitles en (author)"]
+    assert len(data["comments"]) == 7          # the page shows fewer, the data keep all

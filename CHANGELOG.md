@@ -4,10 +4,15 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+
+- `--update-json`: adds to saved data what the options ask for and they lack, without downloading them again: the transcript, translations (also those YouTube refused before; one it does not offer is not asked for again), and the files of `--video`, which are then recorded in the data (*Video file* row, yellow marks, extra audio switches). YouTube is asked only for the video's data without comments and for what is missing, nothing at all when nothing is. The comments, counts and the copy's date stay; *About this copy* adds `updated DD.MM.YYYY with yt2html …: translation pl`. The data go back into their file and the page is made again. Without saved data: a full download as with `--write-json`, or, when the page exists, a skip with a hint. It takes the same sources as `--load-json` plus addresses and playlists, and cannot be combined with `--write-json`, `--load-json` or `--overwrite`. README: *Saved data* compares the three options.
+
 ### Changed
 
 - `--save-json` is now `--write-json` and `--from-json` is now `--load-json` (the old names are gone). They cannot be combined: `--load-json` only reads saved data. README has a new section, *Saved data*, on what each one does.
-- A translation that YouTube refuses to send (`HTTP 429`, frequent since mid-November 2026, also for yt-dlp alone and with cookies) or whose download fails no longer stops the video: like a translation YouTube does not offer, it is left out with a note (*About this copy*: `not available: bilingual:pl (YouTube refused to send it (HTTP 429 Too Many Requests))`), the page is made and counts as finished; `--overwrite` adds it later. Only a failed transcript still saves nothing.
+- The saved data keep each translation left out as `{reason, refused, date}` (before: the reason only); *About this copy* gives the day of a refusal.
+- A translation that YouTube refuses to send (`HTTP 429`, frequent since mid-November 2026, also for yt-dlp alone and with cookies) or whose download fails no longer stops the video: like a translation YouTube does not offer, it is left out with a note (*About this copy*: `not available: bilingual:pl (YouTube refused to send it (HTTP 429 Too Many Requests))`), the page is made and counts as finished; `--update-json` or `--overwrite` adds it later. Only a failed transcript still saves nothing.
 - Each translation is asked for once, a random 70 to 100 seconds after the video's data was fetched, without retries (before: at least 65 s, then retries after 60 and 120 s). The same for `sub:` translations; a refused subtitle file still counts as failed, and the next run with the same `--video` tries again.
 - Each caption track is downloaded once per run, as json3, for the transcript and the `sub:` files alike: `--transcript bilingual:pl` with `--video sub:pl` asks YouTube for the Polish translation once, and a refusal is not asked again. The SRT files are made from it with the same cues as YouTube's own SRT (`test_online.py` compares them).
 

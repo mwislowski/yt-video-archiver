@@ -123,8 +123,10 @@ CAPTION_KEY = "yt2html_default_caption_track"
 TRANSLATIONS_KEY = "yt2html_translation_languages"
 
 # The transcript: {language, name, kind, cues: [{start, text}], translations:
-# {lang: {language, name, cues}}}; None if the video has none, absent with
-# --transcript none. All versions on the page are built from the same cues.
+# {lang: {language, name, cues}}, missing: {lang: {reason, refused, date}}}
+# (missing: the translations left out; refused ones are asked for again by
+# --update-json); None if the video has none, absent without --transcript.
+# All versions on the page are built from the same cues.
 TRANSCRIPT_KEY = "yt2html_transcript"
 
 # The author's info cards: [{type, title, url, image, details, message, start}];
@@ -155,6 +157,10 @@ PLAYLIST_KEY = "yt2html_playlist"
 
 # Why the transcript is missing when TRANSCRIPT_KEY is None.
 TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
+
+# What --update-json added to the saved data: [{date, yt2html, added: [text]}]
+# ("translation pl", "subtitles pl (translated)"); the copy's date stays.
+UPDATES_KEY = "yt2html_updates"
 
 # The watch page: "read", "partial" (without the player data) or "failed".
 WATCH_PAGE_KEY = "yt2html_watch_page"
@@ -1196,14 +1202,14 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     if not track:
         return unavailable("the video has no captions")
     kind, lang, formats = track
-    fmt = next((f for f in formats if f.get("ext") == "json3" and f.get("url")), None)
+    url = json3_url(formats)
     name = re.sub(r"\s*\((Original|auto-generated)\)$", "", (formats[0].get("name") or lang))
-    if not fmt:
+    if not url:
         return unavailable(f"no usable captions for {name}")
     label = f"{name}, auto-generated" if kind == "auto" else name
     log(f"Downloading transcript ({label})...")
     try:
-        cues = download_cues(ydl, fmt["url"])
+        cues = download_cues(ydl, url)
     except Exception as error:
         raise TranscriptError(f"could not download the transcript ({error}); nothing was saved.")
     if not cues:
@@ -1212,19 +1218,37 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     transcript = {"language": lang, "name": name, "kind": kind, "cues": cues,
                   "original": bool(original) and base_language(original) == base_language(lang)}
     if translate_to:
-        transcript["translations"] = {}
-        for target in translate_to:
-            try:
-                transcript["translations"][target] = fetch_translation(
-                    ydl, info, transcript, fmt["url"], target, not_before)
-            except TranslationUnavailable as reason:
-                log(f"No translation into '{target}': {reason}.")
-                if isinstance(reason, TranslationRefused):
-                    log("  The page is made without it and counts as finished; to add the "
-                        "translation later, make the page again with --overwrite."
-                        + TRANSLATION_HINT)
-                transcript.setdefault("missing", {})[target] = str(reason)
+        add_translations(ydl, info, transcript, url, translate_to, not_before)
     return transcript
+
+
+def json3_url(formats: list[dict]) -> str | None:
+    """The json3 address among a caption track's formats."""
+    return next((f["url"] for f in formats if f.get("ext") == "json3" and f.get("url")), None)
+
+
+def add_translations(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: str,
+                     targets: list[str], not_before: float = 0.0) -> None:
+    """Translations of the transcript (its track at `url`) into `targets`,
+    added to it; what does not come is kept in "missing" with the reason,
+    whether YouTube refused it (asked for again by --update-json) and the day."""
+    translations = transcript.setdefault("translations", {})
+    for target in targets:
+        try:
+            translations[target] = fetch_translation(ydl, info, transcript, url, target,
+                                                     not_before)
+            transcript.get("missing", {}).pop(target, None)
+        except TranslationUnavailable as reason:
+            refused = isinstance(reason, TranslationRefused)
+            log(f"No translation into '{target}': {reason}.")
+            if refused:
+                log("  The page is made without it and counts as finished; to add the "
+                    "translation later: --update-json (keeps the comments) or --overwrite."
+                    + TRANSLATION_HINT)
+            transcript.setdefault("missing", {})[target] = {
+                "reason": str(reason), "refused": refused, "date": dt.date.today().isoformat()}
+    if not transcript.get("missing"):
+        transcript.pop("missing", None)
 
 
 # --------------------------------------------------------------------------
@@ -2862,7 +2886,11 @@ def about_downloaded(info: dict, archived: dt.date) -> str:
     ytdlp = (info.get("_version") or {}).get("version")
     if ytdlp:
         programs.append(f"yt-dlp {esc(ytdlp)}")
-    return f"{when} from {source}" + (f" with {' and '.join(programs)}" if programs else "")
+    text = f"{when} from {source}" + (f" with {' and '.join(programs)}" if programs else "")
+    for update in info.get(UPDATES_KEY) or []:   # --update-json: what came later, and when
+        text += (f"; updated {esc(format_date(update['date']))} with yt2html "
+                 f"{esc(update.get('yt2html') or '?')}: {esc(', '.join(update['added']))}")
+    return text
 
 
 def about_page_built(from_json: bool, built: dt.datetime) -> str:
@@ -3016,9 +3044,22 @@ def about_transcript(info: dict, spec: list) -> str:
               if version == "bilingual" and language not in translations]
     if absent:   # "not available: bilingual:fi (YouTube offers no translation …)"
         text += "; not available: " + ", ".join(
-            f"bilingual:{esc(language)}" + (f" ({esc(missing[language])})" if language in missing
-                                            else "") for language in absent)
+            f"bilingual:{esc(language)}" + (f" ({esc(missing_text(missing[language]))})"
+                                            if language in missing else "")
+            for language in absent)
     return text
+
+
+def format_date(iso: str) -> str:
+    """"2026-11-20" -> "20.11.2026"."""
+    return dt.date.fromisoformat(iso).strftime(DATE_FORMAT)
+
+
+def missing_text(entry: dict) -> str:
+    """Why a translation was left out; a refusal with the day YouTube refused."""
+    if entry.get("refused") and entry.get("date"):
+        return f"{entry['reason']}, {format_date(entry['date'])}"
+    return entry.get("reason") or "unknown"
 
 
 def about_comments(info: dict) -> str:
@@ -4576,11 +4617,12 @@ def comments_interrupted(info: dict) -> bool:
     return isinstance(info.get("comments"), list) and info.get("comment_count") is None
 
 
-def narrow_saved_comments(info: dict, args: argparse.Namespace) -> None:
-    """--no-comments and --max-comments with --load-json: they can only narrow
+def narrow_saved_comments(info: dict, args: argparse.Namespace, note: bool = True) -> None:
+    """--no-comments and --max-comments with saved data: they can only narrow
     the saved comments, as if the download had used them. The first N are
     kept, in the saved (yt-dlp's) order, replies counted: the comments a
-    download with that limit gets. The page then shows the result only."""
+    download with that limit gets. Only the page shows the result (`info`
+    is a copy for it); `note` tells when more cannot come from the data."""
     if args.no_comments:
         info.pop("comments", None)
         return
@@ -4592,9 +4634,122 @@ def narrow_saved_comments(info: dict, args: argparse.Namespace) -> None:
         info["comments"] = comments[:limit]
         info[LIMIT_KEY] = limit
         info["comment_count"] = limit  # cut by the limit, not by Ctrl+C any more
-    elif comment_status(info) in ("limited", "interrupted"):
+    elif note and comment_status(info) in ("limited", "interrupted"):
         log(f"  The saved data has only {plural(len(comments), 'comment')}; download "
             f"again (without --load-json) to get more.")
+
+
+def update_data_path(source: str, output_dir: Path) -> Path | None:
+    """The saved data an --update-json source adds to: a saved data file
+    given as it is, else the ".info.json" file with the video's id in square
+    brackets in the output folder; None when there is none. Raises ValueError
+    for a file name that leads nowhere."""
+    path = Path(source)
+    if path.is_file():   # (other names with an id came as URLs: update_source())
+        return path
+    if "://" not in source and has_wildcards(source):   # (a URL has its "?")
+        raise ValueError(f"no file matches {source}")
+    video_id = video_id_from_url(source)
+    if not video_id:
+        if source.lower().endswith(".json"):
+            raise ValueError(f"no such file: {source}")
+        return None
+    return file_with_id(output_dir, video_id, (".info.json",), "saved data files")
+
+
+def missing_for_update(info: dict, args: argparse.Namespace) -> tuple[bool, list[str]]:
+    """What --transcript asks for and the saved data lack: (the transcript
+    itself, the languages of the translations to fetch). Translations YouTube
+    refused are asked for again; those it does not have are not."""
+    if not args.transcript:
+        return False, []
+    wanted = bilingual_languages(args.transcript)
+    if TRANSCRIPT_KEY not in info:
+        return True, wanted
+    transcript = info[TRANSCRIPT_KEY]
+    if transcript is None:
+        log(f"No transcript in the saved data ({info.get(TRANSCRIPT_MISSING_KEY) or 'none'}); "
+            "not asked for again.")
+        return False, []
+    targets = []
+    for language in wanted:
+        entry = (transcript.get("missing") or {}).get(language)
+        if language in translations_of(transcript):
+            continue
+        if entry and not entry.get("refused"):
+            log(f"No translation into '{language}' in the saved data ({entry['reason']}); "
+                "not asked for again.")
+            continue
+        targets.append(language)
+    return False, targets
+
+
+def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
+                      targets: list[str]) -> list[str]:
+    """--update-json: the transcript (`whole`) or only its translations into
+    `targets`, from fresh player data (no comments, no watch page: caption
+    addresses expire, and the saved data know the track and the languages).
+    Returns what was added, for UPDATES_KEY."""
+    opts = {"skip_download": True, "noplaylist": True, "ignore_no_formats_error": True,
+            "noprogress": True, "quiet": True, "format": NO_MERGE_FORMAT}
+    if args.cookies_from_browser:
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+    log("Fetching the video's data (no comments) for what is missing...")
+    started = time.monotonic()
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        fresh = ydl.sanitize_info(ydl.extract_info(f"{YOUTUBE}/watch?v={info.get('id')}",
+                                                   download=False))
+        # the track and the languages as the saved data know them
+        data = {**fresh, CAPTION_KEY: info.get(CAPTION_KEY),
+                TRANSLATIONS_KEY: info.get(TRANSLATIONS_KEY)}
+        not_before = started + translation_wait()
+        if whole:
+            transcript = fetch_transcript(ydl, data, targets, not_before)
+            info[TRANSCRIPT_KEY] = transcript
+            if transcript is None:
+                info[TRANSCRIPT_MISSING_KEY] = data.get(TRANSCRIPT_MISSING_KEY)
+                return []
+            return ["transcript"] + [f"translation {language}"
+                                     for language in translations_of(transcript)]
+        transcript = info[TRANSCRIPT_KEY]
+        before = set(translations_of(transcript))
+        track = choose_caption_track(data)
+        url = json3_url(track[2]) if track else None
+        if not url or (track[0], track[1]) != (transcript.get("kind"), transcript.get("language")):
+            reason = (f"the transcript's captions ({transcript.get('name')}) are not in "
+                      "YouTube's data now")
+            log(f"No translation into {', '.join(targets)}: {reason}.")
+            for target in targets:
+                transcript.setdefault("missing", {})[target] = {
+                    "reason": reason, "refused": True, "date": dt.date.today().isoformat()}
+            return []
+        add_translations(ydl, data, transcript, url, targets, not_before)
+        return [f"translation {language}" for language in translations_of(transcript)
+                if language not in before]
+
+
+def note_update(info: dict, added: list[str]) -> None:
+    """Record what --update-json added today (UPDATES_KEY); the same day and
+    version extend the last record."""
+    if not added:
+        return
+    today = dt.date.today().isoformat()
+    updates = info.setdefault(UPDATES_KEY, [])
+    if updates and (updates[-1].get("date"), updates[-1].get("yt2html")) == (today, __version__):
+        updates[-1]["added"] += [item for item in added if item not in updates[-1]["added"]]
+    else:
+        updates.append({"date": today, "yt2html": __version__, "added": list(added)})
+
+
+def video_added(result: dict) -> list[str]:
+    """The files --video downloaded today, for UPDATES_KEY."""
+    today = dt.date.today().isoformat()
+    added = ["video"] if (result.get("video") or {}).get("date") == today else []
+    added += [f"extra audio {e['audio']}" + (f" ({e['role']})" if e.get("role") else "")
+              for e in result.get("extra_audio") or [] if e.get("date") == today]
+    added += [f"subtitles {e['code']} ({e['kind']})"
+              for e in result.get("subtitles") or [] if e.get("date") == today]
+    return added
 
 
 PLAYLIST_ERROR = "this URL leads to a playlist or channel, not a single video"
@@ -4608,7 +4763,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
 
     Returns the page's path, or None if the video already has a page in the
     output folder and --overwrite was not given (with --load-json the page is
-    always made again). Everything that can fail for a reason the user should
+    always made again; with --update-json too when there are saved data,
+    which get what the options need and they lack, and are saved back). Everything that can fail for a reason the user should
     know (playlist URL, missing translation) is checked before anything is
     written. `outcome` (for --video) gets the page's path ("target"), and for
     a page made now also its data ("info") and "rebuild": a function that
@@ -4617,7 +4773,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     """
     outcome = {} if outcome is None else outcome
     output_dir = Path(args.output_dir)
-    skip_existing = not (args.overwrite or args.load_json)
+    skip_existing = not (args.overwrite or args.load_json or args.update_json)
 
     if skip_existing:
         # Checked before fetching, from the id in the URL: no request needed.
@@ -4629,19 +4785,35 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
 
     if not args.load_json and is_channel_url(source):
         raise ValueError(CHANNEL_ERROR)
-    if args.load_json:
-        path = saved_data_path(source, output_dir)
-        log(f"Reading {path}")
-        info = json.loads(path.read_text(encoding="utf-8"))
+    write_json = args.write_json
+    data_path = (saved_data_path(source, output_dir) if args.load_json else
+                 update_data_path(source, output_dir) if args.update_json else None)
+    updating = args.update_json and data_path is not None
+    if data_path:
+        log(f"Reading {data_path}")
+        info = json.loads(data_path.read_text(encoding="utf-8"))
     else:
+        if args.update_json:
+            found = existing_page(output_dir, video_id_from_url(source))
+            if found:
+                log(f"Skipped (page exists, no saved data to update): {found}. Use "
+                    "--overwrite --write-json to download everything again.")
+                outcome["target"] = found
+                return None
+            log(f"No saved data for {source}: downloading everything (as with --write-json).")
+            write_json = True
         log(f"Fetching {source}")
         info = fetch_info(source, args)
         info[PLAYLIST_KEY] = playlist
 
     if info.get("_type") in ("playlist", "multi_video"):
         raise ValueError(PLAYLIST_ERROR)
-    if args.load_json:
-        narrow_saved_comments(info, args)
+    if updating:
+        whole, targets = missing_for_update(info, args)
+        if whole or targets:
+            note_update(info, update_transcript(info, args, whole, targets))
+        elif args.video is None:
+            log("Nothing to add from YouTube; the page is made from the saved data.")
 
     saved = info.get(TRANSCRIPT_KEY) or {}
     known = set(translations_of(saved)) | set(saved.get("missing") or {})
@@ -4653,7 +4825,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     # An existing page (possibly renamed by the user) keeps its name when it
     # is made again; otherwise the name follows yt-dlp's video file name.
     found = existing_page(output_dir, info.get("id"))
-    if found and skip_existing:
+    if found and (skip_existing or (args.update_json and not updating)):
         # The URL did not show the id (unusual form), the fetched data does.
         log(f"Skipped (page exists): {found}")
         outcome["target"] = found
@@ -4667,20 +4839,30 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
             file_with_id(output_dir, info.get("id"), (".info.json",), "saved data files"))
 
     def save_json(verb: str = "Saved") -> None:
-        if args.write_json:
-            json_path = target.with_suffix(".info.json")
+        if write_json or updating:
+            # --update-json: back into the file it read, whatever its name
+            json_path = data_path if updating else target.with_suffix(".info.json")
             json_path.write_text(json.dumps(info, ensure_ascii=False, indent=1),
                                  encoding="utf-8")
             log(f"{verb} metadata: {json_path}")
 
-    save_json()
+    save_json("Updated" if updating else "Saved")
+
+    def shown(note: bool = False) -> dict:
+        """What the page shows: from saved data, the comments narrowed by
+        --no-comments or --max-comments (the data keep all of them)."""
+        if not data_path:
+            return info
+        view = dict(info)
+        narrow_saved_comments(view, args, note)
+        return view
 
     log("Downloading thumbnail...")
     thumbnail = fetch_thumbnail(info)
     if not thumbnail:
         log("  Thumbnail could not be downloaded.")
-    avatar_uris = fetch_images(avatar_urls(info, comments=not args.no_avatars), "avatars",
-                               resize=resize_avatar_url)
+    avatar_uris = fetch_images(avatar_urls(shown(note=True), comments=not args.no_avatars),
+                               "avatars", resize=resize_avatar_url)
     if args.no_cards:
         info.pop(CARDS_KEY, None)  # also cards kept in a --load-json file
     extra_images = fetch_images(extra_image_urls(info), "images (people, podcast, cards)")
@@ -4694,12 +4876,12 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         video_files = video_files_for(info, output_dir)
         video_size = (output_dir / video_files[0]).stat().st_size if video_files else None
         audio_files = audio_files_for(info, output_dir)
-        page = render_page(info, thumbnail, avatar_uris, archived,
+        page = render_page(shown(), thumbnail, avatar_uris, archived,
                            show_snapshot=not args.no_snapshot,
                            theme=args.theme,
                            transcript_spec=args.transcript,
                            extra_images=extra_images,
-                           no_avatars=args.no_avatars, from_json=args.load_json,
+                           no_avatars=args.no_avatars, from_json=bool(data_path),
                            video_files=video_files, video_size=video_size,
                            audio_files=audio_files)
         write_atomically(target, page)
@@ -4712,9 +4894,9 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     write_page()
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
-        f"{len(info.get('comments') or [])} comments)")
-    outcome.update(target=target, info=info, rebuild=rebuild)
-    if not args.load_json and comments_interrupted(info):
+        f"{len(shown().get('comments') or [])} comments)")
+    outcome.update(target=target, info=info, rebuild=rebuild, updating=updating)
+    if not data_path and comments_interrupted(info):
         log("  Comments were interrupted (Ctrl+C): the page has those fetched so far "
             "and counts as finished; use --overwrite for this video to get all of them.")
         raise CommentsInterrupted
@@ -5322,6 +5504,14 @@ def saved_data_path(source: str, output_dir: Path) -> Path:
     return found
 
 
+def update_source(source: str) -> str:
+    """An --update-json source: a saved data file stays a file (it may lie
+    outside the output folder), any other name with an id becomes its URL."""
+    if source.lower().endswith(".json") and Path(source).is_file():
+        return source
+    return source_from_page_name(source)
+
+
 def collect_sources(args: argparse.Namespace) -> list[str]:
     """Sources from the command line, then from each --batch-file in order,
     each video only once.
@@ -5336,7 +5526,10 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
     if args.load_json:
         args.sources = [path for source in args.sources for path in expand_pattern(source)]
     else:
-        args.sources = [source_from_page_name(source) for source in args.sources]
+        args.sources = [update_source(path) if args.update_json else source_from_page_name(path)
+                        for source in args.sources
+                        for path in (expand_pattern(source)
+                                     if args.update_json and "://" not in source else [source])]
 
     def new(source: str) -> bool:
         key = source if args.load_json else (video_id_from_url(source) or source)
@@ -5355,6 +5548,9 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
         listed = read_batch_file(path)
         if args.load_json:
             listed = [found for source in listed for found in expand_pattern(source)]
+        elif args.update_json:
+            listed = [update_source(found) for source in listed
+                      for found in (expand_pattern(source) if "://" not in source else [source])]
         else:
             listed = [source_from_page_name(source) for source in listed]
         args.batch_lines[path] = listed
@@ -5461,6 +5657,13 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="only list, for each video, the qualities a download can take "
                              "(with the parameter that chooses each, the codec and the size) "
                              "and the audio tracks it can add; no page is made")
+    parser.add_argument("--update-json", action="store_true",
+                        help="add to the saved data (.info.json next to the page, or the file "
+                             "given) what the options ask for and it lacks: the transcript, "
+                             "translations YouTube refused before, --video files; comments, "
+                             "counts and the copy's date stay; the data are saved back and the "
+                             "page made again. Without saved data: a full download, as with "
+                             "--write-json (a page that exists is skipped)")
     parser.add_argument("--load-json", action="store_true",
                         help="build pages only from saved .info.json files (or video ids "
                              "looked up in -o), without YouTube; existing pages are always "
@@ -5470,6 +5673,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         used = [name for name, on in (
             ("--overwrite", args.overwrite), ("--index", args.index),
             ("--index-only", args.index_only), ("--write-json", args.write_json),
+            ("--update-json", args.update_json),
             ("--no-comments", args.no_comments), ("--max-comments", args.max_comments is not None),
             ("--no-cards", args.no_cards), ("--no-avatars", args.no_avatars),
             ("--transcript", bool(args.transcript)),
@@ -5478,9 +5682,16 @@ def parse_args(argv=None) -> argparse.Namespace:
         if used:
             parser.error(f"--video-formats makes no page, so it cannot be used with "
                          f"{', '.join(used)}")
-    if args.write_json and args.load_json:
-        parser.error("--write-json and --load-json cannot be used together: --load-json "
-                     "only reads saved data (one of the JSON options at a time)")
+    json_options = [name for name, on in (("--write-json", args.write_json),
+                                          ("--update-json", args.update_json),
+                                          ("--load-json", args.load_json)) if on]
+    if len(json_options) > 1:
+        parser.error(f"{' and '.join(json_options)} cannot be used together (one JSON option "
+                     "at a time: --write-json saves with a download, --update-json adds what "
+                     "is missing, --load-json only reads)")
+    if args.update_json and args.overwrite:
+        parser.error("--overwrite downloads everything again and --update-json keeps the saved "
+                     "data; use one of them")
     if args.video is not None and args.load_json:
         parser.error("--video needs YouTube, so it cannot be used with --load-json; "
                      "give the URL instead")
@@ -5577,6 +5788,8 @@ def main(argv=None) -> int:
             if formats:
                 info["formats"] = formats   # the list the video was chosen from
             info[VIDEO_KEY] = result
+            if outcome.get("updating"):
+                note_update(info, video_added(result))
             outcome["rebuild"]()
 
     if args.video_formats:

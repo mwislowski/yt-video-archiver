@@ -128,13 +128,14 @@ class TestFetching:
         transcript = yt2html.fetch_transcript(ydl, english_info(), ["pl", "de"])
         assert set(transcript["translations"]) == {"de"}
         assert transcript["missing"] == {
-            "pl": "YouTube refused to send it (HTTP 429 Too Many Requests)"}
+            "pl": {"reason": "YouTube refused to send it (HTTP 429 Too Many Requests)",
+                   "refused": True, "date": dt.date.today().isoformat()}}
         assert sum("tlang=pl" in url for url in ydl.urls) == 1
         out = capsys.readouterr().out
         assert ("No translation into 'pl': YouTube refused to send it (HTTP 429 Too Many "
                 "Requests).\n[yt2html]   The page is made without it and counts as finished; "
-                "to add the translation later, make the page again with --overwrite. YouTube "
-                "refuses auto-translated captions to downloads at times (HTTP 429); try again "
+                "to add the translation later: --update-json (keeps the comments) or "
+                "--overwrite. YouTube refuses auto-translated captions to downloads at times (HTTP 429); try again "
                 "later.") in out
 
     def test_other_failure_of_a_translation(self, fake_ydl):
@@ -144,7 +145,8 @@ class TestFetching:
                     raise OSError("ERROR: [youtube] X: offline\nmore")
                 return super().urlopen(url)
         transcript = yt2html.fetch_transcript(Broken(), english_info(), ["pl"])
-        assert transcript["missing"] == {"pl": "the download failed (offline)"}
+        assert transcript["missing"]["pl"]["reason"] == "the download failed (offline)"
+        assert transcript["missing"]["pl"]["refused"] is True
 
     def test_waits_for_the_first_translation_only(self, fake_ydl, monkeypatch, capsys):
         monkeypatch.setattr(yt2html.time, "monotonic", lambda: 100.0)
@@ -190,7 +192,8 @@ class TestFetching:
         transcript = yt2html.fetch_transcript(fake_ydl(**kwargs), english_info(), [target, "de"])
         assert target not in transcript["translations"]
         assert ("de" in transcript["translations"]) is not bool(kwargs)   # the others still come
-        assert message in transcript["missing"][target]
+        assert message in transcript["missing"][target]["reason"]
+        assert transcript["missing"][target]["refused"] is False
         out = capsys.readouterr().out
         assert f"No translation into '{target}': " in out and "--overwrite" not in out
 
