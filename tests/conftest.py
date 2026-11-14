@@ -42,6 +42,7 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture(autouse=True)
 def offline(monkeypatch, request):
     """Images are never downloaded and time.sleep does not wait."""
+    monkeypatch.setattr(yt2html, "caption_cache", {})   # each test downloads afresh
     if "online" in request.keywords:
         return
     monkeypatch.setattr(yt2html, "fetch_image", lambda url: None)
@@ -308,7 +309,7 @@ def info() -> dict:
 
 @pytest.fixture
 def info_file(tmp_path, info):
-    """The info dict saved as an .info.json file, as --save-json writes it."""
+    """The info dict saved as an .info.json file, as --write-json writes it."""
     path = tmp_path / "test.info.json"
     path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     return path

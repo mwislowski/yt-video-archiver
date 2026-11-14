@@ -70,15 +70,15 @@ IMAGE_TIMEOUT = 20                  # seconds per image request
 IMAGE_RETRIES = 3
 
 # YouTube answers "HTTP 429 Too Many Requests" to auto-translated captions
-# requested less than about 60 s after the video data was fetched (only
-# translations; original captions are not affected). So the translation is
-# requested no sooner than this many seconds after fetching started, and on a
-# 429 it is retried after a further pause.
-TRANSLATION_WAIT = 65
-TRANSLATION_RETRY_WAITS = (60, 120)
-TRANSLATION_HINT = (" YouTube keeps refusing the translation; try again later, or with "
-                    "--cookies-from-browser firefox after opening the video with "
-                    "auto-translated subtitles in that browser.")
+# requested soon after the video data was fetched (about a minute in early
+# November 2026; since mid-November often for good, for yt-dlp alone too).
+# Original captions are not affected. So a translation is requested once,
+# a random 70-100 s after fetching started (a fixed delay looks automated),
+# and not retried: refused, it is left out with a note (subtitle files: the
+# run reports a failure, and the next run with --video tries again).
+TRANSLATION_WAIT = (70, 100)
+TRANSLATION_HINT = (" YouTube refuses auto-translated captions to downloads at times "
+                    "(HTTP 429); try again later.")
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -88,15 +88,15 @@ USER_AGENT = (
 YOUTUBE = "https://www.youtube.com"
 
 # --------------------------------------------------------------------------
-# Keys of yt2html's own data in the info dict (and in --save-json files),
+# Keys of yt2html's own data in the info dict (and in --write-json files),
 # next to yt-dlp's fields
 # --------------------------------------------------------------------------
 
-# Date of fetching, stored so that --from-json keeps the original snapshot date.
+# Date of fetching, stored so that --load-json keeps the original snapshot date.
 ARCHIVED_KEY = "yt2html_archived"
 
 # Key under which the timestamp lists are stored in the info dict (and in a
-# --save-json file). Not a yt-dlp field.
+# --write-json file). Not a yt-dlp field.
 MARKERS_KEY = "yt2html_marker_lists"
 
 # Key for extra description elements (e.g. the AI-generated video summary).
@@ -232,7 +232,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
             if args.transcript:
                 info[TRANSCRIPT_KEY] = fetch_transcript(
                     ydl, info, bilingual_languages(args.transcript),
-                    not_before=started + TRANSLATION_WAIT)
+                    not_before=started + translation_wait())
         return info
 
 
@@ -1026,7 +1026,7 @@ def parse_json3_captions(data: dict) -> list[dict]:
 
 
 class TranscriptError(Exception):
-    """The requested transcript or translation could not be downloaded (a
+    """The requested transcript could not be downloaded (a
     failure that may pass); nothing is saved, so the next run tries again."""
 
 
@@ -1035,10 +1035,78 @@ class TranslationUnavailable(Exception):
     by trying again): the page is made without it, with a note."""
 
 
-def download_cues(ydl: yt_dlp.YoutubeDL, url: str) -> list[dict]:
+class TranslationRefused(TranslationUnavailable):
+    """YouTube did not send the translation (HTTP 429 or another failure): the
+    page is made without it, with a note; --overwrite tries again later."""
+
+
+# Each caption track is downloaded once per run, as json3 (YouTube's own
+# format): the transcript and the subtitle files (made from it as SRT) share
+# it, so a translation is asked for once, and a refusal is not asked again.
+caption_cache: dict = {}
+
+
+def caption_key(url: str) -> tuple | str:
+    """What tells a caption track apart, whatever the address's signature
+    and format: (video, language, kind, name, translation language)."""
+    query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
+    if not query.get("lang"):
+        return with_query(url, fmt="json3")
+    return tuple(query.get(key, "") for key in ("v", "lang", "kind", "name", "tlang"))
+
+
+def translation_wait() -> float:
+    """Seconds after fetching the video data before asking for a translation."""
+    return random.uniform(*TRANSLATION_WAIT)
+
+
+def caption_data(url: str, fetch, not_before: float = 0.0) -> dict:
+    """A caption track's json3 data, downloaded with `fetch(url) -> bytes`
+    once per run ({} when YouTube sends nothing). The first download waits
+    until `not_before` (a time.monotonic() value); a failure is kept and
+    raised again for the same track."""
+    key = caption_key(url)
+    if key not in caption_cache:
+        wait(not_before - time.monotonic(), "YouTube refuses translations requested too soon")
+        try:
+            raw = fetch(with_query(url, fmt="json3")).decode("utf-8", errors="replace")
+            caption_cache[key] = json.loads(raw) if raw.strip() else {}
+        except Exception as error:
+            caption_cache[key] = error
+    found = caption_cache[key]
+    if isinstance(found, Exception):
+        raise found
+    return found
+
+
+def read_url(ydl: yt_dlp.YoutubeDL, url: str) -> bytes:
     with ydl.urlopen(url) as response:
-        raw = response.read().decode("utf-8", errors="replace")
-    return parse_json3_captions(json.loads(raw)) if raw.strip() else []
+        return response.read()
+
+
+def download_cues(ydl: yt_dlp.YoutubeDL, url: str, not_before: float = 0.0) -> list[dict]:
+    return parse_json3_captions(caption_data(url, lambda u: read_url(ydl, u), not_before))
+
+
+def srt_time(ms: int) -> str:
+    hours, rest = divmod(int(ms), 3_600_000)
+    minutes, rest = divmod(rest, 60_000)
+    seconds, ms = divmod(rest, 1000)
+    return f"{hours:02}:{minutes:02}:{seconds:02},{ms:03}"
+
+
+def json3_to_srt(data: dict) -> bytes:
+    """SRT made from json3 data as YouTube makes it: one cue per event with
+    text (line breaks kept, the ends trimmed), from tStartMs for dDurationMs."""
+    blocks = []
+    for event in data.get("events") or []:
+        text = "".join(seg.get("utf8", "") for seg in event.get("segs") or []).strip()
+        if not text:
+            continue
+        start = event.get("tStartMs") or 0
+        end = start + (event.get("dDurationMs") or 0)
+        blocks.append(f"{len(blocks) + 1}\n{srt_time(start)} --> {srt_time(end)}\n{text}\n")
+    return "\n".join(blocks).encode("utf-8")
 
 
 def with_query(url: str, **params: str) -> str:
@@ -1059,16 +1127,23 @@ def is_too_many_requests(error: Exception) -> bool:
     return getattr(error, "status", None) == 429 or "429" in str(error)
 
 
+def refusal_reason(error: Exception) -> str:
+    """Why a translation did not come, for "About this copy"."""
+    if is_too_many_requests(error):
+        return "YouTube refused to send it (HTTP 429 Too Many Requests)"
+    return f"the download failed ({failure_reason(error)})"
+
+
 def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
                       url: str, target: str, not_before: float = 0.0) -> dict:
     """YouTube's auto-translation of the transcript track into `target`.
 
     It is the same track with `tlang=<target>`, so the translated captions
     keep the original timing. YouTube refuses such requests (HTTP 429) for
-    about a minute after the video data was fetched, so this waits until
-    `not_before` (a time.monotonic() value) and retries after 429.
+    a while after the video data was fetched, so this waits until
+    `not_before` (a time.monotonic() value) and asks once.
     Raises TranslationUnavailable when YouTube has no such translation,
-    TranscriptError when the download fails.
+    TranslationRefused when it does not send it.
     """
     languages = info.get(TRANSLATIONS_KEY)
     if base_language(target) == base_language(transcript["language"]):
@@ -1080,18 +1155,10 @@ def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
                                      f"'{target}' (available: {available})")
     name = (languages or {}).get(target, target)
     log(f"Downloading transcript translation ({name}, auto-translated)...")
-    wait(not_before - time.monotonic(), "YouTube refuses translations requested too soon")
-    for attempt, pause in enumerate((0, *TRANSLATION_RETRY_WAITS)):
-        wait(pause, f"HTTP 429 from YouTube, retry {attempt} of {len(TRANSLATION_RETRY_WAITS)}")
-        try:
-            cues = download_cues(ydl, with_query(url, tlang=target))
-            break
-        except Exception as error:
-            if is_too_many_requests(error) and attempt < len(TRANSLATION_RETRY_WAITS):
-                continue
-            hint = TRANSLATION_HINT if is_too_many_requests(error) else ""
-            raise TranscriptError(f"could not download the translation into '{target}' "
-                                  f"({error}); nothing was saved.{hint}")
+    try:
+        cues = download_cues(ydl, with_query(url, tlang=target), not_before)
+    except Exception as error:
+        raise TranslationRefused(refusal_reason(error))
     if not cues:
         raise TranslationUnavailable(f"YouTube returned no translation into '{target}'")
     return {"language": target, "name": name, "cues": cues}
@@ -1115,10 +1182,11 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     YouTube's own transcript panel (get_transcript API) requires a token that
     only a real browser can produce, so the same text is taken from the
     caption track the panel shows, through the URLs yt-dlp has extracted.
-    What YouTube does not have (no captions, a translation it does not
-    offer) leaves the page without it, with the reason for "About this copy";
-    a failed download raises TranscriptError, so that nothing is saved and
-    the next run tries again (a page counts as finished once it is there).
+    What YouTube does not have or send (no captions, a translation it does
+    not offer or refuses) leaves the page without it, with the reason for
+    "About this copy"; a failed download of the transcript itself raises
+    TranscriptError, so that nothing is saved and the next run tries again
+    (a page counts as finished once it is there).
     """
     def unavailable(reason: str) -> None:
         info[TRANSCRIPT_MISSING_KEY] = reason
@@ -1151,6 +1219,10 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
                     ydl, info, transcript, fmt["url"], target, not_before)
             except TranslationUnavailable as reason:
                 log(f"No translation into '{target}': {reason}.")
+                if isinstance(reason, TranslationRefused):
+                    log("  The page is made without it and counts as finished; to add the "
+                        "translation later, make the page again with --overwrite."
+                        + TRANSLATION_HINT)
                 transcript.setdefault("missing", {})[target] = str(reason)
     return transcript
 
@@ -3712,7 +3784,7 @@ def list_formats(args: argparse.Namespace) -> int:
         if n:
             print()
         try:
-            if args.from_json:
+            if args.load_json:
                 info = json.loads(saved_data_path(source, Path(args.output_dir))
                                   .read_text(encoding="utf-8"))
             elif is_channel_url(source) or playlist_id_from_url(source):
@@ -3730,8 +3802,8 @@ def list_formats(args: argparse.Namespace) -> int:
             log(f"FAILED: {source}: {error}")
             failed += 1
             continue
-        print("\n".join(format_list(info, saved=args.from_json)), flush=True)
-        if not args.from_json and not info[DOWNLOAD_KEY]["deno"]:
+        print("\n".join(format_list(info, saved=args.load_json)), flush=True)
+        if not args.load_json and not info[DOWNLOAD_KEY]["deno"]:
             log("Note: no JavaScript runtime (Deno) found, so YouTube may have offered "
                 "more formats than listed.")
     return 1 if failed else 0
@@ -4505,7 +4577,7 @@ def comments_interrupted(info: dict) -> bool:
 
 
 def narrow_saved_comments(info: dict, args: argparse.Namespace) -> None:
-    """--no-comments and --max-comments with --from-json: they can only narrow
+    """--no-comments and --max-comments with --load-json: they can only narrow
     the saved comments, as if the download had used them. The first N are
     kept, in the saved (yt-dlp's) order, replies counted: the comments a
     download with that limit gets. The page then shows the result only."""
@@ -4522,7 +4594,7 @@ def narrow_saved_comments(info: dict, args: argparse.Namespace) -> None:
         info["comment_count"] = limit  # cut by the limit, not by Ctrl+C any more
     elif comment_status(info) in ("limited", "interrupted"):
         log(f"  The saved data has only {plural(len(comments), 'comment')}; download "
-            f"again (without --from-json) to get more.")
+            f"again (without --load-json) to get more.")
 
 
 PLAYLIST_ERROR = "this URL leads to a playlist or channel, not a single video"
@@ -4535,17 +4607,17 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     """Make the page for one URL (or one .info.json file).
 
     Returns the page's path, or None if the video already has a page in the
-    output folder and --overwrite was not given (with --from-json the page is
+    output folder and --overwrite was not given (with --load-json the page is
     always made again). Everything that can fail for a reason the user should
     know (playlist URL, missing translation) is checked before anything is
     written. `outcome` (for --video) gets the page's path ("target"), and for
     a page made now also its data ("info") and "rebuild": a function that
-    saves the data (with --save-json) and the page again from it, with the
+    saves the data (with --write-json) and the page again from it, with the
     images already downloaded.
     """
     outcome = {} if outcome is None else outcome
     output_dir = Path(args.output_dir)
-    skip_existing = not (args.overwrite or args.from_json)
+    skip_existing = not (args.overwrite or args.load_json)
 
     if skip_existing:
         # Checked before fetching, from the id in the URL: no request needed.
@@ -4555,9 +4627,9 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
             outcome["target"] = found
             return None
 
-    if not args.from_json and is_channel_url(source):
+    if not args.load_json and is_channel_url(source):
         raise ValueError(CHANNEL_ERROR)
-    if args.from_json:
+    if args.load_json:
         path = saved_data_path(source, output_dir)
         log(f"Reading {path}")
         info = json.loads(path.read_text(encoding="utf-8"))
@@ -4568,12 +4640,12 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
 
     if info.get("_type") in ("playlist", "multi_video"):
         raise ValueError(PLAYLIST_ERROR)
-    if args.from_json:
+    if args.load_json:
         narrow_saved_comments(info, args)
 
     saved = info.get(TRANSCRIPT_KEY) or {}
     known = set(translations_of(saved)) | set(saved.get("missing") or {})
-    for language in bilingual_languages(args.transcript) if args.from_json else []:
+    for language in bilingual_languages(args.transcript) if args.load_json else []:
         if language not in known:
             raise TranscriptError(f"no transcript translation into '{language}' "
                                   f"in the data; nothing was saved.")
@@ -4590,12 +4662,12 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     target = found or output_path(info, output_dir)
     if args.video is not None:
         # what the saved data said about the files next to the page, read
-        # before --save-json replaces it: --video keeps what still holds
+        # before --write-json replaces it: --video keeps what still holds
         outcome["previous"] = previous_video(
             file_with_id(output_dir, info.get("id"), (".info.json",), "saved data files"))
 
     def save_json(verb: str = "Saved") -> None:
-        if args.save_json and not args.from_json:
+        if args.write_json:
             json_path = target.with_suffix(".info.json")
             json_path.write_text(json.dumps(info, ensure_ascii=False, indent=1),
                                  encoding="utf-8")
@@ -4610,7 +4682,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     avatar_uris = fetch_images(avatar_urls(info, comments=not args.no_avatars), "avatars",
                                resize=resize_avatar_url)
     if args.no_cards:
-        info.pop(CARDS_KEY, None)  # also cards kept in a --from-json file
+        info.pop(CARDS_KEY, None)  # also cards kept in a --load-json file
     extra_images = fetch_images(extra_image_urls(info), "images (people, podcast, cards)")
 
     try:
@@ -4627,7 +4699,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
                            theme=args.theme,
                            transcript_spec=args.transcript,
                            extra_images=extra_images,
-                           no_avatars=args.no_avatars, from_json=args.from_json,
+                           no_avatars=args.no_avatars, from_json=args.load_json,
                            video_files=video_files, video_size=video_size,
                            audio_files=audio_files)
         write_atomically(target, page)
@@ -4642,7 +4714,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
         f"{len(info.get('comments') or [])} comments)")
     outcome.update(target=target, info=info, rebuild=rebuild)
-    if not args.from_json and comments_interrupted(info):
+    if not args.load_json and comments_interrupted(info):
         log("  Comments were interrupted (Ctrl+C): the page has those fetched so far "
             "and counts as finished; use --overwrite for this video to get all of them.")
         raise CommentsInterrupted
@@ -4706,22 +4778,11 @@ def limit_text(spec: dict) -> str:
     return f"{spec['height']}p" + (str(spec["fps"]) if spec["fps"] else "")
 
 
-def download_srt(url: str, args: argparse.Namespace, translated: bool,
-                 not_before: float) -> bytes:
-    """A subtitles file; a translation no sooner than `not_before` and again
-    after HTTP 429 (as for bilingual transcripts)."""
-    if not translated:
-        return fetch_subtitles(url, args)
-    wait(not_before - time.monotonic(), "YouTube refuses translations right after the video "
-                                        "is opened")
-    for attempt, pause in enumerate((0, *TRANSLATION_RETRY_WAITS)):
-        wait(pause, f"HTTP 429 from YouTube, retry {attempt} of {len(TRANSLATION_RETRY_WAITS)}")
-        try:
-            return fetch_subtitles(url, args)
-        except Exception as error:
-            if not (is_too_many_requests(error) and attempt < len(TRANSLATION_RETRY_WAITS)):
-                raise
-    return b""   # not reached
+def download_srt(url: str, args: argparse.Namespace, not_before: float = 0.0) -> bytes:
+    """A subtitles file as SRT, made from the track's json3 data (shared with
+    the transcript, so asked for once); a translation no sooner than
+    `not_before` (as for bilingual transcripts), once."""
+    return json3_to_srt(caption_data(url, lambda u: fetch_subtitles(u, args), not_before))
 
 
 def previous_video(path: Path | None) -> dict:
@@ -4792,7 +4853,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             "fails, update: uv tool upgrade yt-video-archiver")
     log("Video: fetching the current list of formats...")
     notes.add("requested")   # the next video waits a moment first
-    started = time.monotonic()
+    not_before = time.monotonic() + translation_wait()   # for translated subtitles
     fresh = fetch_formats(source, args)
     # the page's data (made now) knows the transcript's track and YouTube's
     # translation languages; the fresh list has neither
@@ -4885,8 +4946,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                 + (f"machine translation from {base_language(source[0])}"
                    if kind == "translated" else SUB_KIND_TEXT[kind]) + "), srt")
             try:
-                srt = download_srt(url, args, kind == "translated",
-                                   started + TRANSLATION_WAIT)
+                srt = download_srt(url, args, not_before if kind == "translated" else 0.0)
             except Exception as error:
                 log(f"Subtitles FAILED: {code}: {failure_reason(error)}"
                     + (TRANSLATION_HINT if is_too_many_requests(error) else ""))
@@ -4962,12 +5022,12 @@ SUB_KIND_TEXT = {"author": "by the author", "auto-generated": "auto-generated"}
 
 
 def timedtext_url(formats: list[dict]) -> str | None:
-    """A subtitles track's address on YouTube's subtitles service, as SRT.
-    Entries that are HLS playlists (yt-dlp lists some as automatic captions)
-    are left out."""
+    """A subtitles track's address on YouTube's subtitles service (fetched as
+    json3, and the SRT file made from it). Entries that are HLS playlists
+    (yt-dlp lists some as automatic captions) are left out."""
     for fmt in formats:
         if "/api/timedtext" in str(fmt.get("url") or ""):
-            return with_query(fmt["url"], fmt="srt")
+            return fmt["url"]
     return None
 
 
@@ -5038,7 +5098,7 @@ def subs_offer(info: dict, source: tuple | None) -> str:
 
 
 def fetch_subtitles(url: str, args: argparse.Namespace) -> bytes:
-    """One subtitles file from YouTube, through yt-dlp's connection (a bare
+    """One subtitles track (json3) from YouTube, through yt-dlp's connection (a bare
     request is refused as automated)."""
     opts = {"quiet": True}
     if args.cookies_from_browser:
@@ -5232,7 +5292,7 @@ def has_wildcards(text: str) -> bool:
 
 
 def expand_pattern(source: str) -> list[str]:
-    """--from-json paths with * or ?, expanded by the program (Windows shells
+    """--load-json paths with * or ?, expanded by the program (Windows shells
     pass them on as they are), sorted. Square brackets stay literal, since
     every page name ends with "[VIDEO_ID]". A pattern without matches is kept;
     saved_data_path() reports it."""
@@ -5243,7 +5303,7 @@ def expand_pattern(source: str) -> list[str]:
 
 
 def saved_data_path(source: str, output_dir: Path) -> Path:
-    """The .info.json file for a --from-json source: an existing file; else a
+    """The .info.json file for a --load-json source: an existing file; else a
     video id, or any file name with "[ID]" (a page, a video, saved data),
     looked up in the output folder as a ".info.json" file with "[ID]" in its
     name. Raises ValueError with what was looked for."""
@@ -5271,15 +5331,15 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
     paths) must match exactly. Raises ValueError if there is nothing to do
     or a batch file cannot be used.
     """
-    what = "file" if args.from_json else "URL"
+    what = "file" if args.load_json else "URL"
     seen = set()
-    if args.from_json:
+    if args.load_json:
         args.sources = [path for source in args.sources for path in expand_pattern(source)]
     else:
         args.sources = [source_from_page_name(source) for source in args.sources]
 
     def new(source: str) -> bool:
-        key = source if args.from_json else (video_id_from_url(source) or source)
+        key = source if args.load_json else (video_id_from_url(source) or source)
         if key in seen:
             return False
         seen.add(key)
@@ -5293,7 +5353,7 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
             f"given on the command line.")
     for path in args.batch_file:
         listed = read_batch_file(path)
-        if args.from_json:
+        if args.load_json:
             listed = [found for source in listed for found in expand_pattern(source)]
         else:
             listed = [source_from_page_name(source) for source in listed]
@@ -5319,22 +5379,22 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("sources", nargs="*", metavar="URL",
                         help="video or playlist URL(s) or id(s), or the name of a page or "
                              "index made by yt2html ('Title [ID].html'); a playlist archives "
-                             "all its videos. With --from-json: .info.json file(s), also as patterns "
+                             "all its videos. With --load-json: .info.json file(s), also as patterns "
                              "with * or ?, or video id(s) or page names, looked up in the "
                              "output folder (-o)")
     parser.add_argument("-a", "--batch-file", action="append", default=[], metavar="FILE",
-                        help="also read URLs (with --from-json: .info.json paths) from a "
+                        help="also read URLs (with --load-json: .info.json paths) from a "
                              "UTF-8 text file, one per line; blank lines and lines starting "
                              "with '#' are ignored. Can be given several times. A video "
                              "listed more than once is archived once")
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
                         help="folder for the generated pages (default: the current folder)")
     parser.add_argument("--no-comments", action="store_true",
-                        help="do not download comments (with --from-json: leave out the "
+                        help="do not download comments (with --load-json: leave out the "
                              "saved ones)")
     parser.add_argument("--max-comments", type=int, metavar="N",
                         help="limit the number of downloaded comments (replies included; "
-                             "with --from-json: keep only the first N saved ones)")
+                             "with --load-json: keep only the first N saved ones)")
     parser.add_argument("--no-cards", action="store_true",
                         help="leave out the author's info cards (nothing is read or "
                              "downloaded for them)")
@@ -5348,7 +5408,8 @@ def parse_args(argv=None) -> argparse.Namespace:
              "as continuous text; or versions, comma-separated, shown in this order: "
              "plain (continuous text), timestamps (one line per caption), bilingual:CODE "
              "(timestamps with YouTube's translation into that language in a second "
-             "column, e.g. bilingual:pl; left out with a note if YouTube has none). "
+             "column, e.g. bilingual:pl; left out with a note if YouTube has "
+             "none or refuses it). "
              "Write the address first: yt2html URL --transcript plain,bilingual:pl")
     parser.add_argument("--theme", choices=THEMES, default="auto", type=str.lower,
                         help="colour theme of the page: auto (default; follows the light/dark "
@@ -5364,8 +5425,10 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in; a profile after a colon: "
                              "\"firefox:PROFILE_FOLDER\" (its folder name or path)")
-    parser.add_argument("--save-json", action="store_true",
-                        help="also save the raw yt-dlp metadata next to the page")
+    parser.add_argument("--write-json", action="store_true",
+                        help="also save the data (yt-dlp's metadata and what yt2html adds) "
+                             "next to the page, as 'Title [ID].info.json', replacing an older "
+                             "file; --load-json builds pages from it later without YouTube")
     parser.add_argument("--overwrite", action="store_true",
                         help="make the page again even if the video already has one in the "
                              "output folder (recognised by '[VIDEO_ID].html' at the end of the "
@@ -5398,14 +5461,15 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="only list, for each video, the qualities a download can take "
                              "(with the parameter that chooses each, the codec and the size) "
                              "and the audio tracks it can add; no page is made")
-    parser.add_argument("--from-json", action="store_true",
-                        help="build pages from saved .info.json files instead of URLs "
-                             "(existing pages are always replaced)")
+    parser.add_argument("--load-json", action="store_true",
+                        help="build pages only from saved .info.json files (or video ids "
+                             "looked up in -o), without YouTube; existing pages are always "
+                             "replaced; a missing file fails that video, nothing is downloaded")
     args = parser.parse_args(argv)
     if args.video_formats:
         used = [name for name, on in (
             ("--overwrite", args.overwrite), ("--index", args.index),
-            ("--index-only", args.index_only), ("--save-json", args.save_json),
+            ("--index-only", args.index_only), ("--write-json", args.write_json),
             ("--no-comments", args.no_comments), ("--max-comments", args.max_comments is not None),
             ("--no-cards", args.no_cards), ("--no-avatars", args.no_avatars),
             ("--transcript", bool(args.transcript)),
@@ -5414,15 +5478,18 @@ def parse_args(argv=None) -> argparse.Namespace:
         if used:
             parser.error(f"--video-formats makes no page, so it cannot be used with "
                          f"{', '.join(used)}")
-    if args.video is not None and args.from_json:
-        parser.error("--video needs YouTube, so it cannot be used with --from-json; "
+    if args.write_json and args.load_json:
+        parser.error("--write-json and --load-json cannot be used together: --load-json "
+                     "only reads saved data (one of the JSON options at a time)")
+    if args.video is not None and args.load_json:
+        parser.error("--video needs YouTube, so it cannot be used with --load-json; "
                      "give the URL instead")
     if args.video is not None and args.index_only:
         parser.error("--index-only downloads nothing, so it cannot be used with --video")
-    if args.from_json and (args.index or args.index_only):
-        parser.error("--index and --index-only cannot be used with --from-json")
-    if args.from_json and args.cookies_from_browser:
-        log("Note: --cookies-from-browser has no effect with --from-json (nothing is downloaded).")
+    if args.load_json and (args.index or args.index_only):
+        parser.error("--index and --index-only cannot be used with --load-json")
+    if args.load_json and args.cookies_from_browser:
+        log("Note: --cookies-from-browser has no effect with --load-json (nothing is downloaded).")
     try:
         args.sources = collect_sources(args)
     except ValueError as error:
@@ -5442,6 +5509,7 @@ def main(argv=None) -> int:
     counts = {"saved": 0, "skipped": 0, "failed": 0}
     videos = {"downloaded": 0, "skipped": 0, "failed": 0}
     notes = set()   # --video: notes told once, and whether YouTube was asked
+    caption_cache.clear()   # caption tracks: once per run
 
     run = Run()
 
@@ -5520,13 +5588,13 @@ def main(argv=None) -> int:
         return 1 if write_indexes(args, run) else 0
     try:
         for source in args.sources:
-            if not args.from_json and playlist_id_from_url(source):
+            if not args.load_json and playlist_id_from_url(source):
                 playlists += 1
                 for url in attempt(source,
                                    lambda: playlist_videos(source, args, seen, run)) or []:
                     archive_video(url, playlist_context(run, source, url))
                 continue
-            video_id = None if args.from_json else video_id_from_url(source)
+            video_id = None if args.load_json else video_id_from_url(source)
             if video_id in seen:
                 log(f"Ignored duplicate: {source} (already in a playlist above)")
                 continue

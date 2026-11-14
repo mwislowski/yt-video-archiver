@@ -94,7 +94,7 @@ def test_playlist_context_is_the_playlist_used(tmp_path, monkeypatch, info):
     monkeypatch.setattr(yt2html, "fetch_playlist", lambda source, args: ("Test playlist", entries))
     monkeypatch.setattr(yt2html, "fetch_info",
                         lambda source, args: {**info, "id": yt2html.video_id_from_url(source)})
-    assert yt2html.main([playlist, "-o", str(tmp_path), "--save-json"]) == 0
+    assert yt2html.main([playlist, "-o", str(tmp_path), "--write-json"]) == 0
     saved = json.loads(next(tmp_path.glob("*TESTVIDEO02*.info.json")).read_text("utf-8"))
     assert saved[yt2html.PLAYLIST_KEY] == {"id": "PLtest1234567890", "title": "Test playlist",
                                            "position": 2, "count": 3}
@@ -127,6 +127,14 @@ def test_fetch_info_keeps_the_download_settings(monkeypatch, info):
                                              "deno": False}
     monkeypatch.setattr(yt2html.shutil, "which", lambda name: name == "deno" and "/bin/deno")
     assert yt2html.fetch_info("u", args)[yt2html.DOWNLOAD_KEY]["deno"] is True
+    # --transcript bilingual: translations a random 70-100 s after fetching started
+    asked = []
+    monkeypatch.setattr(yt2html, "fetch_transcript",
+                        lambda ydl, i, languages, not_before: asked.append((languages, not_before)))
+    monkeypatch.setattr(yt2html.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(yt2html.random, "uniform", lambda a, b: a + b)
+    yt2html.fetch_info("u", yt2html.parse_args(["u", "--transcript", "bilingual:pl"]))
+    assert asked == [(["pl"], 1170.0)]
 
 
 # --------------------------------------------------------------------------
@@ -194,13 +202,13 @@ def test_command_of_a_page_built_from_saved_data(capsys, tmp_path, info):
     info[yt2html.CARDS_KEY] = []
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
-    yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "p"), "--transcript",
+    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "p"), "--transcript",
                   "timestamps", "--theme", "dark", "--no-cards"])
     html = next((tmp_path / "p").glob("*.html")).read_text("utf-8")
     assert command(html) == ("yt2html TESTVIDEO01 --max-comments 50 --no-cards "
                              "--transcript timestamps --theme dark")
     assert row(html, "Page built").endswith(f"from the saved data, with yt2html {yt2html.__version__}")
-    assert "--from-json" not in html and str(tmp_path) not in html
+    assert "--load-json" not in html and str(tmp_path) not in html
 
 
 @pytest.mark.parametrize("spec, expected", [
@@ -515,7 +523,7 @@ def rebuild(capsys, tmp_path, info, *options):
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
     out_dir = tmp_path / f"p{len(list(tmp_path.glob('p*')))}"
-    code = yt2html.main(["--from-json", str(saved), "-o", str(out_dir), *options])
+    code = yt2html.main(["--load-json", str(saved), "-o", str(out_dir), *options])
     out = capsys.readouterr().out
     return code, out, next(out_dir.glob("*.html")).read_text("utf-8")
 
@@ -563,7 +571,7 @@ def test_no_comments_leaves_out_the_saved_ones(capsys, tmp_path, info):
 
 def test_cookies_have_no_effect_when_building(capsys, tmp_path, info):
     _, out, _ = rebuild(capsys, tmp_path, info, "--cookies-from-browser", "firefox")
-    assert "Note: --cookies-from-browser has no effect with --from-json" in out
+    assert "Note: --cookies-from-browser has no effect with --load-json" in out
 
 
 
@@ -1084,7 +1092,7 @@ def test_video_file_row_with_a_video_next_to_the_page(capsys, tmp_path, info):
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
     (tmp_path / "Renamed [TESTVIDEO01].mp4").write_bytes(b"x" * 2_500_000)
-    assert yt2html.main(["--from-json", str(saved), "-o", str(tmp_path)]) == 0
+    assert yt2html.main(["--load-json", str(saved), "-o", str(tmp_path)]) == 0
     html = next(tmp_path.glob("*.html")).read_text("utf-8")
     assert row(html, "Video file").startswith(
         "next to the page: video Renamed [TESTVIDEO01].mp4, 2 MB; Deno at download:")
@@ -1181,12 +1189,12 @@ def test_video_formats_option_prints_and_makes_no_page(capsys, tmp_path, info):
     info["formats"] = video_formats_example()
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
-    code = yt2html.main(["--video-formats", "--from-json", str(saved), str(saved),
+    code = yt2html.main(["--video-formats", "--load-json", str(saved), str(saved),
                          "-o", str(tmp_path / "out")])
     out = capsys.readouterr().out
     assert code == 0 and not (tmp_path / "out").exists()
     assert out.count("  1080p, 50 fps  (1080p50)  h264  ~609 MB  (default)") == 1  # one source
-    code = yt2html.main(["--video-formats", "--from-json", str(saved), str(saved.with_name("y.json")),
+    code = yt2html.main(["--video-formats", "--load-json", str(saved), str(saved.with_name("y.json")),
                          "-o", str(tmp_path / "out")])
     out = capsys.readouterr().out
     assert code == 1 and "subtitles: none\n\n[yt2html] FAILED: " in out   # a blank line between videos
@@ -1198,7 +1206,7 @@ def test_video_formats_option_excludes_page_options(capsys):
         yt2html.main(["u", "--video-formats", "--theme", "dark", "--no-cards"])
     assert ("--video-formats makes no page, so it cannot be used with --no-cards, --theme"
             in capsys.readouterr().err)
-    for option in (["--overwrite"], ["--index"], ["--index-only"], ["--save-json"],
+    for option in (["--overwrite"], ["--index"], ["--index-only"], ["--write-json"],
                    ["--no-comments"], ["--max-comments", "5"], ["--no-avatars"],
                    ["--transcript", "timestamps"], ["--no-snapshot"]):
         with pytest.raises(SystemExit):

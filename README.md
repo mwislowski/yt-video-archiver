@@ -105,11 +105,8 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Also download the video, after its page (an mp4 that the page plays; needs ffmpeg) | `yt2html "URL" --video` |
 | The same, at most 720p (or 720p at most 30 frames per second) | `yt2html "URL" --video 720p` / `--video 720p30` |
 | List the qualities a video download can take and the audio tracks it can add, without making a page | `yt2html "URL" --video-formats` |
-| Also keep the raw data | `yt2html "URL" --save-json` |
-| Rebuild a page from saved data (no new data, comments or video from YouTube; the thumbnail and avatars are downloaded again from their addresses in the data; keeps the snapshot date; options such as `--transcript` shape the page as with a download) | `yt2html --from-json "Title [id].info.json" --transcript` |
-| The same, by the video id: the saved data is looked up in the folder given with `-o` (default: the current folder) | `yt2html --from-json VIDEO_ID -o "D:\Videos"` |
-| Rebuild several pages; `*` and `?` work also in PowerShell and cmd, square brackets are part of the name | `yt2html --from-json "D:\Videos\*.info.json" -o "D:\Videos"` |
-| Rebuild with fewer comments (only fewer: more need a new download) | `yt2html --from-json VIDEO_ID --max-comments 100` or `--no-comments` |
+| Also save the data the page is made from, to make it again later without YouTube (see *Saved data*) | `yt2html "URL" --write-json` |
+| Make a page again from saved data only, offline (see *Saved data*) | `yt2html --load-json VIDEO_ID -o "D:\Videos" --transcript` |
 | Versions of the program and yt-dlp | `yt2html --version` |
 | All options | `yt2html --help` |
 
@@ -125,7 +122,29 @@ Without `--transcript` the page has no transcript (and none is downloaded). `--t
 | `timestamps` | one line per caption, each with its timestamp |
 | `bilingual:CODE` | like `timestamps`, with YouTube's machine translation into that language (e.g. `bilingual:pl`) in a second column |
 
-Examples: `--transcript`, `--transcript plain,timestamps`, `--transcript plain,bilingual:pl,bilingual:de`. Each version may appear only once; a code that is no language code (`bilingual:jp`) stops the program before anything is downloaded. What YouTube does not have is left out with a note, and the page is made: a translation it does not offer (the message lists the languages it does; *About this copy* says which was left out), or a video without captions at all. A download that fails (e.g. YouTube keeps refusing a translation) saves nothing for that video, so the next run tries again. With `--from-json` the versions are made from the saved data: the order may change, `timestamps` works for any saved transcript, a translation needs to be in the data.
+Examples: `--transcript`, `--transcript plain,timestamps`, `--transcript plain,bilingual:pl,bilingual:de`. Each version may appear only once; a code that is no language code (`bilingual:jp`) stops the program before anything is downloaded. With `--load-json` the versions are made from the saved data: the order may change, `timestamps` works for any saved transcript, a translation needs to be in the data (or noted there as left out).
+
+What YouTube does not have or does not send is left out with a note, the page is made and counts as finished (*About this copy* says what was left out and why, in its *Transcript* row):
+
+- a video without captions at all;
+- a translation YouTube does not offer (the message lists the languages it does);
+- a translation YouTube refuses to send (`HTTP 429`, which in November 2026 happens often) or whose download fails. Each translation is asked for once, a random 70 to 100 seconds after the video's data was fetched (YouTube refuses translations asked for sooner; the wait is shown on screen), and not again in that run. To add it later, make the page again with `--overwrite`.
+
+Only when the transcript itself cannot be downloaded is nothing saved for that video, so the next run tries again.
+
+### Saved data
+
+`--write-json` also saves, next to the page, the data the page is made from: yt-dlp's data of the video (description, counts, formats, comments, …) together with what yt2html adds (the transcript and its translations, the chapters and other timestamp lists, info cards, the extras of the video page, what `--video` downloaded). The file is `Title [id].info.json`; an older file of the same name is replaced. With it the page can be made again later without YouTube, e.g. for a newer look of the page. Otherwise the download is the same as without the option.
+
+`--load-json` makes pages only from such files and asks YouTube for nothing:
+
+- **What it takes:** the file (`yt2html --load-json "Title [id].info.json"`), several files with `*` and `?` (`"D:\Videos\*.info.json"`; this works also in PowerShell and cmd, and square brackets are part of the name), or the video id, also as the name of the page or of the video (`yt2html --load-json VIDEO_ID -o "D:\Videos"`): the file is then looked up by the id in square brackets in the folder given with `-o` (default: the current folder). Pages are saved in that folder, also when the file lies elsewhere.
+- **What comes from the file:** everything except images. The thumbnail and avatars are downloaded again from their addresses in the data (YouTube may have removed them by then; missing avatars become letters). The snapshot date stays the day of the download.
+- **Options:** those that shape the page work as with a download (the `--transcript` versions, `--theme`, `--no-cards`, `--no-avatars`, `--no-snapshot`, fewer comments with `--max-comments N` or `--no-comments`). What is not in the data cannot be added: more comments, a translation that was not downloaded (a `bilingual:CODE` neither in the data nor noted there as left out fails that video), the video (`--video` cannot be used with `--load-json`).
+- **Existing pages are always replaced**, without `--overwrite`; the page keeps its current name.
+- **A missing file:** that video fails (`FAILED: …`, the run ends with exit code 1); nothing is downloaded instead.
+
+Only one of the two at a time: `--write-json` with `--load-json` is an error (`--load-json` only reads and leaves the file as it is).
 
 ### Archiving many videos
 
@@ -141,7 +160,7 @@ https://youtu.be/qyqCTMirNWg
 
 **Playlists:** a playlist URL (`https://www.youtube.com/playlist?list=...`), in the command or in a list file, archives all videos of the playlist in its order, e.g. all episodes of a podcast. A link to a video opened from a playlist (`watch?v=...&list=...`) archives only that video. Channel URLs (`@name`) are not supported: open the channel's playlist and use its URL.
 
-**Videos that already have a page are skipped**, so running the same command again only archives what is missing, and an interrupted run continues where it stopped. A page is any `.html` file with the video id in square brackets in its name, e.g. `[Z8lf5oWKfj0]`: you may rename pages freely (`042 My title [Z8lf5oWKfj0] (copy).html`) as long as that part stays. If several files fit, the first by name is used and a note says so. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--from-json` always replaces the page.
+**Videos that already have a page are skipped**, so running the same command again only archives what is missing, and an interrupted run continues where it stopped. A page is any `.html` file with the video id in square brackets in its name, e.g. `[Z8lf5oWKfj0]`: you may rename pages freely (`042 My title [Z8lf5oWKfj0] (copy).html`) as long as that part stays. If several files fit, the first by name is used and a note says so. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--load-json` always replaces the page.
 
 ### Index page
 
@@ -196,14 +215,14 @@ Good to know about the index:
 Example: `yt2html "URL" --video 720p30,audio:pl,sub:pl,again`. Parameters in any case of letters; above 1080p is not offered (the file is meant to play everywhere). Each item once: the same one twice, or a language both alone and with a role (`audio:pl,audio:pl.dubbed`), is an error, as is a code that is no language code (`audio:jp`), all before anything is downloaded; two roles of one language are two tracks (`audio:pl.dubbed,audio:pl.descriptive`). The codes are those of the *languages* table in *Video formats* and of `--video-formats`; a track or subtitles the video does not have are reported (`"audio:de-AT" not available`, `"audio:en" is already in the video`, `"audio:de-DE" gives the same track as "audio:de"; taken once`) together with what can be taken, and the rest goes on.
 
 - **Extra audio tracks:** the page's player can play them instead of the video's own sound (see below); they also work on their own or in a player such as VLC (*Audio* › *Audio Track* › *Add audio file…*).
-- **Subtitles:** YouTube's own SRT files. A translation may wait up to a minute (YouTube refuses translations right after a video is opened) and is tried again after a refusal. Subtitles need no ffmpeg.
+- **Subtitles:** SRT files with the same text and timing as YouTube's own SRT, made from the track the transcript uses as well (each track is downloaded once per run, so `--transcript bilingual:pl` with `sub:pl` normally asks YouTube for the Polish translation once, and a refusal is not asked again). A translation is asked for once, a random 70 to 100 seconds after the list of formats was fetched (YouTube refuses translations asked for sooner); refused (`HTTP 429`), it is reported as failed and the next run with the same `--video` tries again. Subtitles need no ffmpeg.
 
 The order of work: the page first, then a fresh list of formats (the addresses in older data expire) and the download, then the page once more, from the data already in memory, so that its *Video file* row says what was downloaded (`downloaded 12.11.2026: 1080p, 30 fps av1 + en-US aac, mp4, 293 MB`) and *Video formats* marks it in yellow.
 
 - **Interruptions:** the page is ready before the video, so an error or `Ctrl+C` during the download leaves it as it is, and running the same command again resumes the download. `Ctrl+C` while the comments are downloading stops the whole run after the page, as without `--video`; run the same command again to get the video (the page is skipped, only the video is downloaded), or limit the comments beforehand with `--max-comments`.
-- **Existing files:** a file already next to the page is kept (`again` downloads it again): the video by the video's id in square brackets in its name, a track or subtitles by the id and their ending (`.pl.dubbed.m4a`, `.pl.translated.srt`), so renamed files count too (`01 Title [id].pl.dubbed.m4a`). For a page that already exists only the files are downloaded, and the page finds the video the next time it is opened. A page made again (`--overwrite --video audio:pl`) describes the files that are there too: with what the saved data (`--save-json`) of their download say about the same file (the day, the variant), else only that they lie next to the page.
+- **Existing files:** a file already next to the page is kept (`again` downloads it again): the video by the video's id in square brackets in its name, a track or subtitles by the id and their ending (`.pl.dubbed.m4a`, `.pl.translated.srt`), so renamed files count too (`01 Title [id].pl.dubbed.m4a`). For a page that already exists only the files are downloaded, and the page finds the video the next time it is opened. A page made again (`--overwrite --video audio:pl`) describes the files that are there too: with what the saved data (`--write-json`) of their download say about the same file (the day, the variant), else only that they lie next to the page.
 - **Playlists:** each video goes through the whole cycle, with a pause of 5–15 seconds before the next video that needed a download.
-- **Limits:** `--video` cannot be used with `--from-json` (it needs YouTube) or `--index-only`. Without ffmpeg the page is made and the video skipped, with the command to install ffmpeg.
+- **Limits:** `--video` cannot be used with `--load-json` (it needs YouTube) or `--index-only`. Without ffmpeg the page is made and the video skipped, with the command to install ffmpeg.
 
 ### Watching a downloaded video on the page
 
@@ -213,7 +232,7 @@ If the downloaded video lies **next to the page**, the page shows a turquoise **
 2. the page's own name (`Title [id].mp4` next to `Title [id].html`; also after renaming both the same way);
 3. yt-dlp's default name `Title [id]` (when only the page was renamed).
 
-So a video downloaded later works without making the page again if it has the page's name or yt-dlp's default name; under any other name, make the page again (`--from-json` or `--overwrite`) and it is found by its id. The same after renaming a video. Formats: `.mp4`, `.webm`, `.m4v`, `.mkv`.
+So a video downloaded later works without making the page again if it has the page's name or yt-dlp's default name; under any other name, make the page again (`--load-json` or `--overwrite`) and it is found by its id. The same after renaming a video. Formats: `.mp4`, `.webm`, `.m4v`, `.mkv`.
 
 **▶ Play** opens a player pinned on the left, so you can watch (or listen to a podcast) while scrolling the description, chapters, transcript and comments on the right; the thumbnail is hidden meanwhile. **✕ Close** pauses the video and restores the page; *Play* continues where you stopped.
 
@@ -255,7 +274,7 @@ Above *About this copy*, *Video formats* is folded to a grey line with a short s
 
 When YouTube sent no video or audio formats at all (it happens for a while, e.g. after several requests for the same video in a row; only the small preview images for the seek bar come), the section says so in one line; making the page again later usually brings them. The *Video file* row of *About this copy* says what `--video` downloaded, by day (`downloaded 12.11.2026: 1080p, 30 fps av1 + en-US aac, mp4, 293 MB; extra audio m4a: pl (dubbed), 69 MB`), then the files it only found next to the page, without a day (`next to the page: video 01 Title [id].mp4, 293 MB; subtitles srt: pl (translated)`), else `not downloaded`, and notes how the list came about (with or without Deno, signed in or not).
 
-`--video-formats` prints the same choice on the screen without making a page (only the video's data is fetched, no comments; with `--from-json` from saved data, offline). It cannot be combined with the options that shape a page.
+`--video-formats` prints the same choice on the screen without making a page (only the video's data is fetched, no comments; with `--load-json` from saved data, offline). It cannot be combined with the options that shape a page.
 
 ```
 Give Me 1 Hour, I Will Make Artificial Intelligence Click Forever [fCEvvkAbJOs]
@@ -283,17 +302,17 @@ At the bottom of every page, *About this copy* is folded to a single grey line w
 - Comment times are as YouTube showed them on the download day (`3 years ago`); hover over one to see the estimated date. Subscriber counts are rounded by YouTube (`1.23M`); views and likes are exact.
 - YouTube's automatic captions mark a change of speaker with `>>`; the page shows a grey mark instead (a grey ` | ` in the continuous transcript) and leaves it out in the lines under the video.
 - The transcript is the one YouTube's *Show transcript* opens: the captions of the video's original language, also for auto-dubbed videos. The AI summary is in the language of the video.
-- `bilingual:CODE` uses YouTube's machine translation, so its quality varies. YouTube refuses translations requested within about a minute of opening the video, so the program may wait up to a minute (shown on screen) and retries after `HTTP 429`.
+- `bilingual:CODE` uses YouTube's machine translation, so its quality varies. YouTube refuses translations asked for soon after the video's data was fetched, so the program waits 70 to 100 seconds first (shown on screen); a translation refused even then is left out with a note (see *Transcript versions*).
 - A chapter list in a video description becomes real chapters on YouTube only if it starts at `0:00`, has at least three timestamps in ascending order and each chapter is at least 10 seconds long.
 - Typical page size: a few hundred KB up to a few MB for thousands of comments.
-- Keep the pages themselves, not only the saved data: a page holds its images, while `--from-json` downloads the thumbnail and avatars again, and YouTube may remove them over the years (missing avatars become letters). Rebuilding from saved data is for a newer look of the page; the extra audio switches and the *Video file* row come back only if the data was saved (`--save-json`) in the same run as `--video` (a page made again with `--overwrite --video …` gets them anyway, from the files next to it).
+- Keep the pages themselves, not only the saved data: a page holds its images, while `--load-json` downloads the thumbnail and avatars again, and YouTube may remove them over the years (missing avatars become letters). Rebuilding from saved data is for a newer look of the page; the extra audio switches and the *Video file* row come back only if the data was saved (`--write-json`) in the same run as `--video` (a page made again with `--overwrite --video …` gets them anyway, from the files next to it).
 - Browser cookies on Windows: Firefox works reliably; Chrome and other Chromium-based browsers encrypt their cookies in a way yt-dlp usually cannot read there.
 
 ## Troubleshooting
 
 - **Fetching fails after it used to work:** YouTube changes often and yt-dlp follows within days; update first with `uv tool upgrade yt-video-archiver`. `yt2html --version` shows the yt-dlp version in use.
 - **`Sign in to confirm you're not a bot`, age-restricted video:** use `--cookies firefox`. Firefox works best on Windows; Chrome and Edge encrypt their cookies in a way yt-dlp often cannot read.
-- **A translation keeps failing with `HTTP 429`:** try again later, or open the video in Firefox with auto-translated subtitles on and use `--cookies firefox`.
+- **A translation fails with `HTTP 429`:** YouTube refuses auto-translated captions to downloads at times (in November 2026 for days, also to yt-dlp alone, with cookies and from other networks). The page is made without it; try again later: `--overwrite` for the bilingual transcript, the same `--video` for `sub:` subtitles.
 - **`No transcript: ...` although YouTube shows *Show transcript*:** look for a yt-dlp warning about subtitles and a missing PO token; updating yt-dlp usually helps.
 - **`Could not read them ...; using yt-dlp chapters instead`:** the page is made, but without the AI summary, People mentioned and similar sections, and with chapters under a plain `Chapters` heading (*About this copy* says so in its *Video page* row). Usually temporary; run again with `--overwrite`.
 - **`Chapter source unclear: ...`:** the chapters are on the page, only without the grey origin note. Please report the video: YouTube has probably changed something.

@@ -123,7 +123,7 @@ def test_video_option_order(capsys):
     # with parameters the order is free; "=" works too
     assert yt2html.parse_args(["--video", "720p30", URL]).video["fps"] == 30
     assert yt2html.parse_args(["--video=720p", URL]).video["height"] == 720
-    assert yt2html.parse_args(["--video", "--save-json", URL]).video["text"] == ""
+    assert yt2html.parse_args(["--video", "--write-json", URL]).video["text"] == ""
     assert yt2html.parse_args([URL]).video is None
     # the one mistake: the address taken as the parameters
     with pytest.raises(SystemExit):
@@ -132,7 +132,7 @@ def test_video_option_order(capsys):
 
 
 @pytest.mark.parametrize("options, message", [
-    (["--from-json"], "--video needs YouTube, so it cannot be used with --from-json"),
+    (["--load-json"], "--video needs YouTube, so it cannot be used with --load-json"),
     (["--index-only"], "--index-only downloads nothing, so it cannot be used with --video"),
     (["--video-formats"], "--video-formats makes no page, so it cannot be used with --video"),
 ])
@@ -147,7 +147,7 @@ def test_video_refuses_options(capsys, options, message):
 def test_video_after_the_page(tmp_path, youtube, capsys):
     # the fresh list (one more format than the page had) replaces the old one
     youtube["fresh"] = FORMATS + [vfmt("135", 480, "avc1.4d401e", 50 * MB)]
-    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "--save-json"]) == 0
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "--write-json"]) == 0
     html_path = page(tmp_path)
     video = html_path.with_suffix(".mp4")
     assert video.read_bytes() == b"x" * 1234           # named like the page
@@ -305,7 +305,7 @@ def test_video_title_with_percent_and_unknown_language(tmp_path, youtube, monkey
                                                                     "title": "100% real"})
     youtube["fresh"] = [vfmt("399", 1080, "av01.0.08M.08", 300 * MB),
                         afmt("140", "mp4a.40.2", 9 * MB, language=None, preference=None)]
-    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "--save-json"]) == 0
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "--write-json"]) == 0
     html_path = page(tmp_path)
     assert html_path.name.startswith("100% real") and html_path.with_suffix(".mp4").exists()
     saved = json.loads(html_path.with_suffix(".info.json").read_text("utf-8"))
@@ -401,7 +401,7 @@ def test_audio_and_sub_items_checked_at_once(value, message):
 def test_audio_with_the_video(tmp_path, youtube, capsys):
     youtube["fresh"] = DUBS
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:en",
-                         "--save-json"]) == 0
+                         "--write-json"]) == 0
     html_path = page(tmp_path)
     track = html_path.with_name(html_path.stem + ".pl.dubbed.m4a")
     assert track.exists() and html_path.with_suffix(".mp4").exists()
@@ -585,13 +585,13 @@ def test_sub_parameters():
 
 
 @pytest.mark.parametrize("text, expected", [
-    ("sub:en", ("en", "author", TT + "en&fmt=srt")),          # the author's first, as SRT
-    ("sub:en.auto-generated", ("en", "auto-generated", TT + "en&kind=asr&fmt=srt")),
-    ("sub:pt", ("pt-BR", "author", TT + "pt-BR&fmt=srt")),     # the language finds the region
-    ("sub:de", ("de", "auto-generated", TT + "de&kind=asr&fmt=srt")),   # no author's: automatic
+    ("sub:en", ("en", "author", TT + "en&fmt=json3")),          # the author's first, as SRT
+    ("sub:en.auto-generated", ("en", "auto-generated", TT + "en&kind=asr&fmt=json3")),
+    ("sub:pt", ("pt-BR", "author", TT + "pt-BR&fmt=json3")),     # the language finds the region
+    ("sub:de", ("de", "auto-generated", TT + "de&kind=asr&fmt=json3")),   # no author's: automatic
     # nothing in Polish: the transcript's track (here the automatic English), translated
-    ("sub:pl", ("pl", "translated", TT + "en&kind=asr&fmt=srt&tlang=pl")),
-    ("sub:fr.translated", ("fr", "translated", TT + "en&kind=asr&fmt=srt&tlang=fr")),
+    ("sub:pl", ("pl", "translated", TT + "en&kind=asr&fmt=json3&tlang=pl")),
+    ("sub:fr.translated", ("fr", "translated", TT + "en&kind=asr&fmt=json3&tlang=fr")),
     ("sub:de.author", '"sub:de.author" not available'),
     ("sub:pl.auto-generated", '"sub:pl.auto-generated" not available'),   # yt-dlp's "pl" is a translation
     ("sub:en.translated", '"sub:en.translated" not available'),   # the transcript's own language
@@ -600,7 +600,7 @@ def test_sub_parameters():
 ])
 def test_sub_resolution(text, expected):
     found, messages, source = yt2html.resolve_subs(sub_data(), yt2html.video_spec(text)["subs"])
-    assert source == ("en", TT + "en&kind=asr&fmt=srt")
+    assert source == ("en", TT + "en&kind=asr&fmt=json3")
     assert (found, messages) == (([expected], []) if isinstance(expected, tuple) else ([], [expected]))
 
 
@@ -622,9 +622,15 @@ def test_sub_details():
         "by the author: en, pt-BR; auto-generated: de, en; other languages as a machine translation")
 
 
+def json3(text: str) -> bytes:
+    """One cue in YouTube's json3 format (what a subtitles track is fetched as)."""
+    return json.dumps({"events": [{"tStartMs": 1000, "dDurationMs": 1000,
+                                   "segs": [{"utf8": text}]}]}).encode()
+
+
 @pytest.fixture
 def subtitles(youtube, monkeypatch):
-    """Fresh data with subtitles; YouTube's SRT files faked."""
+    """Fresh data with subtitles; YouTube's tracks (json3) faked."""
     youtube["fresh"] = FORMATS
     youtube["subs"] = []
     fetch = yt2html.fetch_formats
@@ -636,7 +642,7 @@ def subtitles(youtube, monkeypatch):
         youtube["subs"].append(url)
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
         language = query.get("tlang", query["lang"])[0]     # a translation: its target
-        answer = youtube.get("sub_answers", {}).get(language, [b"1\n00:00:01,000 --> 00:00:02,000\nHello\n"])
+        answer = youtube.get("sub_answers", {}).get(language, [json3("Hello")])
         reply = answer.pop(0) if len(answer) > 1 else answer[0]
         if isinstance(reply, Exception):
             raise reply
@@ -655,12 +661,12 @@ class TooMany(Exception):
 
 def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en,sub:pl,sub:fi",
-                         "--save-json"]) == 0
+                         "--write-json"]) == 0
     html_path = page(tmp_path)
     en = html_path.with_name(html_path.stem + ".en.author.srt")
     pl = html_path.with_name(html_path.stem + ".pl.translated.srt")
-    assert en.read_bytes().startswith(b"1\n00:00:01,000") and pl.exists()
-    assert subtitles["subs"] == [TT + "en&fmt=srt", TT + "en&kind=asr&fmt=srt&tlang=pl"]
+    assert en.read_bytes() == b"1\n00:00:01,000 --> 00:00:02,000\nHello\n" and pl.exists()
+    assert subtitles["subs"] == [TT + "en&fmt=json3", TT + "en&kind=asr&fmt=json3&tlang=pl"]
     out = capsys.readouterr().out
     # "fi": not in YouTube's list of translation languages (from the page's data)
     assert ('[yt2html] Subtitles: "sub:fi" not available.\n'
@@ -670,7 +676,7 @@ def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
     assert "[yt2html] Subtitles: en (by the author), srt" in out
     assert "[yt2html] Subtitles: pl (machine translation from en), srt" in out
     # only the translation waits (the author's English does not)
-    assert out.count("(YouTube refuses translations right after the video is opened)") == 1
+    assert out.count("(YouTube refuses translations requested too soon)") == 1
     assert f"[yt2html] Saved subtitles: {pl} (<1 MB)" in out
     html = html_path.read_text("utf-8")
     assert row(html, "Video file").startswith(f"downloaded {TODAY}: 1080p, 25 fps av1 + en aac, mp4, ")
@@ -685,15 +691,17 @@ def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
          "date": dt.date.today().isoformat(), "source": "en"}]
 
 
-def test_subtitles_retry_empty_and_failure(tmp_path, subtitles, capsys):
+def test_subtitles_empty_and_failure(tmp_path, subtitles, capsys):
     subtitles["sub_answers"] = {"en": [b"   "],                       # empty: not saved
-                                "pl": [TooMany("HTTP Error 429"), b"1\n00:00:01,000 --> x\nCzesc\n"],
+                                "pl": [json3("Czesc")],
+                                "fr": [TooMany("HTTP Error 429"), json3("Salut")],
                                 "de": [Exception("HTTP Error 404: Not Found")]}
-    code = yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en,sub:pl,sub:de"])
+    code = yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en,sub:pl,sub:fr,sub:de"])
     out = capsys.readouterr().out
-    assert code == 1                                              # one file failed
+    assert code == 1                                              # files failed
     assert "YouTube returned no subtitles for en; nothing saved." in out
-    assert "(HTTP 429 from YouTube, retry 1 of 2)" in out and "Saved subtitles:" in out
+    assert "Subtitles FAILED: fr: HTTP Error 429" in out and "Saved subtitles:" in out
+    assert "retry" not in out and sum("tlang=fr" in u for u in subtitles["subs"]) == 1   # once
     assert "Subtitles FAILED: de: HTTP Error 404: Not Found" in out
     assert page(tmp_path).with_suffix(".mp4").exists()            # the video is kept
     assert "; subtitles srt: pl (translated from en); " in row(page(tmp_path).read_text("utf-8"), "Video file")
@@ -803,9 +811,9 @@ def test_video_guesses_the_language_with_the_page(tmp_path, youtube, monkeypatch
 def test_subtitles_hint_after_429(tmp_path, subtitles, capsys):
     subtitles["sub_answers"] = {"pl": [TooMany("HTTP Error 429: Too Many Requests")]}
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:pl"]) == 1
-    assert ("Subtitles FAILED: pl: HTTP Error 429: Too Many Requests YouTube keeps refusing the "
-            "translation; try again later, or with --cookies-from-browser firefox after opening "
-            "the video with auto-translated subtitles in that browser.") in capsys.readouterr().out
+    assert ("Subtitles FAILED: pl: HTTP Error 429: Too Many Requests YouTube refuses "
+            "auto-translated captions to downloads at times (HTTP 429); try again later."
+            ) in capsys.readouterr().out
 
 
 # Files already next to the page: renamed, kept and described ------------------------
@@ -819,11 +827,11 @@ def rename_all(folder, prefix):
 def test_overwrite_keeps_what_the_files_were(tmp_path, youtube, capsys):
     # day 1: page, video and a track, with the data; day 2: the page again
     youtube["fresh"] = DUBS
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--save-json"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--write-json"])
     first = page(tmp_path).read_text("utf-8")
     capsys.readouterr()
     assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl",
-                         "--save-json"]) == 0
+                         "--write-json"]) == 0
     out = capsys.readouterr().out
     assert len(youtube["downloads"]) == 2                     # nothing downloaded again
     assert "Audio skipped (file exists)" in out and "Updated page" in out
@@ -839,11 +847,11 @@ def test_overwrite_keeps_what_the_files_were(tmp_path, youtube, capsys):
 
 def test_renamed_files_are_found_and_described(tmp_path, youtube, capsys):
     youtube["fresh"] = DUBS
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--save-json"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--write-json"])
     rename_all(tmp_path, "01 ")
     capsys.readouterr()
     assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl",
-                         "--save-json"]) == 0
+                         "--write-json"]) == 0
     assert len(youtube["downloads"]) == 2                     # recognised under the new names
     html_path = page(tmp_path)
     assert html_path.name.startswith("01 ")                   # the page keeps its name
@@ -857,21 +865,21 @@ def test_renamed_files_are_found_and_described(tmp_path, youtube, capsys):
 
 def test_a_rebuild_finds_renamed_tracks(tmp_path, youtube):
     youtube["fresh"] = DUBS
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--save-json"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--write-json"])
     old = page(tmp_path).stem
     rename_all(tmp_path, "02 ")
-    assert yt2html.main(["--from-json", "TESTVIDEO01", "-o", str(tmp_path)]) == 0
+    assert yt2html.main(["--load-json", "TESTVIDEO01", "-o", str(tmp_path)]) == 0
     html = page(tmp_path).read_text("utf-8")
     # the saved name stays as the last try; the file found by id and ending comes first
     assert f'data-audio="{old}.pl.dubbed.m4a" data-found="02 {old}.pl.dubbed.m4a"' in html
     # gone: nothing found, the page's own name and the saved one are still tried
     (tmp_path / f"02 {old}.pl.dubbed.m4a").unlink()
-    yt2html.main(["--from-json", "TESTVIDEO01", "-o", str(tmp_path)])
+    yt2html.main(["--load-json", "TESTVIDEO01", "-o", str(tmp_path)])
     assert f'data-audio="{old}.pl.dubbed.m4a" data-found="" ' in page(tmp_path).read_text("utf-8")
 
 
 def test_files_found_without_saved_data(tmp_path, youtube):
-    # downloaded without --save-json: made again, the files are only found
+    # downloaded without --write-json: made again, the files are only found
     youtube["fresh"] = DUBS + [dub("251-9", "pl", "dubbed", "opus")]
     yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl"])
     assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl"]) == 0
@@ -887,11 +895,11 @@ def test_files_found_without_saved_data(tmp_path, youtube):
 
 
 def test_renamed_subtitles_are_found_and_described(tmp_path, subtitles, capsys):
-    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en", "--save-json"])
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en", "--write-json"])
     rename_all(tmp_path, "04 ")
     before = len(subtitles["subs"])
     assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "sub:en",
-                         "--save-json"]) == 0
+                         "--write-json"]) == 0
     assert len(subtitles["subs"]) == before                  # not downloaded again
     saved = json.loads(page(tmp_path).with_suffix(".info.json").read_text("utf-8"))
     assert saved[yt2html.VIDEO_KEY]["subtitles"] == [

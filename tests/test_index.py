@@ -288,7 +288,7 @@ def test_index_only_for_a_list_file(tmp_path, youtube):
 
 
 @pytest.mark.parametrize("argv, message", [
-    (["--from-json", "x.info.json", "--index"], "cannot be used with --from-json"),
+    (["--load-json", "x.info.json", "--index"], "cannot be used with --load-json"),
     ([url(1), "--index"], "need a playlist (URL, id or the name of its index page) or a list file"),
     ([url(1), "--index-only"], "need a playlist (URL, id or the name of its index page) or a list file"),
 ])

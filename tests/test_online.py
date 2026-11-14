@@ -17,7 +17,7 @@ URL = "https://www.youtube.com/watch?v="
 
 def archive(tmp_path, video_id, *options):
     code = yt2html.main([URL + video_id, "-o", str(tmp_path), "--max-comments", "5",
-                         "--no-avatars", "--save-json", *options])
+                         "--no-avatars", "--write-json", *options])
     assert code == 0, "yt2html failed; see its output above"
     page = next(tmp_path.glob(f"*[[]{video_id}[]].html"))
     data = next(tmp_path.glob(f"*[[]{video_id}[]].info.json"))
@@ -97,3 +97,17 @@ def test_comments_turned_off(tmp_path):
     html, info = archive(tmp_path, "okT1dSP6gQQ")
     assert info[yt2html.COMMENTS_MESSAGE_KEY] == "Comments are turned off."
     assert '<div class="note">Comments are turned off.</div>' in html
+
+
+def test_srt_made_from_json3_is_youtubes_srt():
+    # --video sub: makes the SRT file from the json3 track the transcript uses
+    # too (one request); it must say what YouTube's own SRT of the track says
+    import json
+    import yt_dlp
+    with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
+        info = ydl.sanitize_info(ydl.extract_info(URL + "hz6-3-7GGyI", download=False))
+        tracks = yt2html.subtitle_tracks(info)
+        url = next(iter(tracks["author"].values() or tracks["auto-generated"].values()))
+        theirs = yt2html.read_url(ydl, yt2html.with_query(url, fmt="srt"))
+        ours = yt2html.json3_to_srt(json.loads(yt2html.read_url(ydl, url)))
+    assert ours.replace(b"\r\n", b"\n").strip() == theirs.replace(b"\r\n", b"\n").strip()

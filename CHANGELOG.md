@@ -4,6 +4,13 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- `--save-json` is now `--write-json` and `--from-json` is now `--load-json` (the old names are gone). They cannot be combined: `--load-json` only reads saved data. README has a new section, *Saved data*, on what each one does.
+- A translation that YouTube refuses to send (`HTTP 429`, frequent since mid-November 2026, also for yt-dlp alone and with cookies) or whose download fails no longer stops the video: like a translation YouTube does not offer, it is left out with a note (*About this copy*: `not available: bilingual:pl (YouTube refused to send it (HTTP 429 Too Many Requests))`), the page is made and counts as finished; `--overwrite` adds it later. Only a failed transcript still saves nothing.
+- Each translation is asked for once, a random 70 to 100 seconds after the video's data was fetched, without retries (before: at least 65 s, then retries after 60 and 120 s). The same for `sub:` translations; a refused subtitle file still counts as failed, and the next run with the same `--video` tries again.
+- Each caption track is downloaded once per run, as json3, for the transcript and the `sub:` files alike: `--transcript bilingual:pl` with `--video sub:pl` asks YouTube for the Polish translation once, and a refusal is not asked again. The SRT files are made from it with the same cues as YouTube's own SRT (`test_online.py` compares them).
+
 ## [0.9.1] - 2026-11-13
 
 ### Changed

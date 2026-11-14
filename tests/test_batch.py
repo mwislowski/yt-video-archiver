@@ -144,9 +144,9 @@ def test_batch_file_is_not_changed(tmp_path, fake_fetch):
     assert (tmp_path / "list.txt").read_text(encoding="utf-8") == text
 
 
-def test_from_json_paths_in_a_batch_file(tmp_path, capsys, info_file):
+def test_load_json_paths_in_a_batch_file(tmp_path, capsys, info_file):
     path = write_list(tmp_path, f"{info_file}\n{info_file}\n")
     out_dir = tmp_path / "pages"
-    assert yt2html.main(["--from-json", "-a", path, "-o", str(out_dir)]) == 0
+    assert yt2html.main(["--load-json", "-a", path, "-o", str(out_dir)]) == 0
     assert f"Read 2 files from {path} (1 duplicate ignored)." in capsys.readouterr().out
     assert len(list(out_dir.glob("*.html"))) == 1

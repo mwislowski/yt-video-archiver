@@ -1,4 +1,4 @@
-"""The command line: options, --version, --from-json and what gets saved."""
+"""The command line: options, --version, --load-json and what gets saved."""
 
 import json
 from pathlib import Path
@@ -47,11 +47,11 @@ def test_invalid_transcript_option_is_rejected(capsys):
     assert "given more than once" in capsys.readouterr().err
 
 
-def test_from_json_saves_in_current_folder(capsys, info_file, tmp_path, monkeypatch):
+def test_load_json_saves_in_current_folder(capsys, info_file, tmp_path, monkeypatch):
     work = tmp_path / "videos"
     work.mkdir()
     monkeypatch.chdir(work)
-    code, out = run(capsys, "--from-json", str(info_file))
+    code, out = run(capsys, "--load-json", str(info_file))
     assert code == 0
     pages = list(work.glob("*.html"))
     assert len(pages) == 1 and pages[0].name.endswith("[TESTVIDEO01].html")
@@ -61,13 +61,13 @@ def test_from_json_saves_in_current_folder(capsys, info_file, tmp_path, monkeypa
 
 def test_output_folder_option(capsys, info_file, tmp_path):
     out_dir = tmp_path / "pages"
-    code, _ = run(capsys, "--from-json", str(info_file), "-o", str(out_dir))
+    code, _ = run(capsys, "--load-json", str(info_file), "-o", str(out_dir))
     assert code == 0 and len(list(out_dir.glob("*.html"))) == 1
 
 
 def test_bilingual_without_saved_translation_saves_nothing(capsys, info_file, tmp_path):
     out_dir = tmp_path / "pages"
-    code, out = run(capsys, "--from-json", str(info_file), "-o", str(out_dir),
+    code, out = run(capsys, "--load-json", str(info_file), "-o", str(out_dir),
                     "--transcript", "bilingual:de")
     assert code == 1
     assert "no transcript translation into 'de'" in out
@@ -77,10 +77,10 @@ def test_bilingual_without_saved_translation_saves_nothing(capsys, info_file, tm
 def test_no_transcript_without_the_option(capsys, info_file, tmp_path):
     # saved in the data, but not asked for: not on the page
     out_dir = tmp_path / "pages"
-    run(capsys, "--from-json", str(info_file), "-o", str(out_dir))
+    run(capsys, "--load-json", str(info_file), "-o", str(out_dir))
     html = next(out_dir.glob("*.html")).read_text("utf-8")
     assert 'class="transcript' not in html and "<dt>Transcript</dt><dd>left out</dd>" in html
-    run(capsys, "--from-json", str(info_file), "-o", str(out_dir), "--transcript")
+    run(capsys, "--load-json", str(info_file), "-o", str(out_dir), "--transcript")
     assert '<section class="transcript"' in next(out_dir.glob("*.html")).read_text("utf-8")
 
 
@@ -91,7 +91,7 @@ def test_bilingual_missing_at_download_is_a_note(capsys, info, tmp_path):
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
     out_dir = tmp_path / "pages"
-    code, _ = run(capsys, "--from-json", str(saved), "-o", str(out_dir),
+    code, _ = run(capsys, "--load-json", str(saved), "-o", str(out_dir),
                   "--transcript", "bilingual:de,bilingual:pl")
     html = next(out_dir.glob("*.html")).read_text("utf-8")
     assert code == 0 and html.count('class="transcript bilingual"') == 1 and 'data-lang="de"' not in html
@@ -116,7 +116,7 @@ def test_bilingual_for_a_video_without_captions(capsys, info, tmp_path, monkeypa
 
 def test_bilingual_with_saved_translation(capsys, info_file, tmp_path):
     out_dir = tmp_path / "pages"
-    code, _ = run(capsys, "--from-json", str(info_file), "-o", str(out_dir),
+    code, _ = run(capsys, "--load-json", str(info_file), "-o", str(out_dir),
                   "--transcript", "plain,bilingual:pl")
     html = next(out_dir.glob("*.html")).read_text(encoding="utf-8")
     assert code == 0 and "transcript bilingual" in html
@@ -125,20 +125,20 @@ def test_bilingual_with_saved_translation(capsys, info_file, tmp_path):
 def test_page_is_self_contained(capsys, info_file, tmp_path, monkeypatch):
     monkeypatch.setattr(yt2html, "fetch_image", lambda url: "data:image/png;base64,AAAA")
     out_dir = tmp_path / "pages"
-    run(capsys, "--from-json", str(info_file), "-o", str(out_dir))
+    run(capsys, "--load-json", str(info_file), "-o", str(out_dir))
     html = next(out_dir.glob("*.html")).read_text(encoding="utf-8")
     assert html.count("<script") == 1 and "<script src" not in html  # only the built-in player
     assert 'src="http' not in html and "url(http" not in html  # no external images
 
 
 def test_failure_of_one_source_does_not_stop_others(capsys, info_file, tmp_path):
-    code, out = run(capsys, "--from-json", str(tmp_path / "missing.json"), str(info_file),
+    code, out = run(capsys, "--load-json", str(tmp_path / "missing.json"), str(info_file),
                     "-o", str(tmp_path / "o"))
     assert code == 1
     assert "FAILED" in out and "Done: 1 saved, 0 skipped (page exists), 1 failed." in out
 
 
-# --from-json sources: patterns, video ids and page names
+# --load-json sources: patterns, video ids and page names
 
 def saved(folder, name="Title [TESTVIDEO01].info.json", info=None):
     folder.mkdir(parents=True, exist_ok=True)
@@ -147,39 +147,39 @@ def saved(folder, name="Title [TESTVIDEO01].info.json", info=None):
     return path
 
 
-def test_from_json_pattern_is_expanded_with_literal_brackets(capsys, tmp_path, monkeypatch):
+def test_load_json_pattern_is_expanded_with_literal_brackets(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     saved(tmp_path / "data")
     saved(tmp_path / "data", "Other [TESTVIDEO02].info.json", {"id": "TESTVIDEO02", "title": "O"})
-    code, out = run(capsys, "--from-json", "data/*[TESTVIDEO01]*", "-o", "pages")
+    code, out = run(capsys, "--load-json", "data/*[TESTVIDEO01]*", "-o", "pages")
     assert code == 0 and len(list((tmp_path / "pages").glob("*.html"))) == 1
-    code, out = run(capsys, "--from-json", "data/*.info.json", "-o", "pages2")
+    code, out = run(capsys, "--load-json", "data/*.info.json", "-o", "pages2")
     assert code == 0 and len(list((tmp_path / "pages2").glob("*.html"))) == 2
 
 
-def test_from_json_pattern_without_matches(capsys, tmp_path, monkeypatch):
+def test_load_json_pattern_without_matches(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    code, out = run(capsys, "--from-json", "data/*nothing*.info.json")
+    code, out = run(capsys, "--load-json", "data/*nothing*.info.json")
     assert code == 1 and "FAILED: data/*nothing*.info.json: no file matches" in out
 
 
-def test_from_json_by_video_id_or_name_in_the_output_folder(capsys, tmp_path, monkeypatch):
+def test_load_json_by_video_id_or_name_in_the_output_folder(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     saved(tmp_path / "out")
     for source in ("TESTVIDEO01", "[TESTVIDEO01]", "Title [TESTVIDEO01].html",
                    "Title [TESTVIDEO01].info.json", "elsewhere/Title [TESTVIDEO01]"):
-        code, out = run(capsys, "--from-json", source, "-o", "out")
+        code, out = run(capsys, "--load-json", source, "-o", "out")
         assert code == 0, (source, out)
         assert f"Reading {Path('out') / 'Title [TESTVIDEO01].info.json'}" in out
     assert (tmp_path / "out" / "Title [TESTVIDEO01].html").exists()
 
 
-def test_from_json_explains_what_was_looked_for(capsys, tmp_path, monkeypatch):
+def test_load_json_explains_what_was_looked_for(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    code, out = run(capsys, "--from-json", "TESTVIDEO09", "-o", "out")
+    code, out = run(capsys, "--load-json", "TESTVIDEO09", "-o", "out")
     assert code == 1
     assert "no saved data for TESTVIDEO09 in out (looked for *[TESTVIDEO09]*.info.json)" in out
-    code, out = run(capsys, "--from-json", "missing.json")
+    code, out = run(capsys, "--load-json", "missing.json")
     assert "FAILED: missing.json: no such file: missing.json" in out
 
 
@@ -187,30 +187,37 @@ def test_an_existing_file_wins_over_the_lookup(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     saved(tmp_path, "TESTVIDEO01", {"id": "TESTVIDEO01", "title": "From the file"})
     saved(tmp_path / "out", "Lookup [TESTVIDEO01].info.json", {"id": "TESTVIDEO01", "title": "L"})
-    code, out = run(capsys, "--from-json", "TESTVIDEO01", "-o", "out")
+    code, out = run(capsys, "--load-json", "TESTVIDEO01", "-o", "out")
     assert code == 0 and "Reading TESTVIDEO01\n" in out
 
 
 
-def test_from_json_patterns_in_a_batch_file(capsys, tmp_path, monkeypatch):
+def test_load_json_patterns_in_a_batch_file(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     saved(tmp_path / "data")
     saved(tmp_path / "data", "Other [TESTVIDEO02].info.json", {"id": "TESTVIDEO02", "title": "O"})
     (tmp_path / "list.txt").write_text("data/*.info.json\n", encoding="utf-8")
-    code, out = run(capsys, "--from-json", "-a", "list.txt", "-o", "pages")
+    code, out = run(capsys, "--load-json", "-a", "list.txt", "-o", "pages")
     assert code == 0 and len(list((tmp_path / "pages").glob("*.html"))) == 2
 
 
-def test_from_json_finds_saved_data_with_the_id_anywhere(capsys, tmp_path, monkeypatch):
+def test_load_json_finds_saved_data_with_the_id_anywhere(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     saved(tmp_path / "out", "Title [TESTVIDEO01] (copy).INFO.JSON")
     for source in ("TESTVIDEO01", "My video [TESTVIDEO01].mp4", "Renamed [TESTVIDEO01] x.html"):
-        code, out = run(capsys, "--from-json", source, "-o", "out")
+        code, out = run(capsys, "--load-json", source, "-o", "out")
         assert code == 0, (source, out)
 
 
-def test_from_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
+def test_load_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    code, out = run(capsys, "--from-json", "Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html")
+    code, out = run(capsys, "--load-json", "Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html")
     assert code == 1 and "no such file: Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html" in out
 
+
+
+def test_one_json_option_at_a_time(capsys):
+    with pytest.raises(SystemExit):
+        yt2html.parse_args(["--load-json", "x.info.json", "--write-json"])
+    assert ("--write-json and --load-json cannot be used together: --load-json only reads "
+            "saved data (one of the JSON options at a time)") in capsys.readouterr().err

@@ -1,13 +1,15 @@
 """Transcript: choosing the track, captions, versions, bilingual and translations."""
 
 import argparse
-import re
 import datetime as dt
+import json
+import re
 
 import pytest
 
 import yt2html
-from conftest import ORIGINAL_CAPTIONS, caption_formats
+
+from conftest import ORIGINAL_CAPTIONS, FakeHTTPError, caption_formats, translated_captions
 
 
 def asr(*languages):
@@ -75,6 +77,25 @@ class TestChooseTrack:
         assert yt2html.choose_caption_track({}) is None
 
 
+def test_json3_to_srt():
+    data = {"events": [
+        {"tStartMs": 0, "dDurationMs": 4000, "segs": [{"utf8": " Hello "}, {"utf8": "and welcome"}]},
+        {"tStartMs": 3000, "aAppend": 1, "segs": [{"utf8": "\n"}]},       # only a line break
+        {"tStartMs": 4000},                                                # no text at all
+        {"tStartMs": 3_723_456, "dDurationMs": 1544, "segs": [{"utf8": "first\nsecond"}]}]}
+    assert yt2html.json3_to_srt(data) == (
+        b"1\n00:00:00,000 --> 00:00:04,000\nHello and welcome\n\n"
+        b"2\n01:02:03,456 --> 01:02:05,000\nfirst\nsecond\n")
+    assert yt2html.json3_to_srt({}) == b""
+
+
+def test_caption_key():
+    tt = "https://www.youtube.com/api/timedtext?v=V&expire=1&sig=a&lang=en&kind=asr&fmt=srt"
+    assert yt2html.caption_key(tt) == ("V", "en", "asr", "", "")
+    assert yt2html.caption_key(tt + "&tlang=pl&name=x") == ("V", "en", "asr", "x", "pl")
+    assert yt2html.caption_key("https://example.com/c?fmt=vtt") == "https://example.com/c?fmt=json3"
+
+
 def test_json3_captions():
     cues = yt2html.parse_json3_captions(ORIGINAL_CAPTIONS)
     assert cues == [{"start": 0.0, "text": "Hello and welcome"},
@@ -101,13 +122,63 @@ class TestFetching:
         texts = yt2html.align_translation(transcript["cues"], transcript["translations"]["pl"]["cues"])
         assert texts == ["pl: hello", "pl: lines", "pl: music"]
 
-    def test_retry_after_429(self, fake_ydl):
-        transcript = yt2html.fetch_transcript(fake_ydl(fail_translations=1), english_info(), ["pl"])
-        assert transcript["translations"]["pl"]["cues"]
+    def test_refused_translation_is_left_out_with_a_note(self, fake_ydl, capsys):
+        # asked once, not retried: the page is made without it (it counts as finished)
+        ydl = fake_ydl(fail_translations=1)
+        transcript = yt2html.fetch_transcript(ydl, english_info(), ["pl", "de"])
+        assert set(transcript["translations"]) == {"de"}
+        assert transcript["missing"] == {
+            "pl": "YouTube refused to send it (HTTP 429 Too Many Requests)"}
+        assert sum("tlang=pl" in url for url in ydl.urls) == 1
+        out = capsys.readouterr().out
+        assert ("No translation into 'pl': YouTube refused to send it (HTTP 429 Too Many "
+                "Requests).\n[yt2html]   The page is made without it and counts as finished; "
+                "to add the translation later, make the page again with --overwrite. YouTube "
+                "refuses auto-translated captions to downloads at times (HTTP 429); try again "
+                "later.") in out
 
-    def test_gives_up_after_repeated_429(self, fake_ydl):
-        with pytest.raises(yt2html.TranscriptError, match="cookies-from-browser"):
-            yt2html.fetch_transcript(fake_ydl(fail_translations=9), english_info(), ["pl"])
+    def test_other_failure_of_a_translation(self, fake_ydl):
+        class Broken(fake_ydl):
+            def urlopen(self, url):
+                if "tlang" in url:
+                    raise OSError("ERROR: [youtube] X: offline\nmore")
+                return super().urlopen(url)
+        transcript = yt2html.fetch_transcript(Broken(), english_info(), ["pl"])
+        assert transcript["missing"] == {"pl": "the download failed (offline)"}
+
+    def test_waits_for_the_first_translation_only(self, fake_ydl, monkeypatch, capsys):
+        monkeypatch.setattr(yt2html.time, "monotonic", lambda: 100.0)
+        yt2html.fetch_transcript(fake_ydl(), english_info(), ["pl", "de"], not_before=180.0)
+        out = capsys.readouterr().out
+        assert out.count("Waiting 80 s (YouTube refuses translations requested too soon)") == 2
+        yt2html.fetch_transcript(fake_ydl(), english_info(), ["pl", "de"], not_before=180.0)
+        assert "Waiting" not in capsys.readouterr().out      # downloaded already: no wait
+
+    def test_subtitle_files_share_the_download(self, fake_ydl, monkeypatch):
+        # the transcript's translation, then sub:pl from another fetch (other signature):
+        # one request; a refusal is not asked again either
+        ydl = fake_ydl(fail_translations=1)
+        transcript = yt2html.fetch_transcript(ydl, english_info(), ["pl", "de"])
+        asked = []
+
+        def fetch_subtitles(url, args):
+            asked.append(url)
+            return json.dumps(translated_captions("pl")).encode()
+
+        monkeypatch.setattr(yt2html, "fetch_subtitles", fetch_subtitles)
+        other = "https://www.youtube.com/api/timedtext?v=X&expire=2&lang=en"   # any format
+        srt = yt2html.download_srt(other + "&tlang=de", None)
+        assert srt.decode().startswith("1\n00:00:00,000 --> 00:00:00,000\nde: hello\n\n2\n")
+        with pytest.raises(FakeHTTPError, match="429"):
+            yt2html.download_srt(other + "&tlang=pl", None)
+        assert asked == [] and "pl" in transcript["missing"]
+        yt2html.caption_cache.clear()        # the next run asks again
+        assert b"pl: hello" in yt2html.download_srt(other + "&tlang=pl", None)
+        assert len(asked) == 1 and "fmt=json3" in asked[0]
+
+    def test_wait_is_random_within_the_range(self, monkeypatch):
+        monkeypatch.setattr(yt2html.random, "uniform", lambda a, b: (a, b))
+        assert yt2html.translation_wait() == (70, 100)
 
     @pytest.mark.parametrize("target, kwargs, message", [
         ("fr", {}, "(available: de, pl)"),
@@ -120,7 +191,8 @@ class TestFetching:
         assert target not in transcript["translations"]
         assert ("de" in transcript["translations"]) is not bool(kwargs)   # the others still come
         assert message in transcript["missing"][target]
-        assert f"No translation into '{target}': " in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert f"No translation into '{target}': " in out and "--overwrite" not in out
 
     def test_no_transcript(self, fake_ydl):
         info = {}

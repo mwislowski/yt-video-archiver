@@ -191,7 +191,7 @@ def test_videos_with_the_id_are_found_when_the_page_is_built(capsys, info, tmp_p
     (out / "Notes [TESTVIDEO01].txt").write_text("x")
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
-    yt2html.main(["--from-json", str(saved), "-o", str(out)])
+    yt2html.main(["--load-json", str(saved), "-o", str(out)])
     html = next(out.glob("*.html")).read_text("utf-8")
     assert 'data-files="[&quot;042 renamed [TESTVIDEO01].MP4&quot;]"' in html
     # the page tries them first, then its own name and yt-dlp's name with every extension
@@ -421,12 +421,12 @@ def test_channel_avatar_is_downloaded_small_also_with_no_avatars(capsys, info, t
     requested = []
     monkeypatch.setattr(yt2html, "fetch_image",
                         lambda url: requested.append(url) or "data:image/png;base64,AAAA")
-    yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "a")])
+    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "a")])
     assert f"https://yt3.ggpht.test/owner=s{yt2html.AVATAR_SIZE}" in requested
     assert any("@newest" in url for url in requested)
     requested.clear()
     # --no-avatars leaves out the comment authors' avatars, not the channel's
-    yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "b"), "--no-avatars"])
+    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "b"), "--no-avatars"])
     avatars = [url for url in requested if "yt3.ggpht" in url]   # not the thumbnail
     assert avatars == [f"https://yt3.ggpht.test/owner=s{yt2html.AVATAR_SIZE}"]
     html = next((tmp_path / "b").glob("*.html")).read_text("utf-8")

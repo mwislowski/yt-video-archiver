@@ -135,8 +135,8 @@ def test_no_cards_option_hides_saved_cards(capsys, tmp_path, info):
     info[yt2html.CARDS_KEY] = yt2html.parse_cards(page_data([video_card()], [(1, "")]))
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
-    yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "a")])
-    yt2html.main(["--from-json", str(saved), "-o", str(tmp_path / "b"), "--no-cards"])
+    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "a")])
+    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "b"), "--no-cards"])
     assert 'id="info-cards"' in next((tmp_path / "a").glob("*.html")).read_text("utf-8")
     assert 'id="info-cards"' not in next((tmp_path / "b").glob("*.html")).read_text("utf-8")
 
