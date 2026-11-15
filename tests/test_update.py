@@ -7,7 +7,7 @@ import re
 import pytest
 
 import yt2html
-from conftest import FakeHTTPError, FakeYDL, caption_formats
+from conftest import FakeYDL, caption_formats
 
 URL = "https://www.youtube.com/watch?v=TESTVIDEO01"
 TODAY = dt.date.today().strftime(yt2html.DATE_FORMAT)
@@ -536,3 +536,51 @@ def test_refresh_sources_as_for_update(capsys, saved, youtube, refreshed, tmp_pa
     code, out = run(capsys, "-a", str(tmp_path / "list.txt"), "-o", str(saved.parent),
                     "--refresh-json")
     assert code == 0 and f"Reading {saved}" in out
+
+
+def test_saved_data_survive_an_interrupted_save(capsys, saved, youtube, monkeypatch):
+    before = saved.read_bytes()
+
+    def interrupted(source, target):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(yt2html.os, "replace", interrupted)
+    assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+                         "--transcript", "bilingual:pl"]) == 130  # as after Ctrl+C
+    assert saved.read_bytes() == before                       # the old data, whole
+
+
+def test_refresh_interrupted_does_not_advise_overwrite(capsys, saved, youtube, monkeypatch, info):
+    monkeypatch.setattr(yt2html, "fetch_info",
+                        lambda s, a: {**json.loads(json.dumps(info)), "comment_count": None})
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    assert code == 130 and ("use --refresh-json again for this video to get all of them "
+                            "(--overwrite would replace the saved comments).") in out
+
+
+def test_saved_data_files_in_a_list_and_its_index(capsys, saved, youtube, tmp_path):
+    # a list of saved data files: each counts as its video, also in the index
+    listing = tmp_path / "mine.txt"
+    listing.write_text(f"{saved.parent / '*.info.json'}\n{URL}\n", encoding="utf-8")
+    code, out = run(capsys, "-a", str(listing), "-o", str(saved.parent), "--update-json",
+                    "--index")
+    assert code == 0 and out.count(f"Reading {saved}") == 1        # the URL is the same video
+    assert "(1 duplicate ignored)" in out
+    index = (saved.parent / "mine.html").read_text("utf-8")
+    assert 'data-id="TESTVIDEO01"' in index and "Not a video" not in index
+    assert index.count('class="item"') == 1
+
+
+def test_a_failed_saved_data_file_shows_in_the_index(capsys, saved, youtube, tmp_path,
+                                                      monkeypatch):
+    def fails(*args):
+        raise yt2html.TranscriptError("could not download the transcript (offline)")
+    monkeypatch.setattr(yt2html, "update_transcript", fails)
+    data = json.loads(saved.read_text("utf-8"))
+    del data[yt2html.TRANSCRIPT_KEY]
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    listing = tmp_path / "mine.txt"
+    listing.write_text(str(saved) + "\n", encoding="utf-8")
+    code, out = run(capsys, "-a", str(listing), "-o", str(saved.parent), "--update-json",
+                    "--transcript", "--index")
+    index = (saved.parent / "mine.html").read_text("utf-8")
+    assert code == 1 and 'data-status="failed"' in index and "could not download" in index

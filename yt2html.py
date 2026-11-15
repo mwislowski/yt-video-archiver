@@ -4409,7 +4409,7 @@ def list_file_sections(lines: list[str], args: argparse.Namespace, run: Run,
                 sections.append(playlist_section(playlist_id, args, run, earlier))
             current = None
             continue
-        video_id = video_id_from_url(line)
+        video_id = source_video_id(line)
         key = video_id or line
         if key in seen:
             continue
@@ -4540,6 +4540,14 @@ def id_in_name(text: str, playlists: bool = True) -> str | None:
         if VIDEO_ID.fullmatch(found) or (playlists and playlist_id_from_url(found)):
             return found
     return None
+
+
+def source_video_id(source: str) -> str | None:
+    """The video id of a source: from its address, or for a saved data file
+    (--update-json, --refresh-json) from the id in its name."""
+    if source.lower().endswith(".json"):
+        return id_in_name(source, playlists=False)
+    return video_id_from_url(source)
 
 
 def source_from_page_name(text: str) -> str:
@@ -4675,11 +4683,13 @@ def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
     return file_with_id(output_dir, video_id, (".html",), "pages")
 
 
-def write_atomically(path: Path, text: str) -> None:
+def write_atomically(path: Path, content: str | bytes) -> None:
     """Write to a temporary file and rename it, so an interrupted run never
-    leaves a cut-off page that a later run would take as finished."""
+    leaves a cut-off file (a page or subtitles a later run would take as
+    finished, saved data that would be lost)."""
     temporary = path.with_name(path.name + ".part")
-    temporary.write_text(text, encoding="utf-8")
+    # bytes as they are, so a page has the same line ends on every system
+    temporary.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
     os.replace(temporary, path)
 
 
@@ -4950,9 +4960,10 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
 
     Returns the page's path, or None if the video already has a page in the
     output folder and --overwrite was not given (with --load-json the page is
-    always made again; with --update-json too when there are saved data,
-    which get what the options need and they lack, and are saved back). Everything that can fail for a reason the user should
-    know (playlist URL, missing translation) is checked before anything is
+    always made again; with --update-json and --refresh-json too when there
+    are saved data, which get what the options need and they lack, and are
+    saved back). Everything that can fail for a reason the user should know
+    (playlist URL, missing translation) is checked before anything is
     written. `outcome` (for --video) gets the page's path ("target"), and for
     a page made now also its data ("info") and "rebuild": a function that
     saves the data (with --write-json) and the page again from it, with the
@@ -5031,28 +5042,31 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     output_dir.mkdir(parents=True, exist_ok=True)
     target = found or output_path(info, output_dir)
     if args.video is not None:
-        # what the saved data said about the files next to the page, read
-        # before --write-json replaces it: --video keeps what still holds
-        outcome["previous"] = previous_video(
-            file_with_id(output_dir, info.get("id"), (".info.json",), "saved data files"))
+        # what the saved data said about the files next to the page (the data
+        # read now, else the file there, read before --write-json replaces
+        # it): --video keeps what still holds
+        outcome["previous"] = ((info.get(VIDEO_KEY) or {}) if data_path else previous_video(
+            file_with_id(output_dir, info.get("id"), (".info.json",), "saved data files")))
 
     def save_json(verb: str = "Saved") -> None:
         if write_json or updating:
             # --update-json: back into the file it read, whatever its name
             json_path = data_path if updating else target.with_suffix(".info.json")
-            json_path.write_text(json.dumps(info, ensure_ascii=False, indent=1),
-                                 encoding="utf-8")
+            write_atomically(json_path, json.dumps(info, ensure_ascii=False, indent=1))
             log(f"{verb} metadata: {json_path}")
 
     save_json("Updated" if updating else "Saved")
 
     def shown(note: bool = False) -> dict:
         """What the page shows: from saved data, the comments narrowed by
-        --no-comments or --max-comments (the data keep all of them)."""
+        --no-comments or --max-comments and the cards left out with
+        --no-cards (the data keep all of them)."""
         if not data_path:
             return info
         view = dict(info)
         narrow_saved_comments(view, args, note)
+        if args.no_cards:
+            view.pop(CARDS_KEY, None)
         return view
 
     log("Downloading thumbnail...")
@@ -5061,9 +5075,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         log("  Thumbnail could not be downloaded.")
     avatar_uris = fetch_images(avatar_urls(shown(note=True), comments=not args.no_avatars),
                                "avatars", resize=resize_avatar_url)
-    if args.no_cards:
-        info.pop(CARDS_KEY, None)  # also cards kept in a --load-json file
-    extra_images = fetch_images(extra_image_urls(info), "images (people, podcast, cards)")
+    extra_images = fetch_images(extra_image_urls(shown()), "images (people, podcast, cards)")
 
     try:
         archived = dt.date.fromisoformat(info.get(ARCHIVED_KEY) or "")
@@ -5096,7 +5108,10 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     outcome.update(target=target, info=info, rebuild=rebuild, updating=updating)
     if (not data_path or args.refresh_json) and comments_interrupted(info):
         log("  Comments were interrupted (Ctrl+C): the page has those fetched so far "
-            "and counts as finished; use --overwrite for this video to get all of them.")
+            "and counts as finished; " + (
+                "use --refresh-json again for this video to get all of them (--overwrite "
+                "would replace the saved comments)." if data_path else
+                "use --overwrite for this video to get all of them."))
         raise CommentsInterrupted
     return target
 
@@ -5234,7 +5249,8 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     log("Video: fetching the current list of formats...")
     notes.add("requested")   # the next video waits a moment first
     not_before = time.monotonic() + translation_wait()   # for translated subtitles
-    fresh = fetch_formats(source, args)
+    # by the id: the source may be a saved data file (--update-json)
+    fresh = fetch_formats(f"{YOUTUBE}/watch?v={ident}", args)
     # the page's data (made now) knows the transcript's track and YouTube's
     # translation languages; the fresh list has neither
     data = {**fresh, CAPTION_KEY: (page_info or {}).get(CAPTION_KEY),
@@ -5335,7 +5351,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             if not srt.strip():
                 log(f"  YouTube returned no subtitles for {code}; nothing saved.")
                 continue
-            name.write_bytes(srt)
+            write_atomically(name, srt)
             log(f"Saved subtitles: {name} ({human_size(len(srt)).lstrip('~')})")
             subs.append({"code": code, "kind": kind, "file": name.name, "size": len(srt),
                          "date": today}
@@ -5731,7 +5747,7 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
                                      if adding and "://" not in source else [source])]
 
     def new(source: str) -> bool:
-        key = source if args.load_json else (video_id_from_url(source) or source)
+        key = source if args.load_json else (source_video_id(source) or source)
         if key in seen:
             return False
         seen.add(key)
@@ -5947,7 +5963,7 @@ def main(argv=None) -> int:
         return None
 
     def archive_video(source: str, playlist: dict | None = None):
-        video_id = video_id_from_url(source)
+        video_id = source_video_id(source)
         if video_id:
             run.attempted.add(video_id)
         if args.video is not None and "requested" in notes:
@@ -6015,7 +6031,7 @@ def main(argv=None) -> int:
                                    lambda: playlist_videos(source, args, seen, run)) or []:
                     archive_video(url, playlist_context(run, source, url))
                 continue
-            video_id = None if args.load_json else video_id_from_url(source)
+            video_id = None if args.load_json else source_video_id(source)
             if video_id in seen:
                 log(f"Ignored duplicate: {source} (already in a playlist above)")
                 continue

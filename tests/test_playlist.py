@@ -240,3 +240,13 @@ def test_disabled_comments_are_not_an_interruption(info):
     assert not yt2html.comments_interrupted({**info, "comments": None, "comment_count": None})
     assert not yt2html.comments_interrupted(info)
     assert yt2html.comments_interrupted({**info, "comment_count": None})
+
+
+def test_a_saved_data_file_after_its_playlist_is_a_duplicate(tmp_path, capsys, youtube, info):
+    import json
+    data = tmp_path / "Episode [TESTVIDEO01].info.json"
+    data.write_text(json.dumps({**info, "id": "TESTVIDEO01"}), encoding="utf-8")
+    assert yt2html.main([PLAYLIST, str(data), "-o", str(tmp_path), "--update-json"]) == 0
+    out = capsys.readouterr().out
+    assert out.count(f"Reading {data}") == 1
+    assert f"Ignored duplicate: {data} (already in a playlist above)" in out

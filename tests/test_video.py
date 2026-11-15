@@ -56,6 +56,7 @@ def youtube(monkeypatch, info):
 
     def fetch_formats(source, args):
         seen["fetches"] += 1
+        assert yt2html.video_id_from_url(source), f"not a video address: {source}"
         return {"id": yt2html.video_id_from_url(source), "duration": 600,
                 "formats": json.loads(json.dumps(seen.get("fresh", FORMATS)))}
 
@@ -1030,3 +1031,47 @@ def test_update_json_records_the_files(tmp_path, subtitles, capsys):
     data = json.loads(data_path.read_text("utf-8"))
     assert len(data[yt2html.UPDATES_KEY]) == 1                 # no new entry
     assert len(data["comments"]) == 7          # the page shows fewer, the data keep all
+
+
+def test_update_json_narrows_only_the_page(tmp_path, subtitles):
+    # --no-cards with --video: the data are saved again after the files, still with the cards
+    assert yt2html.main([URL, "-o", str(tmp_path), "--write-json"]) == 0
+    data_path = page(tmp_path).with_suffix(".info.json")
+    data = json.loads(data_path.read_text("utf-8"))
+    card = {"type": "video", "title": "Card", "url": "https://www.youtube.com/watch?v=abcdefghijk"}
+    data[yt2html.CARDS_KEY] = [card]
+    data_path.write_text(json.dumps(data), encoding="utf-8")
+    assert yt2html.main([URL, "-o", str(tmp_path), "--update-json", "--video", "sub:en",
+                         "--no-cards"]) == 0
+    assert json.loads(data_path.read_text("utf-8"))[yt2html.CARDS_KEY] == [card]
+    assert row(page(tmp_path).read_text("utf-8"), "Info cards") == "left out"
+
+
+def test_update_json_with_data_elsewhere_keeps_what_the_files_were(tmp_path, subtitles):
+    # the data read now describe the files, not a file looked up in -o
+    out = tmp_path / "out"
+    assert yt2html.main([URL, "-o", str(out), "--write-json", "--video", "sub:en"]) == 0
+    data_path = page(out).with_suffix(".info.json")
+    elsewhere = tmp_path / "data" / data_path.name
+    elsewhere.parent.mkdir()
+    data_path.rename(elsewhere)
+    assert yt2html.main([str(elsewhere), "-o", str(out), "--update-json", "--video",
+                         "sub:en,sub:de"]) == 0
+    files = json.loads(elsewhere.read_text("utf-8"))[yt2html.VIDEO_KEY]
+    assert all(entry.get("date") == dt.date.today().isoformat()
+               for entry in [files["video"], *files["subtitles"]])
+    assert json.loads(elsewhere.read_text("utf-8"))[yt2html.UPDATES_KEY][-1]["added"] == [
+        "subtitles de (auto-generated)"]
+
+
+def test_interrupted_writes_leave_no_cut_files(tmp_path, subtitles, monkeypatch):
+    # subtitles: only the temporary file is left, so the next run downloads them again
+    def interrupted(source, target):
+        raise KeyboardInterrupt
+    assert yt2html.main([URL, "-o", str(tmp_path)]) == 0
+    monkeypatch.setattr(yt2html.os, "replace", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        yt2html.download_video(URL, yt2html.parse_args([URL, "-o", str(tmp_path), "--video",
+                                                        "sub:de"]), page(tmp_path), set())
+    assert not list(tmp_path.glob("*.de.auto-generated.srt"))
+    assert list(tmp_path.glob("*.de.auto-generated.srt.part"))

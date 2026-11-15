@@ -4,6 +4,15 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Fixed
+
+- `--update-json` or `--refresh-json` with `--no-cards` and `--video` removed the info cards from the saved data (the data are saved again after the files); `--no-cards` now leaves out the cards only on the page, like `--max-comments` and `--no-comments`, and their images are not downloaded.
+- Saved data (`.info.json`) and SRT files are written like pages, through a temporary file: an interruption while saving can no longer leave a cut-off data file (with `--update-json` and `--refresh-json` the only copy) or a cut-off subtitles file that the next run would skip as existing.
+- `--update-json` with saved data outside the output folder: the files already next to the page lost their download details (day, variant) in the data and the *Video file* row; they now come from the data that were read.
+- `--update-json` or `--refresh-json` with `--video` and a saved data file as the source (a path or a pattern) asked yt-dlp for the formats of the file name instead of the video; the formats are now fetched by the video's id.
+- `--update-json` or `--refresh-json` with saved data files as sources (also through a list file): each file now counts as its video, so the same video given also as an address or in a playlist is done once, and the index of a list file shows such a file as its video (before: "Not a video").
+- After `Ctrl+C` during `--refresh-json` the message advised `--overwrite`, which would replace the saved comments; it now advises `--refresh-json` again.
+
 ## [0.9.2] - 2026-11-15
 
 ### Added

@@ -130,13 +130,19 @@ def test_unreadable_watch_page_gives_no_cards(info):
     assert info[yt2html.CARDS_KEY] is None
 
 
-def test_no_cards_option_hides_saved_cards(capsys, tmp_path, info):
+def test_no_cards_option_hides_saved_cards(capsys, tmp_path, info, monkeypatch):
     import json
     info[yt2html.CARDS_KEY] = yt2html.parse_cards(page_data([video_card()], [(1, "")]))
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
+    images = []
+    monkeypatch.setattr(yt2html, "fetch_images",
+                        lambda urls, what, resize=None: images.append(set(urls)) or {})
     yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "a")])
+    assert any(info[yt2html.CARDS_KEY][0]["image"] in urls for urls in images)
+    images.clear()
     yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "b"), "--no-cards"])
+    assert not any(info[yt2html.CARDS_KEY][0]["image"] in urls for urls in images)  # not fetched
     assert 'id="info-cards"' in next((tmp_path / "a").glob("*.html")).read_text("utf-8")
     assert 'id="info-cards"' not in next((tmp_path / "b").glob("*.html")).read_text("utf-8")
 
