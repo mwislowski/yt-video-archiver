@@ -1023,10 +1023,10 @@ def test_update_json_records_the_files(tmp_path, subtitles, capsys):
     assert data[yt2html.UPDATES_KEY][-1]["added"] == ["video", "subtitles en (author)"]
     html = page(tmp_path).read_text("utf-8")
     assert row(html, "Video file").startswith(f"downloaded {TODAY}: 1080p")
-    assert f"; updated {TODAY} with yt2html {yt2html.__version__}: video, subtitles en (author)" in html
+    assert f"; updated {TODAY} {data[yt2html.UPDATES_KEY][-1]['time']}</dd>" in html
     # again, all files there: nothing new to record
     assert yt2html.main([URL, "-o", str(tmp_path), "--update-json", "--video", "sub:en",
                          "--max-comments", "2"]) == 0
     data = json.loads(data_path.read_text("utf-8"))
-    assert data[yt2html.UPDATES_KEY][-1]["added"] == ["video", "subtitles en (author)"]
+    assert len(data[yt2html.UPDATES_KEY]) == 1                 # no new entry
     assert len(data["comments"]) == 7          # the page shows fewer, the data keep all

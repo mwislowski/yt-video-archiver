@@ -216,7 +216,7 @@ def test_page_name_in_the_command_and_in_a_list_file(tmp_path):
                             "https://www.youtube.com/watch?v=TESTVIDEO02"]
 
 
-def test_page_name_is_not_changed_with_from_json():
+def test_page_name_is_not_changed_with_load_json():
     args = yt2html.parse_args(["--load-json", "Title [TESTVIDEO01].html"])
     assert args.sources == ["Title [TESTVIDEO01].html"]
 

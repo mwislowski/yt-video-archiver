@@ -158,18 +158,29 @@ PLAYLIST_KEY = "yt2html_playlist"
 # Why the transcript is missing when TRANSCRIPT_KEY is None.
 TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
 
-# What --update-json and --refresh-json did to the saved data: [{date, yt2html,
-# added: [text] ("translation pl", "subtitles pl (translated)"), refreshed:
-# true for --refresh-json, comments: {new, gone, back} when the comments were
-# refreshed}]; the copy's date stays.
+# What each run of --update-json and --refresh-json did to the saved data:
+# [{date, time, yt2html, added: [text] ("translation pl", "subtitles pl
+# (translated)"), refreshed: true for --refresh-json, comments: {new, gone,
+# back} when the comments were refreshed}]; the copy's date stays. The page
+# names only the runs (Downloaded row); the rest is for the data.
 UPDATES_KEY = "yt2html_updates"
 
 # In a saved comment (--refresh-json): the day it was first not on YouTube,
-# the times it was missing and came back ([{from, until}]), and its earlier
-# texts ([{text, until}]).
+# the times it was missing and came back ([{from, until}]), its earlier
+# texts ([{text, until}]) and, for one a refresh added, the day it came.
 MISSING_SINCE_KEY = "yt2html_missing_since"
 MISSING_HISTORY_KEY = "yt2html_missing"
 EDITS_KEY = "yt2html_edits"
+FIRST_SEEN_KEY = "yt2html_first_seen"
+
+# --refresh-json: the times the comments were turned off on YouTube (or no
+# longer shown) after they had been saved: [{from, until?, turned_off}]; the
+# last entry without "until" means they are off now (a note on the page).
+COMMENTS_CLOSED_KEY = "yt2html_comments_closed"
+
+# --refresh-json: the earlier title and description ([{until, title} or
+# {until, description}]); the page shows the current ones, without a note.
+PREVIOUS_KEY = "yt2html_previous"
 
 # What --refresh-json takes anew besides the comments: the counts.
 REFRESHED_KEYS = ("view_count", "like_count", "channel_follower_count", YT_COUNT_KEY)
@@ -1655,6 +1666,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .comments{margin-top:24px}
 .comments h2{font-size:20px;line-height:28px;font-weight:700;margin:0}
 .comments .note{color:var(--muted);font-size:12px;margin:4px 0 16px}
+.comments .note.closed{margin-bottom:0}
 .comment{display:flex;gap:16px;margin-top:16px}
 .comment .body{min-width:0;flex:1}
 .comment .head{font-size:13px;line-height:18px}
@@ -2907,24 +2919,10 @@ def about_downloaded(info: dict, archived: dt.date) -> str:
     if ytdlp:
         programs.append(f"yt-dlp {esc(ytdlp)}")
     text = f"{when} from {source}" + (f" with {' and '.join(programs)}" if programs else "")
-    for update in info.get(UPDATES_KEY) or []:   # what came later, and when
-        items = list(update.get("added") or [])
-        if update.get("refreshed"):
-            items[:0] = ([comments_change(update["comments"])] if "comments" in update
-                         else []) + ["counts"]
+    for update in info.get(UPDATES_KEY) or []:   # the later runs; what they did: in the data
         text += (f"; {'refreshed' if update.get('refreshed') else 'updated'} "
-                 f"{esc(format_date(update['date']))} with yt2html "
-                 f"{esc(update.get('yt2html') or '?')}: {esc(', '.join(items))}")
+                 f"{esc(format_date(update['date']))} {esc(update.get('time') or '')}").rstrip()
     return text
-
-
-def comments_change(stats: dict) -> str:
-    """What a refresh changed in the comments: "comments (2 new, 1 no longer on YouTube)"."""
-    parts = [text for count, text in (
-        (stats.get("new"), f"{stats.get('new')} new"),
-        (stats.get("gone"), f"{stats.get('gone')} no longer on YouTube"),
-        (stats.get("back"), f"{stats.get('back')} back on YouTube")) if count]
-    return f"comments ({', '.join(parts) or 'no changes'})"
 
 
 def about_page_built(from_json: bool, built: dt.datetime) -> str:
@@ -3115,7 +3113,25 @@ def about_comments(info: dict) -> str:
     gone = gone_comments(comments)
     return (f"{amount}; {plural(len(roots), 'thread')}, "
             f"{replies} {'reply' if replies == 1 else 'replies'}; {state}"
-            + (f"; {format_int(gone)} no longer on YouTube" if gone else ""))
+            + (f"; {format_int(gone)} no longer on YouTube" if gone else "")
+            + (f"; {'turned off' if closed['turned_off'] else 'no longer shown'} on YouTube "
+               f"as of {esc(format_date(closed['from']))}"
+               if (closed := comments_closed(info)) else ""))
+
+
+def comments_closed(info: dict) -> dict | None:
+    """The entry of COMMENTS_CLOSED_KEY when the comments are off on YouTube now."""
+    closed = info.get(COMMENTS_CLOSED_KEY) or []
+    return closed[-1] if closed and "until" not in closed[-1] else None
+
+
+def closed_note(closed: dict) -> str:
+    when = esc(format_date(closed["from"]))
+    if closed.get("turned_off"):
+        return (f"As of {when}, comments on this video are turned off on YouTube; "
+                "the ones below can no longer be seen there.")
+    return (f"As of {when}, YouTube no longer shows comments on this video; "
+            "the ones below can no longer be seen there.")
 
 
 def gone_comments(comments: list[dict]) -> int:
@@ -4001,7 +4017,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 + (fact("Snapshot", archived.strftime(DATE_FORMAT), extra=True)
                    if show_snapshot else "")
                 + (fact("Refreshed", refreshed.strftime(DATE_FORMAT), extra=True)
-                   if show_snapshot and (refreshed := last_refresh(info)) else "")
+                   if show_snapshot and (refreshed := last_refresh(info))
+                   and refreshed != archived else "")
                 + "</div>")
 
     description = info.get("description") or ""
@@ -4056,6 +4073,9 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
             body.append('<div class="note">No comments.</div>')
         else:
             gone = gone_comments(comments)
+            closed = comments_closed(info)
+            if closed:
+                body.append(f'<div class="note closed">{closed_note(closed)}</div>')
             body.append(f'<div class="note">{format_int(len(comments))} downloaded{shown}'
                         + (f': {format_int(len(roots))} threads, {format_int(replies)} replies · '
                            + (f'{format_int(gone)} no longer on YouTube · ' if gone else '')
@@ -4789,21 +4809,19 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                 if language not in before]
 
 
-def note_update(info: dict, added: list[str], refreshed: bool = False,
+def note_update(info: dict, record: dict, added: list[str] = (), refreshed: bool = False,
                 comments: dict | None = None) -> None:
-    """Record what --update-json or --refresh-json did today (UPDATES_KEY):
-    what was added, whether the data were refreshed and what changed in the
-    comments; the same day and version extend the last record."""
+    """Record what this run of --update-json or --refresh-json did in its own
+    entry of UPDATES_KEY (`record`, empty until something happens): what was
+    added, whether the data were refreshed, what changed in the comments."""
     if not added and not refreshed:
         return
-    today = dt.date.today().isoformat()
-    updates = info.setdefault(UPDATES_KEY, [])
-    if updates and (updates[-1].get("date"), updates[-1].get("yt2html")) == (today, __version__):
-        record = updates[-1]
-        record["added"] += [item for item in added if item not in record["added"]]
-    else:
-        record = {"date": today, "yt2html": __version__, "added": list(added)}
-        updates.append(record)
+    if not record:
+        now = dt.datetime.now()
+        record.update(date=now.date().isoformat(), time=now.strftime("%H:%M"),
+                      yt2html=__version__, added=[])
+        info.setdefault(UPDATES_KEY, []).append(record)
+    record["added"] += [item for item in added if item not in record["added"]]
     if refreshed:
         record["refreshed"] = True
     if comments is not None:
@@ -4815,9 +4833,10 @@ def merge_comments(saved: list[dict], fresh: list[dict], complete: bool,
     """--refresh-json: the saved comments with the fresh ones, by id. A fresh
     comment replaces its saved self (the old text kept in EDITS_KEY when it
     changed; one missing before comes back, noted in MISSING_HISTORY_KEY),
-    a new one is added, and a saved one YouTube did not send stays, marked
-    with the day (MISSING_SINCE_KEY), but only when the fresh download is
-    complete (with a limit or after Ctrl+C a missing comment proves nothing).
+    a new one is added with the day it came (FIRST_SEEN_KEY), and a saved
+    one YouTube did not send stays, marked with the day (MISSING_SINCE_KEY),
+    but only when the fresh download is complete (with a limit or after
+    Ctrl+C a missing comment proves nothing).
     The saved ones keep their place after their neighbours, in yt-dlp's
     order, which breaks ties of the coarse times. Returns the comments and
     {new, gone, back}."""
@@ -4852,21 +4871,43 @@ def merge_comments(saved: list[dict], fresh: list[dict], complete: bool,
                 comment[MISSING_HISTORY_KEY] = history
             if edits:
                 comment[EDITS_KEY] = edits
+            if old.get(FIRST_SEEN_KEY):
+                comment[FIRST_SEEN_KEY] = old[FIRST_SEEN_KEY]
+        if old is None:
+            comment[FIRST_SEEN_KEY] = today
         merged.append(comment)
         merged += after[new.get("id")]
     return merged, stats
 
 
 def refresh_saved(info: dict, fresh: dict) -> dict | None:
-    """--refresh-json: the counts from fresh data, and the comments merged
-    (merge_comments()); comments not downloaded now (--no-comments, turned
-    off) leave the saved ones as they are. Returns what changed in the
-    comments, or None when they were not refreshed."""
+    """--refresh-json: the counts from fresh data; the title and description
+    (the earlier ones kept in PREVIOUS_KEY) and the timestamp lists made from
+    them; and the comments merged (merge_comments()). Comments not downloaded
+    now (--no-comments) leave the saved ones; comments turned off on YouTube
+    since leave them too, noted in COMMENTS_CLOSED_KEY. Returns what changed
+    in the comments, or None when they were not refreshed."""
+    today = dt.date.today().isoformat()
     for key in REFRESHED_KEYS:
         if fresh.get(key) is not None:
             info[key] = fresh[key]
+    for key in ("title", "description"):
+        if fresh.get(key) is not None and fresh[key] != info.get(key):
+            info.setdefault(PREVIOUS_KEY, []).append({"until": today, key: info.get(key)})
+            info[key] = fresh[key]
+    if fresh.get(MARKERS_KEY) is not None:   # None: the watch page not read now
+        info[MARKERS_KEY] = fresh[MARKERS_KEY]
+    closed = info.get(COMMENTS_CLOSED_KEY) or []
+    off_now = bool(closed) and "until" not in closed[-1]
+    if "comments" in fresh and fresh["comments"] is None:   # turned off, or not shown
+        if info.get("comments") and not off_now:
+            info[COMMENTS_CLOSED_KEY] = closed + [
+                {"from": today, "turned_off": bool(fresh.get(COMMENTS_MESSAGE_KEY))}]
+        return None
     if fresh.get("comments") is None:
         return None
+    if off_now:
+        closed[-1]["until"] = today
     saved = info.get("comments") if isinstance(info.get("comments"), list) else []
     merged, stats = merge_comments(saved, fresh["comments"], comment_status(fresh) == "complete",
                                    dt.date.today().isoformat())
@@ -4877,14 +4918,24 @@ def refresh_saved(info: dict, fresh: dict) -> dict | None:
     return stats
 
 
-def video_added(result: dict) -> list[str]:
-    """The files --video downloaded today, for UPDATES_KEY."""
+def video_added(result: dict, previous: dict) -> list[str]:
+    """The files this run of --video downloaded, for UPDATES_KEY: dated today
+    and not so in the saved data (`previous`, their VIDEO_KEY) already."""
+    def dated(entries: list) -> set:
+        return {(e.get("file"), e.get("date")) for e in entries if e}
+
+    known = dated([previous.get("video")] + (previous.get("extra_audio") or [])
+                  + (previous.get("subtitles") or []))
     today = dt.date.today().isoformat()
-    added = ["video"] if (result.get("video") or {}).get("date") == today else []
+
+    def new(entry: dict | None) -> bool:
+        return bool(entry) and entry.get("date") == today and (entry.get("file"), today) not in known
+
+    added = ["video"] if new(result.get("video")) else []
     added += [f"extra audio {e['audio']}" + (f" ({e['role']})" if e.get("role") else "")
-              for e in result.get("extra_audio") or [] if e.get("date") == today]
+              for e in result.get("extra_audio") or [] if new(e)]
     added += [f"subtitles {e['code']} ({e['kind']})"
-              for e in result.get("subtitles") or [] if e.get("date") == today]
+              for e in result.get("subtitles") or [] if new(e)]
     return added
 
 
@@ -4945,6 +4996,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
 
     if info.get("_type") in ("playlist", "multi_video"):
         raise ValueError(PLAYLIST_ERROR)
+    record = outcome.setdefault("record", {})   # this run's entry in UPDATES_KEY
     if updating:
         fresh = started = None
         if args.refresh_json:
@@ -4953,10 +5005,11 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
             # the transcript as the data have it; what it lacks comes below
             fresh = fetch_info(f"{YOUTUBE}/watch?v={info.get('id')}",
                                argparse.Namespace(**{**vars(args), "transcript": []}))
-            note_update(info, [], refreshed=True, comments=refresh_saved(info, fresh))
+            note_update(info, record, refreshed=True, comments=refresh_saved(info, fresh))
         whole, targets = missing_for_update(info, args)
         if whole or targets:
-            note_update(info, update_transcript(info, args, whole, targets, fresh, started))
+            note_update(info, record, update_transcript(info, args, whole, targets, fresh,
+                                                        started))
         elif args.video is None and not args.refresh_json:
             log("Nothing to add from YouTube; the page is made from the saved data.")
 
@@ -5251,7 +5304,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         new = True
     if extra:
         result["extra_audio"] = extra
-    # Subtitles: SRT files as YouTube gives them, each on its own; the
+    # Subtitles: SRT files made from the json3 tracks, each on its own; the
     # transcript's choice of track (CAPTION_KEY) comes from the page's data.
     subs = []
     if spec["subs"]:
@@ -5812,7 +5865,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "--write-json (a page that exists is skipped)")
     parser.add_argument("--refresh-json", action="store_true",
                         help="as --update-json, and also refresh what changes over time: the "
-                             "counts, and the comments merged with the saved ones (new ones "
+                             "counts, the title and description, and the comments merged with "
+                             "the saved ones (new ones "
                              "added, edited ones updated, those YouTube no longer has kept "
                              "and marked 'not on YouTube on DD.MM.YYYY'); the copy's date stays")
     parser.add_argument("--load-json", action="store_true",
@@ -5942,7 +5996,8 @@ def main(argv=None) -> int:
                 info["formats"] = formats   # the list the video was chosen from
             info[VIDEO_KEY] = result
             if outcome.get("updating"):
-                note_update(info, video_added(result))
+                note_update(info, outcome["record"],
+                            video_added(result, outcome.get("previous") or {}))
             outcome["rebuild"]()
 
     if args.video_formats:

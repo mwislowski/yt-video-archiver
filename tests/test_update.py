@@ -99,15 +99,16 @@ def test_a_refused_translation_is_added(capsys, saved, youtube):
     assert list(transcript["missing"]) == ["de", "it"]
     assert transcript["missing"]["it"]["reason"] == ("YouTube offers no translation of this "
                                                      "transcript into 'it' (available: fr, pl)")
-    assert data[yt2html.UPDATES_KEY] == [{"date": dt.date.today().isoformat(),
-                                          "yt2html": yt2html.__version__,
-                                          "added": ["translation pl"]}]
+    record = dict(data[yt2html.UPDATES_KEY][0])
+    assert re.fullmatch(r"\d\d:\d\d", record.pop("time"))
+    assert record == {"date": dt.date.today().isoformat(), "yt2html": yt2html.__version__,
+                      "added": ["translation pl"]}
     # the rest stays as saved: comments, counts, the copy's date
     for key in ("comments", "view_count", "like_count", yt2html.ARCHIVED_KEY, "formats"):
         assert data.get(key) == before.get(key)
     html = page(saved.parent).read_text("utf-8")
-    assert row(html, "Downloaded").endswith(
-        f"; updated {TODAY} with yt2html {yt2html.__version__}: translation pl")
+    time = data[yt2html.UPDATES_KEY][0]["time"]
+    assert row(html, "Downloaded").endswith(f"; updated {TODAY} {time}")
     assert "Snapshot 05.11.2026" in html and 'class="transcript bilingual"' in html
     assert row(html, "Page built").endswith(f"from the saved data, with yt2html {yt2html.__version__}")
     # the same again: all there now, YouTube is not asked
@@ -260,26 +261,28 @@ def test_a_translation_that_comes_leaves_no_note(fake_ydl):
 
 
 def test_update_helpers():
-    assert yt2html.video_added({"video": {"date": "2000-01-01"}}) == []
     today = dt.date.today().isoformat()
+    assert yt2html.video_added({"video": {"date": "2000-01-01"}}, {}) == []
+    # downloaded earlier today, as the saved data say: not added again
+    there = {"file": "v.mp4", "date": today}
+    assert yt2html.video_added({"video": there}, {"video": there}) == []
     assert yt2html.video_added({
         "video": {"date": today},
         "extra_audio": [{"audio": "pl", "role": "dubbed", "date": today},
                         {"audio": "de", "role": None, "date": today},
                         {"audio": "fr", "role": None}],
         "subtitles": [{"code": "en", "kind": "author", "date": today},
-                      {"code": "pl", "kind": "translated"}]}) == [
+                      {"code": "pl", "kind": "translated"}]}, {}) == [
         "video", "extra audio pl (dubbed)", "extra audio de", "subtitles en (author)"]
-    info = {}
-    yt2html.note_update(info, [])
-    assert info == {}
-    yt2html.note_update(info, ["translation pl"])
-    yt2html.note_update(info, ["translation pl", "video"])      # the same day: one record
-    assert info[yt2html.UPDATES_KEY] == [{"date": today, "yt2html": yt2html.__version__,
-                                          "added": ["translation pl", "video"]}]
-    info[yt2html.UPDATES_KEY][0]["date"] = "2026-11-20"
-    yt2html.note_update(info, ["translation de"])
-    assert [u["date"] for u in info[yt2html.UPDATES_KEY]] == ["2026-11-20", today]
+    info, record = {}, {}
+    yt2html.note_update(info, record, [])
+    assert info == {} and record == {}                         # nothing happened: no entry
+    yt2html.note_update(info, record, ["translation pl"])
+    yt2html.note_update(info, record, ["translation pl", "video"])   # one run: one entry
+    assert info[yt2html.UPDATES_KEY] == [record]
+    assert record["added"] == ["translation pl", "video"] and record["date"] == today
+    yt2html.note_update(info, {}, [], refreshed=True)          # another run, the same day
+    assert [("refreshed" in u) for u in info[yt2html.UPDATES_KEY]] == [False, True]
     assert yt2html.missing_text({"reason": "r", "refused": False, "date": "2026-11-20"}) == "r"
     assert yt2html.missing_text({"reason": "r", "refused": True, "date": "2026-11-20"}) == "r, 20.11.2026"
 
@@ -312,6 +315,7 @@ def test_merge_comments():
     again, stats = yt2html.merge_comments(merged, [comment("N")], True, "2026-12-03")
     by_id = {c["id"]: c for c in again}
     assert by_id["A"][yt2html.MISSING_SINCE_KEY] == DAY and stats["gone"] == 4   # P, B, C, D
+    assert by_id["N"][yt2html.FIRST_SEEN_KEY] == DAY           # the day it first came stays
     assert by_id["C"][yt2html.MISSING_HISTORY_KEY] == [{"from": "2026-11-10", "until": DAY}]
     # gone before, still gone: nothing new; edits and history carried over
     once_more, stats = yt2html.merge_comments(
@@ -386,10 +390,13 @@ def test_refresh(capsys, saved, youtube, refreshed):
     by_id = {c["id"]: c for c in data["comments"]}
     assert len(by_id) == 8 and by_id["N1"]["text"] == "Edited"
     assert by_id["N2r2a"][yt2html.MISSING_SINCE_KEY] == dt.date.today().isoformat()
-    assert data[yt2html.UPDATES_KEY] == [{
-        "date": dt.date.today().isoformat(), "yt2html": yt2html.__version__,
-        "added": ["translation pl"], "refreshed": True,
-        "comments": {"new": 1, "gone": 1, "back": 0}}]
+    assert by_id["NEW"][yt2html.FIRST_SEEN_KEY] == dt.date.today().isoformat()
+    assert yt2html.FIRST_SEEN_KEY not in by_id["N1"]          # there from the first download
+    record, = data[yt2html.UPDATES_KEY]
+    time = record.pop("time")
+    assert record == {"date": dt.date.today().isoformat(), "yt2html": yt2html.__version__,
+                      "added": ["translation pl"], "refreshed": True,
+                      "comments": {"new": 1, "gone": 1, "back": 0}}
     html = page(saved.parent).read_text("utf-8")
     assert f'<span class="gone">not on YouTube on {TODAY}</span></div>' in html
     assert html.count('class="gone"') == 1
@@ -397,9 +404,7 @@ def test_refresh(capsys, saved, youtube, refreshed):
     assert note == (f"8 downloaded (YouTube shows 10): 5 threads, 3 replies · 1 no longer on "
                     f"YouTube · oldest first · comment dates are relative to {TODAY}")
     assert row(html, "Comments").endswith("; complete; 1 no longer on YouTube")
-    assert row(html, "Downloaded").endswith(
-        f"; refreshed {TODAY} with yt2html {yt2html.__version__}: comments (1 new, 1 no longer "
-        "on YouTube), counts, translation pl")
+    assert row(html, "Downloaded").endswith(f"; refreshed {TODAY} {time}")
     assert ('<div class="value">05.11.2026</div><div class="label">Snapshot</div></div>'
             f'<div class="fact extra"><div class="value">{TODAY}</div>'
             '<div class="label">Refreshed</div>') in html
@@ -408,6 +413,12 @@ def test_refresh(capsys, saved, youtube, refreshed):
     run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent), "--no-snapshot")
     html = page(saved.parent).read_text("utf-8")
     assert '"label">Snapshot<' not in html and '"label">Refreshed<' not in html
+    # refreshed the day of the download: no second tile with the same date
+    data[yt2html.ARCHIVED_KEY] = dt.date.today().isoformat()
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent))
+    html = page(saved.parent).read_text("utf-8")
+    assert '"label">Snapshot<' in html and '"label">Refreshed<' not in html
 
 
 def test_refresh_without_comments_now(capsys, saved, youtube, refreshed, monkeypatch, info):
@@ -418,11 +429,9 @@ def test_refresh_without_comments_now(capsys, saved, youtube, refreshed, monkeyp
     data = json.loads(saved.read_text("utf-8"))
     assert code == 0 and "Nothing to add" not in out
     assert len(data["comments"]) == 7 and data["view_count"] == 5
-    assert data[yt2html.UPDATES_KEY][-1] == {"date": dt.date.today().isoformat(),
-                                             "yt2html": yt2html.__version__, "added": [],
-                                             "refreshed": True}
+    record = data[yt2html.UPDATES_KEY][-1]
+    assert record["added"] == [] and record["refreshed"] and "comments" not in record
     html = page(saved.parent).read_text("utf-8")
-    assert row(html, "Downloaded").endswith(f"with yt2html {yt2html.__version__}: counts")
     # the comment times still count from the download day
     assert "comment dates are relative to 05.11.2026" in html
 
@@ -442,10 +451,81 @@ def test_refresh_without_saved_data(capsys, tmp_path, youtube, info, monkeypatch
     assert page(tmp_path).with_suffix(".info.json").exists()
 
 
-def test_comments_change_text():
-    assert yt2html.comments_change({"new": 0, "gone": 0, "back": 0}) == "comments (no changes)"
-    assert yt2html.comments_change({"new": 2, "gone": 0, "back": 1}) == (
-        "comments (2 new, 1 back on YouTube)")
+def test_downloaded_names_the_runs(info):
+    info[yt2html.UPDATES_KEY] = [
+        {"date": "2026-11-20", "time": "10:12", "added": ["translation pl"]},
+        {"date": "2026-12-03", "time": "18:40", "added": [], "refreshed": True,
+         "comments": {"new": 2, "gone": 1, "back": 0}}]
+    assert yt2html.about_downloaded(info, dt.date(2026, 11, 5)).endswith(
+        "; updated 20.11.2026 10:12; refreshed 03.12.2026 18:40")
+
+
+def test_comments_turned_off_after_the_download(capsys, saved, youtube, monkeypatch, info):
+    def turned_off(source, args):
+        return {**json.loads(json.dumps(info)), "comments": None,
+                yt2html.COMMENTS_MESSAGE_KEY: "Comments are turned off."}
+    monkeypatch.setattr(yt2html, "fetch_info", turned_off)
+    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")[0] == 0
+    data = json.loads(saved.read_text("utf-8"))
+    today = dt.date.today().isoformat()
+    assert len(data["comments"]) == 7          # kept, none marked as gone
+    assert data[yt2html.COMMENTS_CLOSED_KEY] == [{"from": today, "turned_off": True}]
+    assert not any(c.get(yt2html.MISSING_SINCE_KEY) for c in data["comments"])
+    html = page(saved.parent).read_text("utf-8")
+    assert (f'<div class="note closed">As of {TODAY}, comments on this video are turned off on '
+            "YouTube; the ones below can no longer be seen there.</div>") in html
+    assert row(html, "Comments").endswith(f"; turned off on YouTube as of {TODAY}")
+    # still off at the next refresh: the first day stays
+    data[yt2html.COMMENTS_CLOSED_KEY][0]["from"] = "2026-11-20"
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    data = json.loads(saved.read_text("utf-8"))
+    assert data[yt2html.COMMENTS_CLOSED_KEY] == [{"from": "2026-11-20", "turned_off": True}]
+    # on again: the note goes, the data keep when they were off
+    monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: json.loads(json.dumps(info)))
+    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    data = json.loads(saved.read_text("utf-8"))
+    assert data[yt2html.COMMENTS_CLOSED_KEY] == [
+        {"from": "2026-11-20", "turned_off": True, "until": today}]
+    html = page(saved.parent).read_text("utf-8")
+    assert "can no longer be seen there" not in html and "as of" not in row(html, "Comments")
+    # off once more: a new entry
+    monkeypatch.setattr(yt2html, "fetch_info", turned_off)
+    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    closed = json.loads(saved.read_text("utf-8"))[yt2html.COMMENTS_CLOSED_KEY]
+    assert closed[-1] == {"from": today, "turned_off": True} and len(closed) == 2
+
+
+def test_comments_no_longer_shown_and_nothing_to_close(info):
+    fresh = {"comments": None}
+    yt2html.refresh_saved(info, fresh)
+    assert info[yt2html.COMMENTS_CLOSED_KEY][0]["turned_off"] is False
+    note = yt2html.closed_note(info[yt2html.COMMENTS_CLOSED_KEY][0])
+    assert note.endswith("YouTube no longer shows comments on this video; the ones below can "
+                         "no longer be seen there.") and note.startswith("As of ")
+    assert "; no longer shown on YouTube as of " in yt2html.about_comments(info)
+    # saved without comments: nothing to note
+    bare = {"comments": None}
+    yt2html.refresh_saved(bare, fresh)
+    assert yt2html.COMMENTS_CLOSED_KEY not in bare
+    # --no-comments now (no list at all): nothing either
+    other = {"comments": [comment("A")]}
+    yt2html.refresh_saved(other, {})
+    assert yt2html.COMMENTS_CLOSED_KEY not in other
+
+
+def test_refresh_title_description_and_markers(info):
+    old_title, old_description = info["title"], info["description"]
+    fresh = {"title": "New title", "description": old_description, "comments": None,
+             yt2html.MARKERS_KEY: []}
+    yt2html.refresh_saved(info, fresh)
+    assert info["title"] == "New title" and info[yt2html.MARKERS_KEY] == []
+    assert info[yt2html.PREVIOUS_KEY] == [{"until": dt.date.today().isoformat(), "title": old_title}]
+    yt2html.refresh_saved(info, {"description": "New text", yt2html.MARKERS_KEY: None})
+    assert info["description"] == "New text" and info[yt2html.MARKERS_KEY] == []   # not read: kept
+    assert info[yt2html.PREVIOUS_KEY][-1] == {"until": dt.date.today().isoformat(),
+                                              "description": old_description}
+    assert info["title"] == "New title"                       # not in the fresh data: kept
 
 
 def test_refresh_sources_as_for_update(capsys, saved, youtube, refreshed, tmp_path):
