@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-15
+
 ### Added
 
 - `--refresh-json`: as `--update-json`, and also refreshes what changes over time: the counts (views, likes, subscribers, YouTube's comment count), the title, the description and the timestamp lists (the earlier title and description kept in the data), and the comments, merged with the saved ones by their id. New comments are added, the others taken as they are now (an earlier text stays in the data), and those YouTube no longer sends stay with a grey tag `not on YouTube on DD.MM.YYYY` (only after a complete download of the comments; one that comes back loses it, the data keep when it was missing). Comments turned off on YouTube after the download stay too, with a note above them (`As of 03.12.2026, comments on this video are turned off on YouTube; the ones below can no longer be seen there.`). The comments line and *About this copy* count the missing ones; *Downloaded* names each refresh (`refreshed 03.12.2026 18:40`); a grey *Refreshed* tile with the last refresh stands next to *Snapshot* when it is another day. The copy's date stays.
@@ -157,7 +159,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.7.1...v0.8.0
