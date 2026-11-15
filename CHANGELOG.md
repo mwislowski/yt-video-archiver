@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-15
+
 ### Fixed
 
 - `--update-json` or `--refresh-json` with `--no-cards` and `--video` removed the info cards from the saved data (the data are saved again after the files); `--no-cards` now leaves out the cards only on the page, like `--max-comments` and `--no-comments`, and their images are not downloaded.
@@ -168,7 +170,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.8.0...v0.9.0
