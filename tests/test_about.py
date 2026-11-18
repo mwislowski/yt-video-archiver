@@ -91,7 +91,8 @@ def test_playlist_context_is_the_playlist_used(tmp_path, monkeypatch, info):
     playlist = "https://www.youtube.com/playlist?list=PLtest1234567890"
     entries = [{"_type": "url", "id": f"TESTVIDEO0{n}", "title": f"Episode {n}",
                 "url": f"https://www.youtube.com/watch?v=TESTVIDEO0{n}"} for n in (1, 2, 3)]
-    monkeypatch.setattr(yt2html, "fetch_playlist", lambda source, args: ("Test playlist", entries))
+    monkeypatch.setattr(yt2html, "fetch_playlist", lambda source, args: {"title": "Test playlist",
+                                                                  "entries": entries})
     monkeypatch.setattr(yt2html, "fetch_info",
                         lambda source, args: {**info, "id": yt2html.video_id_from_url(source)})
     assert yt2html.main([playlist, "-o", str(tmp_path), "--write-json"]) == 0
@@ -1206,12 +1207,12 @@ def test_video_formats_option_excludes_page_options(capsys):
         yt2html.main(["u", "--video-formats", "--theme", "dark", "--no-cards"])
     assert ("--video-formats makes no page, so it cannot be used with --no-cards, --theme"
             in capsys.readouterr().err)
-    for option in (["--overwrite"], ["--index"], ["--index-only"], ["--write-json"],
+    for option in (["--overwrite"], ["--index", "a.txt"], ["--index-only", "a.txt"], ["--write-json"],
                    ["--no-comments"], ["--max-comments", "5"], ["--no-avatars"],
                    ["--transcript", "timestamps"], ["--no-snapshot"]):
         with pytest.raises(SystemExit):
             yt2html.parse_args(["u", "--video-formats", *option])
-        assert option[0] in capsys.readouterr().err
+        assert f"cannot be used with {option[0]}" in capsys.readouterr().err
     assert yt2html.parse_args(["u", "--video-formats", "--cookies", "firefox", "-o", "x"])
 
 

@@ -26,7 +26,6 @@ import base64
 import datetime as dt
 import glob
 import html
-import html.parser
 import json
 import os
 import random
@@ -1657,6 +1656,7 @@ CSS = """
   --accent:#0e8f85; --on-accent:#fff; --accent-text:#3cc8b4;
   --accent-soft:rgba(14,143,133,.28); --hover:brightness(1.15);
   --planned:#9cc3e8; --chosen:#ffd54a; --audio:#6d5bd0;
+  --badge-bg:rgba(0,0,0,.8); --badge-fg:#fff;
   --player-w:clamp(320px,40vw,720px);
   color-scheme:dark;
 }
@@ -1803,24 +1803,6 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 }
 .footer{color:var(--muted);font-size:12px;margin-top:32px;padding-top:12px;
   border-top:1px solid var(--line)}
-/* Index of a playlist or a list file: a table without visible lines */
-.page.index{max-width:960px}
-.index-meta{color:var(--muted);font-size:12px;line-height:18px;margin-top:4px}
-.index-section{margin-top:20px}
-.index-section h2{font-size:16px;line-height:22px;font-weight:700;margin:0 0 4px;
-  overflow-wrap:anywhere}
-.index-section h2 a{color:var(--text)}
-.index-table{border-collapse:collapse;width:100%}
-.index-table td{padding:6px 16px 6px 0;vertical-align:top}
-.index-table td:last-child{padding-right:0}
-.index-table .pos{width:1%;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
-.index-table .name{overflow-wrap:anywhere}
-.index-table .name a{color:var(--text);font-weight:600}
-.index-table .sub{color:var(--muted);font-size:12px;line-height:18px}
-.index-table .date{width:1%;white-space:nowrap;font-variant-numeric:tabular-nums}
-.index-table .yt{width:1%;white-space:nowrap}
-.index-table .missing .name,.index-table .reason{color:var(--muted)}
-.index-table .reason[title]{cursor:help}
 /* Local video player (shown by the script only when a video file is next to
    the page): turquoise Player tile, player pinned on the left, page on the right */
 .fact.play{display:none;border:0;cursor:pointer;text-align:left;font:inherit;
@@ -1913,6 +1895,7 @@ LIGHT_VARIABLES = """
   --tag-bg:#5f5f5f; --tag-fg:#ececec; --warn-bg:#edd9d9; --warn-fg:#7d4c4c;
   --accent:#0f766e; --accent-text:#0f766e; --accent-soft:rgba(15,118,110,.16);
   --hover:brightness(.92); --planned:#2f6a9e; --chosen:#9a6700; --audio:#5b47c4;
+  --badge-bg:rgba(0,0,0,.8); --badge-fg:#fff;
   color-scheme:light;
 """
 
@@ -4274,338 +4257,26 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
 
 
 # --------------------------------------------------------------------------
-# Index of a playlist or a list file (--index, --index-only)
+# Playlists and what a run learns about them
 # --------------------------------------------------------------------------
 #
-# The index is always built from the list (playlist entries or the lines of
-# the list file) and the pages in the output folder, never from a log: pages
-# are found by "[VIDEO_ID].html", so renamed pages keep their links, and the
-# original titles come from the pages' metadata. The list itself is kept in
-# the index (data-* attributes), so --index-only can rebuild it offline.
+# The index of a list file (--index FILE, --index-only FILE) is made by the
+# module yt2html_index.
 
 class Run:
-    """What this run learned: playlists read, videos tried, failures."""
+    """What this run learned: the playlists read (for "About this copy" of
+    their videos and for the index)."""
 
     def __init__(self):
-        self.playlists: dict[str, dict] = {}  # playlist id -> section
-        self.attempted: set[str] = set()      # video ids tried in this run
-        self.failures: dict[str, str] = {}    # video id -> short reason
-
-
-UNAVAILABLE_TITLES = {"[Private video]", "[Deleted video]"}
-
-
-def playlist_entry(entry: dict) -> dict | None:
-    """One flat playlist entry as an index entry; None if it is no video."""
-    video_id = entry_video_id(entry)
-    if not video_id:
-        return None
-    title = entry.get("title") or ""
-    return {"id": video_id, "url": f"{YOUTUBE}/watch?v={video_id}", "title": title,
-            "unavailable": title in UNAVAILABLE_TITLES or entry.get("availability") == "private",
-            "status": "", "reason": ""}
+        self.playlists: dict[str, dict] = {}  # playlist id -> its list (read_playlist())
 
 
 def failure_reason(error: Exception) -> str:
-    """A short reason for the index, e.g. "Private video. Sign in ..."."""
+    """A short reason, e.g. "Private video. Sign in ..."."""
     text = str(error).strip()
     text = re.sub(r"^ERROR:\s*", "", text)
     text = re.sub(r"^\[[^\]]+\]\s*[\w-]+:\s*", "", text)  # "[youtube] VIDEO_ID: "
     return (text.splitlines() or ["unknown error"])[0][:300]
-
-
-class IndexReader(html.parser.HTMLParser):
-    """The list kept in an index page: sections with their entries."""
-
-    def __init__(self):
-        super().__init__()
-        self.sections = []
-
-    def handle_starttag(self, tag, attrs):
-        data = {name: value or "" for name, value in attrs}
-        if tag == "section" and "data-section" in data:
-            self.sections.append({
-                "playlist_id": data.get("data-playlist-id", ""),
-                "title": data.get("data-title", ""), "url": data.get("data-url", ""),
-                "fetched": data.get("data-fetched", ""),
-                "unread": data.get("data-unread") == "1", "entries": []})
-        elif tag == "tr" and "data-url" in data and self.sections:
-            status = data.get("data-status", "")
-            self.sections[-1]["entries"].append({
-                "id": data.get("data-id", ""), "url": data["data-url"],
-                "title": data.get("data-title", ""), "unavailable": status == "unavailable",
-                "status": status, "reason": data.get("data-reason", "")})
-
-
-def read_index(path: Path | None) -> list[dict]:
-    """Sections of an earlier index ([] if there is none or it is unreadable)."""
-    if not path or not path.is_file():
-        return []
-    reader = IndexReader()
-    try:
-        reader.feed(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return []
-    return reader.sections
-
-
-def entry_status(entry: dict, page: Path | None, run: Run) -> tuple[str, str]:
-    """(status, reason) of one index entry: archived, unavailable, failed,
-    not-a-video or pending. A reason from an earlier run is kept as long as
-    the video has no page and was not tried again."""
-    video_id = entry.get("id")
-    if page:
-        return "archived", ""
-    if not video_id:
-        return "not-a-video", entry.get("reason") or ""
-    reason = run.failures.get(video_id, "")
-    if entry.get("unavailable"):
-        return "unavailable", reason or entry.get("reason") or ""
-    if video_id in run.failures:
-        return "failed", reason
-    if video_id not in run.attempted and entry.get("status") in ("failed", "unavailable"):
-        return entry["status"], entry.get("reason") or ""
-    return "pending", ""
-
-
-STATUS_TEXT = {"unavailable": "Unavailable", "failed": "Failed",
-               "not-a-video": "Not a video", "pending": "Not archived yet"}
-
-
-def comments_summary(meta: dict[str, str]) -> str:
-    """The small line under a title: how many comments, and whether all."""
-    status = meta.get("yt2html:comments-status")
-    if status == "not-downloaded":
-        return "Comments not downloaded"
-    if status in ("turned-off", "unavailable"):
-        return "Comments " + status.replace("-", " ")
-    try:
-        count = int(meta.get("yt2html:comments-downloaded") or 0)
-    except ValueError:
-        return ""
-    on_youtube = meta.get("yt2html:comments-youtube") or ""
-    noun = "comment" if count == 1 else "comments"
-    if status == "complete":
-        shown = f" (YouTube: {on_youtube})" if on_youtube and on_youtube != format_int(count) else ""
-        return f"{format_int(count)} {noun} · complete{shown}"
-    if status in ("limited", "interrupted"):
-        of = f" of {on_youtube}" if on_youtube else ""
-        return f"{format_int(count)}{of} comments · {status}"
-    return ""
-
-
-def render_index_rows(entries: list[dict], output_dir: Path, run: Run,
-                      first: int = 1) -> tuple[list[str], int, int]:
-    """Table rows of one section, numbered from `first`, the number of
-    entries with a page and the number of videos (entries that are videos)."""
-    rows, archived, videos = [], 0, 0
-    for position, entry in enumerate(entries, first):
-        videos += bool(entry.get("id"))
-        page = existing_page(output_dir, entry.get("id"))
-        meta = read_page_metadata(page) if page else {}
-        status, reason = entry_status(entry, page, run)
-        title = meta.get("yt2html:title") or entry.get("title") or ""
-        data = {"data-id": entry.get("id") or "", "data-url": entry["url"],
-                "data-title": title, "data-status": status, "data-reason": reason}
-        attributes = " ".join(f'{name}="{esc(value)}"' for name, value in data.items() if value
-                              or name == "data-url")
-        shown_title = esc(title or entry["url"])
-        if page:
-            archived += 1
-            name = (f'<a href="{esc(urllib.parse.quote(page.name))}">{shown_title}</a>'
-                    + (f'<div class="sub">{esc(comments_summary(meta))}</div>'
-                       if comments_summary(meta) else ""))
-            try:
-                when = dt.date.fromisoformat((meta.get("yt2html:archived") or "")[:10]).strftime(DATE_FORMAT)
-            except ValueError:
-                when = ""
-            date = f'<td class="date">{when}</td>'
-            row_class = "item"
-        else:
-            name = shown_title
-            hint = f' title="{esc(reason)}"' if reason else ""
-            date = f'<td class="date reason"{hint}>{STATUS_TEXT[status]}</td>'
-            row_class = "item missing"
-        host = urllib.parse.urlsplit(entry["url"]).netloc
-        youtube = (link(entry["url"], "YouTube" if "youtu" in host else "Link")
-                   if entry["url"].startswith("http") else "")
-        rows.append(f'<tr class="{row_class}" {attributes}><td class="pos">{position}</td>'
-                    f'<td class="name">{name}</td>{date}<td class="yt">{youtube}</td></tr>')
-    return rows, archived, videos
-
-
-def render_index(title: str, url: str | None, sections: list[dict], output_dir: Path,
-                 run: Run, kind: str, theme: str = "auto",
-                 today: dt.date | None = None) -> tuple[str, int, int]:
-    """The index page and its counts (entries with a page, all entries).
-
-    A playlist index has one section and no section heading; a list file's
-    index has a section per playlist in it (with a heading) and one for each
-    run of plain video URLs between them. Playlist rows are numbered by
-    their position in the playlist, the other rows continuously."""
-    today = today or dt.date.today()
-    body, archived, total, plain = [], 0, 0, 1
-    for section in sections:
-        in_playlist = bool(section.get("playlist_id"))
-        rows, done, videos = render_index_rows(section["entries"], output_dir, run,
-                                               1 if in_playlist else plain)
-        if not in_playlist:
-            plain += len(rows)
-        archived, total = archived + done, total + videos
-        data = {"data-section": "1", "data-playlist-id": section.get("playlist_id") or "",
-                "data-title": section.get("title") or "", "data-url": section.get("url") or "",
-                "data-fetched": section.get("fetched") or "",
-                "data-unread": "1" if section.get("unread") else ""}
-        attributes = " ".join(f'{name}="{esc(value)}"' for name, value in data.items()
-                              if value or name == "data-section")
-        part = [f'<section class="index-section" {attributes}>']
-        if kind == "list" and section.get("playlist_id"):
-            heading = link(section["url"], section.get("title") or section["url"])
-            note = ("not read yet" if section.get("unread")
-                    else f"playlist · {plural(len(rows), 'video')}")
-            part.append(f'<h2>{heading}{note_html(note)}</h2>')
-        if rows:
-            part.append('<table class="index-table"><tbody>')
-            part.extend(rows)
-            part.append("</tbody></table>")
-        part.append("</section>")
-        body.extend(part)
-    heading = link(url, title) if url else esc(title)
-    updated = today.strftime(DATE_FORMAT)
-    page = "\n".join([
-        "<!DOCTYPE html>",
-        '<html lang="en">',
-        "<head>",
-        '<meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f'<meta name="generator" content="yt2html {__version__} (yt-video-archiver)">',
-        f'<meta name="yt2html:index" content="{esc(kind)}">',
-        f"<title>{esc(title)}</title>",
-        f'<meta name="color-scheme" content="{COLOR_SCHEMES.get(theme, "dark")}">',
-        f"<style>{CSS}\n{theme_css(theme)}\n</style>",
-        "</head>",
-        "<body>",
-        '<main class="page index">',
-        f'<h1 class="title">{heading}</h1>',
-        f'<div class="index-meta">{archived} of {plural(total, "video")} archived · '
-        f'Updated {updated}</div>',
-        *body,
-        f'<footer class="footer">Index made with yt2html on {updated}.</footer>',
-        "</main>",
-        "</body>",
-        "</html>",
-        "",
-    ])
-    return page, archived, total
-
-
-def with_earlier_status(section: dict, earlier: list[dict]) -> dict:
-    """The section with the status and reason each video had in the earlier
-    index, so a reason survives runs in which the video is not tried again."""
-    old = {e["id"]: e for s in earlier for e in s["entries"] if e.get("id")}
-    entries = []
-    for entry in section["entries"]:
-        previous = old.get(entry["id"], {})
-        entries.append({**entry, "status": entry.get("status") or previous.get("status", ""),
-                        "reason": entry.get("reason") or previous.get("reason", "")})
-    return {**section, "entries": entries}
-
-
-def playlist_section(playlist_id: str, args: argparse.Namespace, run: Run,
-                     earlier: list[dict]) -> dict:
-    """A playlist's section: read in this run, else from an earlier index;
-    with --index-only and no earlier index, the list is read from YouTube
-    (only the list, no video). Unread playlists get an empty section."""
-    if playlist_id in run.playlists:
-        return with_earlier_status(run.playlists[playlist_id], earlier)
-    for section in earlier:
-        if section.get("playlist_id") == playlist_id and not section.get("unread"):
-            return section
-    url = f"{YOUTUBE}/playlist?list={playlist_id}"
-    if args.index_only:
-        try:
-            read_playlist(url, args, run)
-            return with_earlier_status(run.playlists[playlist_id], earlier)
-        except Exception as error:
-            log(f"FAILED: {url}: {failure_reason(error)}")
-    return {"playlist_id": playlist_id, "title": "", "url": url, "fetched": "",
-            "unread": True, "entries": []}
-
-
-def list_file_sections(lines: list[str], args: argparse.Namespace, run: Run,
-                       earlier: list[dict]) -> list[dict]:
-    """Sections of a list file's index, in the order of its lines: one per
-    playlist, one per run of other lines. A video listed twice (also in
-    another URL form) appears once."""
-    known = {entry["id"] or entry["url"]: entry
-             for section in earlier if not section.get("playlist_id")
-             for entry in section["entries"]}
-    sections, current, seen = [], None, set()
-    for line in lines:
-        playlist_id = playlist_id_from_url(line)
-        if playlist_id:
-            if playlist_id not in seen:
-                seen.add(playlist_id)
-                sections.append(playlist_section(playlist_id, args, run, earlier))
-            current = None
-            continue
-        video_id = source_video_id(line)
-        key = video_id or line
-        if key in seen:
-            continue
-        seen.add(key)
-        if current is None:
-            current = {"playlist_id": "", "title": "", "url": "", "fetched": "", "entries": []}
-            sections.append(current)
-        previous = known.get(key, {})
-        reason = "" if video_id else ("a channel URL" if is_channel_url(line)
-                                      else "not a YouTube video URL")
-        current["entries"].append({
-            "id": video_id or "", "url": f"{YOUTUBE}/watch?v={video_id}" if video_id else line,
-            "title": previous.get("title", ""), "unavailable": False,
-            "status": previous.get("status", ""), "reason": previous.get("reason") or reason})
-    return sections
-
-
-def write_index(path: Path, title: str, url: str | None, sections: list[dict],
-                kind: str, args: argparse.Namespace, run: Run) -> None:
-    page, archived, total = render_index(title, url, sections, Path(args.output_dir), run,
-                                         kind, args.theme)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomically(path, page)
-    log(f"Saved index: {path} ({archived} of {plural(total, 'video')} archived)")
-
-
-def write_indexes(args: argparse.Namespace, run: Run) -> int:
-    """Write the index of each playlist given in the command and of each
-    list file; returns the number of indexes that could not be written."""
-    output_dir = Path(args.output_dir)
-    failed = 0
-    for source in args.command_sources:
-        playlist_id = playlist_id_from_url(source)
-        if not playlist_id:
-            continue
-        try:
-            found = existing_page(output_dir, playlist_id)
-            section = playlist_section(playlist_id, args, run, read_index(found))
-            if section.get("unread"):
-                log(f"No index for {source}: the playlist could not be read.")
-                continue
-            title = section.get("title") or playlist_id
-            path = found or output_path({"title": title, "id": playlist_id}, output_dir)
-            write_index(path, title, section["url"], [section], "playlist", args, run)
-        except Exception as error:
-            failed += 1
-            log(f"FAILED: index for {source}: {error}")
-    for list_file, lines in args.batch_lines.items():
-        try:
-            path = output_dir / (Path(list_file).stem + ".html")
-            sections = list_file_sections(lines, args, run, read_index(path))
-            write_index(path, Path(list_file).name, None, sections, "list", args, run)
-        except Exception as error:
-            failed += 1
-            log(f"FAILED: index for {list_file}: {error}")
-    return failed
 
 
 # --------------------------------------------------------------------------
@@ -4724,9 +4395,10 @@ def entry_video_id(entry: dict) -> str | None:
     return video_id_from_url(entry.get("url") or "")
 
 
-def fetch_playlist(url: str, args: argparse.Namespace) -> tuple[str, list[dict]]:
-    """Title and flat entries of a playlist: only the list of its videos, in
-    playlist order, none of them extracted (one request per ~100 videos)."""
+def fetch_playlist(url: str, args: argparse.Namespace) -> dict:
+    """A playlist's data (title, channel, description, playlist_count, ...)
+    with its flat entries: only the list of its videos, in playlist order,
+    none of them extracted (one request per ~100 videos)."""
     opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True}
     if args.cookies_from_browser:
         opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
@@ -4741,19 +4413,25 @@ def fetch_playlist(url: str, args: argparse.Namespace) -> tuple[str, list[dict]]
                                     ie_key=info.get("ie_key"))
         if info.get("_type") != "playlist":
             raise ValueError("this URL does not lead to a playlist")
-        entries = list(info.get("entries") or [])
-    return info.get("title") or info.get("id") or url, entries
+        return {**info, "entries": list(info.get("entries") or [])}
 
 
 def read_playlist(source: str, args: argparse.Namespace, run: Run) -> dict:
-    """Read a playlist's list (no video) and keep it in `run` for the index."""
+    """Read a playlist's list (no video) and keep it in `run`: its id,
+    title, address, channel (with the link the video pages use), count as
+    YouTube gives it (unavailable videos included), description and the
+    videos ({"id", "url"}, in playlist order, also twice if listed twice)."""
     log(f"Fetching playlist {source}")
-    title, entries = fetch_playlist(source, args)
+    info = fetch_playlist(source, args)
     playlist_id = playlist_id_from_url(source) or source
-    section = {"playlist_id": playlist_id, "title": title,
+    ids = [video_id for video_id in map(entry_video_id, info["entries"]) if video_id]
+    section = {"playlist_id": playlist_id, "title": info.get("title") or playlist_id,
                "url": f"{YOUTUBE}/playlist?list={playlist_id}",
-               "fetched": dt.date.today().isoformat(), "unread": False,
-               "entries": [e for e in map(playlist_entry, entries) if e]}
+               "channel": info.get("channel") or info.get("uploader"),
+               "channel_url": info.get("uploader_url") or info.get("channel_url"),
+               "count": info.get("playlist_count"), "description": info.get("description"),
+               "entries": [{"id": video_id, "url": f"{YOUTUBE}/watch?v={video_id}"}
+                           for video_id in ids]}
     run.playlists[playlist_id] = section
     return section
 
@@ -5825,27 +5503,6 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
-def read_batch_file(path: str) -> list[str]:
-    """The sources listed in a --batch-file, one per line.
-
-    Spaces around a line, blank lines and lines starting with "#" (comments)
-    are ignored; a UTF-8 byte order mark, as some Windows editors write it,
-    is accepted. Raises ValueError if the file cannot be read or lists
-    nothing. The file is only read, never changed.
-    """
-    try:
-        text = Path(path).read_text(encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        raise ValueError(f"batch file '{path}' is not UTF-8 text") from None
-    except OSError as error:
-        raise ValueError(f"cannot read batch file '{path}': {error.strerror or error}") from None
-    lines = [line.strip() for line in text.splitlines()]
-    sources = [line for line in lines if line and not line.startswith("#")]
-    if not sources:
-        raise ValueError(f"batch file '{path}' contains no URLs")
-    return sources
-
-
 def has_wildcards(text: str) -> bool:
     return "*" in text or "?" in text
 
@@ -5890,13 +5547,11 @@ def update_source(source: str) -> str:
 
 
 def collect_sources(args: argparse.Namespace) -> list[str]:
-    """Sources from the command line, then from each --batch-file in order,
-    each video only once.
+    """The sources given in the command, each video only once.
 
     Two URLs are the same video if they have the same video id (e.g.
     youtu.be/ID and watch?v=ID); anything else (playlist URLs, .info.json
-    paths) must match exactly. Raises ValueError if there is nothing to do
-    or a batch file cannot be used.
+    paths) must match exactly. Raises ValueError if there is nothing to do.
     """
     what = "file" if args.load_json else "URL"
     seen = set()
@@ -5916,30 +5571,23 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
         seen.add(key)
         return True
 
-    args.command_sources = list(args.sources)
-    args.batch_lines = {}
     sources = [source for source in args.sources if new(source)]
     if len(sources) < len(args.sources):
         log(f"Ignored {plural(len(args.sources) - len(sources), 'duplicate ' + what)} "
             f"given on the command line.")
-    for path in args.batch_file:
-        listed = read_batch_file(path)
-        if args.load_json:
-            listed = [found for source in listed for found in expand_pattern(source)]
-        elif args.update_json or args.refresh_json:
-            listed = [update_source(found) for source in listed
-                      for found in (expand_pattern(source) if "://" not in source else [source])]
-        else:
-            listed = [source_from_page_name(source) for source in listed]
-        args.batch_lines[path] = listed
-        added = [source for source in listed if new(source)]
-        duplicates = len(listed) - len(added)
-        note = f" ({plural(duplicates, 'duplicate')} ignored)" if duplicates else ""
-        log(f"Read {plural(len(listed), what)} from {path}{note}.")
-        sources += added
     if not sources:
-        raise ValueError("give at least one URL or a batch file (-a FILE)")
+        raise ValueError("give at least one URL, or a list file with --index FILE")
     return sources
+
+
+# Options --index-only refuses: they download or shape the video pages,
+# and it only makes the index from what is in the folder.
+INDEX_ONLY_REFUSES = (("--video", "video"), ("--transcript", "transcript"),
+                      ("--write-json", "write_json"), ("--update-json", "update_json"),
+                      ("--refresh-json", "refresh_json"), ("--load-json", "load_json"),
+                      ("--overwrite", "overwrite"), ("--no-comments", "no_comments"),
+                      ("--max-comments", "max_comments"), ("--no-cards", "no_cards"),
+                      ("--no-avatars", "no_avatars"), ("--no-snapshot", "no_snapshot"))
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -5951,16 +5599,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__} (yt-dlp {yt_dlp.version.__version__})")
     parser.add_argument("sources", nargs="*", metavar="URL",
-                        help="video or playlist URL(s) or id(s), or the name of a page or "
-                             "index made by yt2html ('Title [ID].html'); a playlist archives "
-                             "all its videos. With --load-json: .info.json file(s), also as patterns "
+                        help="video or playlist URL(s) or id(s), or the name of a page "
+                             "made by yt2html ('Title [ID].html'); a playlist archives all its "
+                             "videos. With --load-json: .info.json file(s), also as patterns "
                              "with * or ?, or video id(s) or page names, looked up in the "
-                             "output folder (-o)")
-    parser.add_argument("-a", "--batch-file", action="append", default=[], metavar="FILE",
-                        help="also read URLs (with --load-json: .info.json paths) from a "
-                             "UTF-8 text file, one per line; blank lines and lines starting "
-                             "with '#' are ignored. Can be given several times. A video "
-                             "listed more than once is archived once")
+                             "output folder (-o). Not with --index / --index-only (the videos "
+                             "then come from the list file)")
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
                         help="folder for the generated pages (default: the current folder)")
     parser.add_argument("--no-comments", action="store_true",
@@ -6007,15 +5651,21 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="make the page again even if the video already has one in the "
                              "output folder (recognised by '[VIDEO_ID].html' at the end of the "
                              "file name; such videos are skipped by default)")
-    parser.add_argument("--index", action="store_true",
-                        help="also make an index page for each playlist URL and each list "
-                             "file (-a): every video with a link to its page (found by "
-                             "'[VIDEO_ID].html', so renamed pages keep working), its date and "
-                             "comments, and the reason for videos without a page")
-    parser.add_argument("--index-only", action="store_true",
-                        help="only rebuild the index pages from the pages in the output "
-                             "folder, without downloading videos (the list comes from the "
-                             "earlier index; without one, only the playlist's list is read)")
+    parser.add_argument("--index", metavar="FILE",
+                        help="archive the videos of a list file (UTF-8 text: video and "
+                             "playlist addresses or ids, page names, video files of your own; "
+                             "a '# Title', '## Chapter' to '#### Chapter', '> notes', "
+                             "'= Title' above a line, '// comments', '!no-numbers', "
+                             "'!no-thumbnails') and make its index page in the output folder, "
+                             "named after the file ('series.txt' -> 'series.html'): built from "
+                             "the pages and video files in the folder; playlists are read from "
+                             "YouTube each time (the index keeps their lists for when YouTube "
+                             "cannot be reached). With --load-json, --update-json or "
+                             "--refresh-json: those, then the index")
+    parser.add_argument("--index-only", metavar="FILE",
+                        help="only make the index page of a list file from what is in the "
+                             "output folder, downloading nothing (playlists: only their lists "
+                             "are read); not with options that download or shape the pages")
     parser.add_argument("--video", nargs="?", const="", type=video_spec, metavar="PARAMETERS",
                         help="also download the video itself, after its page, as an mp4 "
                              "named like the page (needs ffmpeg): the best quality up to "
@@ -6057,8 +5707,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.video_formats:
         used = [name for name, on in (
-            ("--overwrite", args.overwrite), ("--index", args.index),
-            ("--index-only", args.index_only), ("--write-json", args.write_json),
+            ("--overwrite", args.overwrite), ("--index", args.index is not None),
+            ("--index-only", args.index_only is not None), ("--write-json", args.write_json),
             ("--update-json", args.update_json), ("--refresh-json", args.refresh_json),
             ("--no-comments", args.no_comments), ("--max-comments", args.max_comments is not None),
             ("--no-cards", args.no_cards), ("--no-avatars", args.no_avatars),
@@ -6083,54 +5733,60 @@ def parse_args(argv=None) -> argparse.Namespace:
     if args.video is not None and args.load_json:
         parser.error("--video needs YouTube, so it cannot be used with --load-json; "
                      "give the URL instead")
-    if args.video is not None and args.index_only:
-        parser.error("--index-only downloads nothing, so it cannot be used with --video")
-    if args.load_json and (args.index or args.index_only):
-        parser.error("--index and --index-only cannot be used with --load-json")
+    list_file = args.index if args.index is not None else args.index_only
+    if args.index is not None and args.index_only is not None:
+        parser.error("--index downloads and makes the index, --index-only only makes it; "
+                     "use one of them")
+    if args.index_only is not None:
+        # (not "in (None, False, [])": --max-comments 0 is given, and 0 == False)
+        used = [name for name, key in INDEX_ONLY_REFUSES
+                if getattr(args, key) is not None and getattr(args, key) is not False
+                and getattr(args, key) != []]
+        if used:
+            parser.error(f"--index-only downloads nothing and only makes the index, so it "
+                         f"cannot be used with {', '.join(used)} (use --index FILE for that)")
+    if list_file is not None:
+        if args.sources:
+            parser.error(f"--index{'-only' if args.index is None else ''} takes the videos "
+                         f"from the list file; add {args.sources[0]} to the file instead of "
+                         "giving it in the command")
+        import yt2html_index   # (here: that module imports this one)
+        try:
+            args.list = yt2html_index.read_list_file(list_file)
+        except yt2html_index.ListFileError as error:
+            parser.error(str(error))
+        return args
     if args.load_json and args.cookies_from_browser:
         log("Note: --cookies-from-browser has no effect with --load-json (nothing is downloaded).")
     try:
         args.sources = collect_sources(args)
     except ValueError as error:
         parser.error(str(error))
-    if args.index or args.index_only:
-        if not args.batch_lines and not any(map(playlist_id_from_url, args.command_sources)):
-            parser.error("--index and --index-only need a playlist (URL, id or the name of its "
-                         "index page) or a list file (-a FILE)")
-        if any(not playlist_id_from_url(s) for s in args.command_sources):
-            log("Note: only playlists and list files get an index, not single URLs "
-                "given in the command.")
     return args
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     counts = {"saved": 0, "skipped": 0, "failed": 0}
+    without_data = []   # --load-json --index: videos of the list without saved data
     videos = {"downloaded": 0, "skipped": 0, "failed": 0}
     notes = set()   # --video: notes told once, and whether YouTube was asked
     caption_cache.clear()   # caption tracks: once per run
 
     run = Run()
 
-    def attempt(source: str, action, video_id: str | None = None):
+    def attempt(source: str, action):
         """Run one step; a failure is reported and counted, the run goes on."""
         try:
             return action()
-        except yt_dlp.utils.DownloadError as error:
+        except yt_dlp.utils.DownloadError:
             log(f"FAILED: {source}")  # yt-dlp has already printed the reason
-            reason = failure_reason(error)
         except Exception as error:
             log(f"FAILED: {source}: {error}")
-            reason = failure_reason(error)
         counts["failed"] += 1
-        if video_id:
-            run.failures[video_id] = reason
         return None
 
     def archive_video(source: str, playlist: dict | None = None):
-        video_id = source_video_id(source)
-        if video_id:
-            run.attempted.add(video_id)
         if args.video is not None and "requested" in notes:
             # a moment between videos that asked YouTube for a video file
             notes.discard("requested")
@@ -6140,7 +5796,7 @@ def main(argv=None) -> int:
         outcome = {}
         try:
             result = attempt(source, lambda: archive(source, args, playlist, outcome)
-                             or "skipped", video_id)
+                             or "skipped")
         except CommentsInterrupted:
             counts["saved"] += 1  # the page was made, then the run stops
             raise
@@ -6181,15 +5837,34 @@ def main(argv=None) -> int:
                             video_added(result, outcome.get("previous") or {}))
             outcome["rebuild"]()
 
+    def archive_list(videos: list[tuple[str, str | None]]):
+        """--index: each video of the list (with its playlist, if from one)."""
+        for url, playlist_id in videos:
+            if args.load_json:
+                url = video_id_from_url(url)   # looked up in the output folder
+                if not file_with_id(Path(args.output_dir), url, (".info.json",),
+                                    "saved data files"):
+                    log(f"No saved data for {url}; skipped.")
+                    without_data.append(url)
+                    continue
+            archive_video(url, playlist_context(run, playlist_id, url) if playlist_id else None)
+
     if args.video_formats:
         return list_formats(args)
+    listing = args.index is not None or args.index_only is not None
+    if listing:
+        import yt2html_index as index   # (here: that module imports this one)
+        lists, unread = index.start(args, run)   # the playlists, before any download
+        if args.index_only is not None:
+            return 0 if index.write_index(args, lists) and not unread else 1
+        counts["failed"] += unread
     seen = set()  # video ids handled in this run
     playlists = 0
     interrupted = False
-    if args.index_only:
-        return 1 if write_indexes(args, run) else 0
     try:
-        for source in args.sources:
+        if listing:
+            archive_list(index.videos_to_download(args.list, run))
+        for source in [] if listing else args.sources:
             if not args.load_json and playlist_id_from_url(source):
                 playlists += 1
                 for url in attempt(source,
@@ -6207,15 +5882,16 @@ def main(argv=None) -> int:
         interrupted = True
         log("Interrupted (Ctrl+C). Run the same command again to continue: "
             "videos with a page are skipped.")
-    index_failures = write_indexes(args, run) if args.index else 0
-    if sum(counts.values()) > 1 or playlists or interrupted:
+    index_failed = listing and not index.write_index(args, lists)
+    if sum(counts.values()) > 1 or playlists or listing or interrupted:
         log(f"Done: {counts['saved']} saved, {counts['skipped']} skipped (page exists), "
-            f"{counts['failed']} failed."
+            f"{counts['failed']} failed"
+            + (f", {len(without_data)} without saved data" if without_data else "") + "."
             + (f" Videos: {videos['downloaded']} downloaded, {videos['skipped']} skipped, "
                f"{videos['failed']} failed." if args.video is not None else ""))
     if interrupted:
         return 130  # the usual exit code after Ctrl+C
-    return 1 if counts["failed"] or videos["failed"] or index_failures else 0
+    return 1 if counts["failed"] or videos["failed"] or index_failed else 0
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ def youtube(monkeypatch, info):
         FakeYouTube.fetched.append(source)
         if source not in FakeYouTube.playlists:
             raise yt_dlp.utils.DownloadError("The playlist does not exist")
-        return "Test playlist", FakeYouTube.playlists[source]
+        return {"title": "Test playlist", "entries": FakeYouTube.playlists[source]}
 
     monkeypatch.setattr(yt2html, "fetch_info", fetch_info)
     monkeypatch.setattr(yt2html, "fetch_playlist", fetch_playlist)
@@ -125,11 +125,12 @@ def test_empty_playlist(tmp_path, capsys, youtube):
     assert "Done: 0 saved, 0 skipped (page exists), 0 failed." in out
 
 
-def test_playlist_in_a_batch_file(tmp_path, youtube):
-    batch = tmp_path / "list.txt"
-    batch.write_text(f"{url(5)}\n{PLAYLIST}\n", encoding="utf-8")
-    yt2html.main(["-a", str(batch), "-o", str(tmp_path)])
-    assert youtube.fetched == [url(5), PLAYLIST, url(1), url(2), url(3)]
+def test_playlist_in_a_list_file(tmp_path, youtube):
+    listing = tmp_path / "list.txt"
+    listing.write_text(f"{url(5)}\n{PLAYLIST}\n", encoding="utf-8")
+    yt2html.main(["--index", str(listing), "-o", str(tmp_path)])
+    # the playlist is read first (before any download), then the videos in order
+    assert youtube.fetched == [PLAYLIST, url(5), url(1), url(2), url(3)]
 
 
 def test_bare_playlist_id(tmp_path, youtube):
@@ -186,8 +187,9 @@ def test_fetch_playlist_reads_only_the_list(monkeypatch):
     }
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", FakePlaylistYDL)
     args = yt2html.parse_args(["x", "--cookies-from-browser", "firefox"])
-    title, items = yt2html.fetch_playlist("short", args)
-    assert title == "Python course" and [i["id"] for i in items] == ["TESTVIDEO01", "TESTVIDEO02"]
+    found = yt2html.fetch_playlist("short", args)
+    assert found["title"] == "Python course"
+    assert [i["id"] for i in found["entries"]] == ["TESTVIDEO01", "TESTVIDEO02"]
     assert FakePlaylistYDL.calls == [("short", False), ("real", False)]
     assert FakePlaylistYDL.opts["extract_flat"] == "in_playlist"
     assert FakePlaylistYDL.opts["cookiesfrombrowser"] == ("firefox", None, None, None)

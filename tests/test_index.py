@@ -1,35 +1,40 @@
-"""Index pages (--index, --index-only) and the metadata of video pages."""
+"""The index of a list file (--index FILE, --index-only FILE)."""
 
-import datetime as dt
+import json
+import re
+import struct
+from pathlib import Path
 
 import pytest
 import yt_dlp
 
 import yt2html
+import yt2html_index as index
 
-EPOCH = int(dt.datetime(2026, 11, 6, 14, 5).timestamp())   # local time
+DATA = Path(__file__).parent / "data"
 PLAYLIST_ID = "PLtest1234567890"
 PLAYLIST = f"https://www.youtube.com/playlist?list={PLAYLIST_ID}"
-CHANNEL = "https://www.youtube.com/@channel"
+COURSE = json.loads((DATA / "playlist_kurs.json").read_text(encoding="utf-8"))  # real, flat
+COVER = "data:image/jpeg;base64,Q09WRVI="
 
 
 def url(n: int) -> str:
     return f"https://www.youtube.com/watch?v=TESTVIDEO0{n}"
 
 
-def entry(n: int, title: str | None = None) -> dict:
+def entry(n: int) -> dict:
     return {"_type": "url", "ie_key": "Youtube", "id": f"TESTVIDEO0{n}", "url": url(n),
-            "title": title or f"Episode {n}"}
+            "title": f"Translated title {n}"}
 
 
 @pytest.fixture
 def youtube(monkeypatch, info):
-    """Fake YouTube: a playlist of four videos; per video id, `failing` gives
-    an error message and `interrupt` stops the run like Ctrl+C."""
+    """Fake YouTube: playlists by id (a list of entries, or an error message);
+    every video is the test video under its own id; `failing` gives errors."""
 
     class FakeYouTube:
-        entries = [entry(1), entry(2), entry(3, "[Private video]"), entry(4)]
-        failing = {"TESTVIDEO03": "ERROR: [youtube] TESTVIDEO03: Private video. Sign in"}
+        playlists = {PLAYLIST_ID: [entry(1), entry(2)]}
+        failing = {}
         interrupt = set()
         fetched = []
         lists_read = []
@@ -41,391 +46,666 @@ def youtube(monkeypatch, info):
             raise KeyboardInterrupt
         if video_id in FakeYouTube.failing:
             raise yt_dlp.utils.DownloadError(FakeYouTube.failing[video_id])
-        n = int(video_id[-1])
-        return {**info, "id": video_id, "title": f"Original title {n}", "epoch": EPOCH}
+        return {**info, "id": video_id, "title": f"Original title {video_id[-1]}"}
 
     def fetch_playlist(source, args):
         FakeYouTube.lists_read.append(source)
-        return "Test playlist", FakeYouTube.entries
+        found = FakeYouTube.playlists.get(yt2html.playlist_id_from_url(source))
+        if found is None or isinstance(found, str):
+            raise yt_dlp.utils.DownloadError(found or "ERROR: [youtube:tab] x: offline")
+        return {"title": "Test playlist", "channel": "Channel",
+                "uploader_url": "https://www.youtube.com/@Channel",
+                "channel_url": "https://www.youtube.com/channel/UCx", "playlist_count": 3,
+                "description": "About the playlist.", "entries": found}
 
     monkeypatch.setattr(yt2html, "fetch_info", fetch_info)
     monkeypatch.setattr(yt2html, "fetch_playlist", fetch_playlist)
     return FakeYouTube
 
 
-def index_file(folder):
-    found = list(folder.glob(f"*[[]{PLAYLIST_ID}[]].html"))
-    assert len(found) == 1
-    return found[0]
-
-
-def rows(path) -> list[dict]:
-    """The entries the index keeps (also what --index-only reads)."""
-    return [e for s in yt2html.read_index(path) for e in s["entries"]]
-
-
-# Metadata of video pages ----------------------------------------------------
-
-def render(info):
-    return yt2html.render_page(info, None, {}, dt.date(2026, 11, 6))
-
-
-@pytest.mark.parametrize("change, status", [
-    ({}, "complete"),
-    ({"comment_count": None}, "interrupted"),                 # Ctrl+C in yt-dlp
-    ({yt2html.LIMIT_KEY: 2, yt2html.YT_COUNT_KEY: "50"}, "limited"),
-    ({yt2html.LIMIT_KEY: 200}, "complete"),                   # limit not reached
-    ({"comments": None, "comment_count": None}, "unavailable"),   # no reason known
-    ({"comments": None, yt2html.COMMENTS_MESSAGE_KEY: "Comments are turned off."}, "turned-off"),
-])
-def test_comment_status(info, change, status):
-    assert yt2html.comment_status({**info, **change}) == status
-
-
-def test_comment_status_without_comments(info):
-    info.pop("comments")
-    assert yt2html.comment_status(info) == "not-downloaded"
-
-
-def test_metadata_is_written_and_read_back(info, tmp_path):
-    page = tmp_path / "page.html"
-    page.write_text(render(info), encoding="utf-8")
-    meta = yt2html.read_page_metadata(page)
-    assert meta["yt2html:video-id"] == "TESTVIDEO01"
-    assert meta["yt2html:title"] == info["title"]           # quotes, <, > and | survive
-    assert meta["yt2html:archived"] == "2026-11-06"
-    assert meta["yt2html:comments-status"] == "complete"
-    assert meta["yt2html:comments-downloaded"] == str(len(info["comments"]))
-
-
-def test_the_metadata_for_the_index(info):
-    info.update(epoch=EPOCH, duration=597.6, timestamp=None, release_timestamp=None,
-                upload_date="20080529")
-    info[yt2html.CAPTION_KEY] = {"language": "en-US"}
-    info[yt2html.UNAVAILABLE_KEY] = {"status": "ERROR", "reason": "Video unavailable"}
-    info[yt2html.UPDATES_KEY] = [
-        {"date": "2026-11-20", "time": "10:12", "refreshed": True},
-        {"date": "2026-11-21", "time": "08:00", "refreshed": True},
-        {"date": "2026-11-22", "time": "09:30", "added": ["translation pl"]},
-        {"date": "2026-12-03", "time": "14:05", "unavailable": True}]
-    meta = yt2html.page_metadata(info, dt.date(2026, 11, 6), "data:image/jpeg;base64,Q09W")
-    assert meta == {
-        "yt2html:metadata": "2",
-        "yt2html:video-id": "TESTVIDEO01",
-        "yt2html:title": info["title"],
-        "yt2html:archived": "2026-11-06T14:05",
-        "yt2html:refreshed": "2026-11-21T08:00",     # the last refresh, not a later update
-        "yt2html:unavailable": "2026-12-03T14:05",
-        "yt2html:published": "2008-05-29",
-        "yt2html:duration": "598",
-        "yt2html:language": "en-US",
-        "yt2html:comments-status": "complete",
-        "yt2html:comments-downloaded": str(len(info["comments"])),
-        "yt2html:comments-youtube": yt2html.youtube_comment_count(info)[0],
-        "yt2html:cover": "data:image/jpeg;base64,Q09W",
-    }
-    assert list(meta)[-1] == "yt2html:cover"                  # the long one after the rest
-
-
-def test_unknown_values_are_left_out_never_written_empty(info):
-    for key in ("title", "epoch", "duration", "timestamp", "release_timestamp",
-                "release_date", "upload_date", "automatic_captions", "comment_count",
-                "language", "formats", yt2html.YT_COUNT_KEY):
-        info.pop(key, None)
-    info[yt2html.CAPTION_KEY] = None
-    meta = yt2html.page_metadata(info, dt.date(2026, 11, 6))
-    assert set(meta) == {"yt2html:metadata", "yt2html:video-id", "yt2html:archived",
-                         "yt2html:comments-status", "yt2html:comments-downloaded"}
-    assert meta["yt2html:archived"] == "2026-11-06"           # no moment: the day
-    html = render(info)
-    assert 'content=""' not in html
-    info["duration"] = 0                                      # known, though zero
-    assert yt2html.page_metadata(info, dt.date(2026, 11, 6))["yt2html:duration"] == "0"
-
-
-def test_published_day(info):
-    moment = int(dt.datetime(2026, 1, 2, 0, 30).timestamp())   # local time
-    assert yt2html.published_day({"timestamp": moment, "upload_date": "20260101"}) == \
-        dt.date(2026, 1, 2)
-    assert yt2html.published_day({"release_timestamp": moment, "timestamp": 1}) == \
-        dt.date(2026, 1, 2)
-    assert yt2html.published_day({"release_date": "20260103", "upload_date": "20260101"}) == \
-        dt.date(2026, 1, 3)
-    assert yt2html.published_day({"release_date": "2026-1-3", "upload_date": "20260101"}) == \
-        dt.date(2026, 1, 1)
-    assert yt2html.published_day({"timestamp": 0}) == dt.date.fromtimestamp(0)
-    assert yt2html.published_day({}) is None and yt2html.published_date({}) == "—"
-
-
-def test_the_metadata_is_read_up_to_the_title_however_long_the_cover(tmp_path):
-    cover = "data:image/jpeg;base64," + "A" * 200_000
-    page = tmp_path / "page.html"
-    page.write_text('<head><meta name="yt2html:video-id" content="X">'
-                    f'<meta name="yt2html:cover" content="{cover}"><title>t</title>'
-                    '<meta name="yt2html:title" content="not metadata"></head>', "utf-8")
-    assert yt2html.read_page_metadata(page) == {"yt2html:video-id": "X", "yt2html:cover": cover}
-
-
-def test_the_metadata_reading_stops_at_the_title(tmp_path, monkeypatch):
-    # the index reads every page; pages are megabytes long
-    page = tmp_path / "page.html"
-    page.write_text('<meta name="yt2html:video-id" content="X"><title>t</title>'
-                    + "x" * (3 * yt2html.META_READ_BYTES), "utf-8")
-    pieces = []
-    real_open = open
-
-    def counting_open(*args, **kwargs):
-        file = real_open(*args, **kwargs)
-        read = file.read
-        file.read = lambda size=-1: pieces.append(size) or read(size)
-        return file
-    monkeypatch.setattr(yt2html, "open", counting_open, raising=False)
-    assert yt2html.read_page_metadata(page) == {"yt2html:video-id": "X"}
-    assert pieces == [yt2html.META_READ_BYTES]
-
-
-def test_the_cover_is_downloaded_and_kept_when_youtube_no_longer_gives_it(
-        tmp_path, capsys, youtube, monkeypatch):
-    cover = "data:image/jpeg;base64,Q09W"
-    monkeypatch.setattr(yt2html, "fetch_image", lambda u: cover if u == yt2html.cover_url(
-        {"id": "TESTVIDEO01"}) else None)
-    yt2html.main([url(1), "-o", str(tmp_path)])
-    page = next(tmp_path.glob("*.html"))
-    assert yt2html.read_page_metadata(page)["yt2html:cover"] == cover
-    assert yt2html.cover_url({"id": "AbC"}) == "https://i.ytimg.com/vi/AbC/mqdefault.jpg"
-    monkeypatch.setattr(yt2html, "fetch_image", lambda u: None)
-    capsys.readouterr()
-    yt2html.main([url(1), "-o", str(tmp_path), "--overwrite"])
-    out = capsys.readouterr().out
-    assert "Cover could not be downloaded; kept from the existing page." in out
-    assert "Thumbnail could not be downloaded." in out
-    assert yt2html.read_page_metadata(page)["yt2html:cover"] == cover
-    page.write_text("<title>t</title>", "utf-8")             # nothing to keep
-    yt2html.main([url(1), "-o", str(tmp_path), "--overwrite"])
-    assert "Cover could not be downloaded." in capsys.readouterr().out
-    assert "yt2html:cover" not in yt2html.read_page_metadata(page)
-
-
-def test_metadata_of_a_page_not_made_by_yt2html(tmp_path):
-    other = tmp_path / "other.html"
-    other.write_text("<html><head><title>x</title></head></html>", encoding="utf-8")
-    assert yt2html.read_page_metadata(other) == {}
-    assert yt2html.read_page_metadata(tmp_path / "missing.html") == {}
-
-
-@pytest.mark.parametrize("meta, text", [
-    ({"yt2html:comments-status": "complete", "yt2html:comments-downloaded": "523",
-      "yt2html:comments-youtube": "530"}, "523 comments · complete (YouTube: 530)"),
-    ({"yt2html:comments-status": "complete", "yt2html:comments-downloaded": "1",
-      "yt2html:comments-youtube": "1"}, "1 comment · complete"),
-    ({"yt2html:comments-status": "limited", "yt2html:comments-downloaded": "200",
-      "yt2html:comments-youtube": "1.2K"}, "200 of 1.2K comments · limited"),
-    ({"yt2html:comments-status": "interrupted", "yt2html:comments-downloaded": "312",
-      "yt2html:comments-youtube": ""}, "312 comments · interrupted"),
-    ({"yt2html:comments-status": "not-downloaded"}, "Comments not downloaded"),
-    ({"yt2html:comments-status": "turned-off"}, "Comments turned off"),
-    ({"yt2html:comments-status": "unavailable"}, "Comments unavailable"),
-    ({}, ""),
-])
-def test_comments_summary(meta, text):
-    assert yt2html.comments_summary(meta) == text
-
-
-def test_failure_reason():
-    error = yt_dlp.utils.DownloadError("ERROR: [youtube] TESTVIDEO03: Private video. Sign in\nmore")
-    assert yt2html.failure_reason(error) == "Private video. Sign in"
-
-
-# Playlist index -------------------------------------------------------------
-
-def test_no_index_without_the_option(tmp_path, youtube):
-    yt2html.main([PLAYLIST, "-o", str(tmp_path)])
-    assert not list(tmp_path.glob(f"*{PLAYLIST_ID}*"))
-
-
-def test_playlist_index(tmp_path, capsys, youtube):
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    path = index_file(tmp_path)
-    assert path.name == f"Test playlist [{PLAYLIST_ID}].html"
-    html = path.read_text(encoding="utf-8")
-    assert "<script" not in html and 'src="http' not in html
-    assert "3 of 4 videos archived" in html
-    assert f'<a href="{yt2html.YOUTUBE}/playlist?list={PLAYLIST_ID}" target="_blank" ' in html
-    found = rows(path)
-    assert [r["status"] for r in found] == ["archived", "archived", "unavailable", "archived"]
-    assert found[0]["title"] == "Original title 1"               # from the page
-    assert found[2]["title"] == "[Private video]"                # from the playlist
-    assert found[2]["reason"] == "Private video. Sign in"
-    assert '<td class="date">06.11.2026</td>' in html          # from 2026-11-06T14:05
-    assert "Saved index:" in capsys.readouterr().out
-
-
-def test_links_follow_renamed_pages_and_keep_original_titles(tmp_path, youtube):
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    page = next(tmp_path.glob("*[[]TESTVIDEO02[]].html"))
-    page.rename(tmp_path / "02 my name #x [TESTVIDEO02].html")
-    index_file(tmp_path).rename(tmp_path / f"My index [{PLAYLIST_ID}].html")
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    path = index_file(tmp_path)
-    assert path.name == f"My index [{PLAYLIST_ID}].html"         # renamed index kept
-    html = path.read_text(encoding="utf-8")
-    assert '<a href="02%20my%20name%20%23x%20%5BTESTVIDEO02%5D.html">Original title 2</a>' in html
-
-
-def test_ctrl_c_writes_the_whole_playlist(tmp_path, capsys, youtube):
-    youtube.interrupt = {"TESTVIDEO02"}
-    assert yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"]) == 130
-    found = rows(index_file(tmp_path))
-    assert [r["status"] for r in found] == ["archived", "pending", "unavailable", "pending"]
-    html = index_file(tmp_path).read_text(encoding="utf-8")
-    assert "Not archived yet" in html and "1 of 4 videos archived" in html
-
-
-def test_failed_video_and_its_reason(tmp_path, youtube):
-    youtube.failing = {"TESTVIDEO04": "ERROR: [youtube] TESTVIDEO04: Sign in to confirm your age"}
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    html = index_file(tmp_path).read_text(encoding="utf-8")
-    assert '<td class="date reason" title="Sign in to confirm your age">Failed</td>' in html
-
-
-def test_reason_is_kept_until_the_video_is_tried_again(tmp_path, youtube):
-    youtube.failing = {"TESTVIDEO04": "ERROR: [youtube] TESTVIDEO04: Sign in to confirm your age"}
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    youtube.interrupt = {"TESTVIDEO04"}               # Ctrl+C before it is tried again
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    assert rows(index_file(tmp_path))[3]["status"] == "pending"   # it was tried: no old reason
-    youtube.interrupt, youtube.failing = set(), {}
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    assert rows(index_file(tmp_path))[3]["status"] == "archived"
-
-
-def test_reason_survives_a_run_that_does_not_reach_the_video(tmp_path, youtube):
-    youtube.failing = {"TESTVIDEO04": "ERROR: [youtube] TESTVIDEO04: Sign in to confirm your age",
-                       **youtube.failing}
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    youtube.interrupt = {"TESTVIDEO03"}               # Ctrl+C before video 4
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    last = rows(index_file(tmp_path))[3]
-    assert (last["status"], last["reason"]) == ("failed", "Sign in to confirm your age")
-
-
-def test_video_twice_in_the_playlist_has_two_rows(tmp_path, youtube):
-    youtube.entries = [entry(1), entry(2), entry(1)]
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    assert [r["id"] for r in rows(index_file(tmp_path))] == ["TESTVIDEO01", "TESTVIDEO02",
-                                                             "TESTVIDEO01"]
-
-
-def test_theme(tmp_path, youtube):
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index", "--theme", "Light"])   # any case of letters
-    html = index_file(tmp_path).read_text(encoding="utf-8")
-    assert '<meta name="color-scheme" content="light">' in html
-
-
-# List file index ------------------------------------------------------------
-
-def write_list(tmp_path, *lines):
-    path = tmp_path / "my list.txt"
-    path.write_text("# comment\n" + "\n".join(lines) + "\n", encoding="utf-8")
+def write_list(tmp_path, text: str, name="series.txt") -> str:
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
     return str(path)
 
 
-def test_list_file_index_with_a_playlist_section(tmp_path, youtube):
-    out = tmp_path / "pages"
-    batch = write_list(tmp_path, url(5), "https://youtu.be/TESTVIDEO05", PLAYLIST, CHANNEL, url(6))
-    yt2html.main(["-a", batch, "-o", str(out), "--index"])
-    path = out / "my list.html"
-    html = path.read_text(encoding="utf-8")
-    assert "<h1 class=\"title\">my list.txt</h1>" in html
-    assert 'Test playlist</a> <span class="source">playlist · 4 videos</span></h2>' in html
-    sections = yt2html.read_index(path)
-    assert [s["playlist_id"] for s in sections] == ["", PLAYLIST_ID, ""]
-    assert [e["id"] for e in sections[0]["entries"]] == ["TESTVIDEO05"]   # listed twice
-    assert sections[2]["entries"][0] == {
-        "id": "", "url": CHANNEL, "title": "", "unavailable": False,
-        "status": "not-a-video", "reason": "a channel URL"}
-    # plain rows are numbered across the file, playlist rows by position
-    assert [p.split("<")[0] for p in html.split('<td class="pos">')[1:]] == \
-        ["1", "1", "2", "3", "4", "2", "3"]
-    assert "6 of 6 videos archived" not in html and "5 of 6 videos archived" in html
+def page(folder: Path, video_id: str, name: str | None = None, **meta) -> Path:
+    """A page as yt2html writes it (only what the index reads)."""
+    tags = {"metadata": "2", "video-id": video_id, "title": f"Title of {video_id}",
+            "duration": "1308", "language": "pl", **meta}
+    path = folder / (name or f"Page {video_id} [{video_id}].html")
+    path.write_text("<!DOCTYPE html>\n<head>\n" + "".join(
+        f'<meta name="yt2html:{key}" content="{yt2html.esc(value)}">\n'
+        for key, value in tags.items() if value is not None)
+        + "<title>t</title>\n</head><body>content</body>", encoding="utf-8")
+    return path
 
 
-def test_list_file_with_an_unreadable_playlist(tmp_path, youtube, monkeypatch):
-    def broken(source, args):
-        raise yt_dlp.utils.DownloadError("The playlist does not exist")
-
-    monkeypatch.setattr(yt2html, "fetch_playlist", broken)
-    out = tmp_path / "pages"
-    yt2html.main(["-a", write_list(tmp_path, PLAYLIST, url(5)), "-o", str(out), "--index"])
-    html = (out / "my list.html").read_text(encoding="utf-8")
-    assert "not read yet" in html and "1 of 1 video archived" in html
+def build(tmp_path, text: str, playlists: dict | None = None, folder: Path | None = None):
+    """(page, builder) for a list file over a folder (tmp_path by default)."""
+    listing = index.read_list_file(write_list(tmp_path, text))
+    return index.render_index(listing, playlists or {}, folder or tmp_path)
 
 
-# --index-only -----------------------------------------------------------------
-
-def test_index_only_downloads_nothing(tmp_path, youtube):
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    next(tmp_path.glob("*[[]TESTVIDEO01[]].html")).rename(tmp_path / "renamed [TESTVIDEO01].html")
-    next(tmp_path.glob("*[[]TESTVIDEO04[]].html")).unlink()
-    youtube.fetched.clear()
-    youtube.lists_read.clear()
-    assert yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index-only"]) == 0
-    assert youtube.fetched == [] and youtube.lists_read == []
-    found = rows(index_file(tmp_path))
-    assert [r["status"] for r in found] == ["archived", "archived", "unavailable", "pending"]
-    assert found[2]["reason"] == "Private video. Sign in"        # kept from the earlier index
-    assert found[3]["title"] == "Original title 4"               # remembered by the index
-    assert 'href="renamed%20%5BTESTVIDEO01%5D.html"' in index_file(tmp_path).read_text("utf-8")
+def html(tmp_path, text: str, playlists: dict | None = None, folder: Path | None = None) -> str:
+    return build(tmp_path, text, playlists, folder)[0]
 
 
-def test_index_only_without_an_earlier_index_reads_only_the_list(tmp_path, youtube):
-    assert yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index-only"]) == 0
-    assert youtube.lists_read == [PLAYLIST] and youtube.fetched == []
-    assert "0 of 4 videos archived" in index_file(tmp_path).read_text(encoding="utf-8")
+def body(page_html: str) -> str:
+    return page_html.split('<main class="page index">', 1)[1].split("<footer", 1)[0]
 
 
-def test_index_only_for_a_list_file(tmp_path, youtube):
-    out = tmp_path / "pages"
-    batch = write_list(tmp_path, url(5), PLAYLIST)
-    yt2html.main(["-a", batch, "-o", str(out), "--index"])
-    youtube.fetched.clear()
-    youtube.lists_read.clear()
-    yt2html.main(["-a", batch, "-o", str(out), "--index-only"])
-    assert youtube.fetched == [] and youtube.lists_read == []
-    assert [s["playlist_id"] for s in yt2html.read_index(out / "my list.html")] == ["",
-                                                                                   PLAYLIST_ID]
+def rows(page_html: str) -> list[str]:
+    return re.findall(r'<div class="row[^"]*">.*?</div></div>(?=\n|$)', body(page_html))
 
+
+def blocks(page_html: str) -> list[str]:
+    """Each block of the index (title, notes, chapters, rows) as a short code:
+    'h2 d0 1 Part', 'row d1 2', 'note d0'."""
+    found = []
+    for line in body(page_html).strip().split("\n"):
+        tag = re.match(r'<(\w+) class="([^"]*)"', line)
+        if not tag:
+            continue
+        kind, classes = tag.group(1), tag.group(2).split()
+        number = re.search(r'<span class="num">(\d+)</span>', line)
+        number = number.group(1) if number else "-"
+        if kind.startswith("h") and kind != "h1":
+            text = re.search(r'<span class="text">(.*?)</span>', line).group(1)
+            found.append(f"{kind} {classes[1]} {number} {text}".rstrip())
+        elif "row" in classes:
+            found.append(f"row {classes[1]} {number}")
+        elif "note" in classes:
+            found.append(f"note {classes[1]}")
+    return found
+
+
+def playlist(*ids: str, title="Test playlist", **extra) -> dict:
+    return {"title": title, "channel": "Channel", "channel_url": "https://www.youtube.com/@Channel",
+            "count": len(ids), "description": "", "entries": list(ids), **extra}
+
+
+# Structure: chapters, playlists, numbers --------------------------------------------
+
+def test_a_lone_playlist_puts_its_videos_in_its_place(tmp_path):
+    result = html(tmp_path, f"{PLAYLIST_ID}\n", {PLAYLIST_ID: playlist("TESTVIDEO01", "TESTVIDEO02")})
+    assert blocks(result) == ["note d0", "row d0 1", "row d0 2"]
+    assert '<h1 class="title">Test playlist</h1>' in result   # the only playlist, no "#"
+
+
+def test_two_playlists_become_chapters(tmp_path):
+    lists = {PLAYLIST_ID: playlist("TESTVIDEO01"), "PLother000001": playlist("TESTVIDEO02",
+                                                                             title="Other")}
+    result = html(tmp_path, f"# Two\n{PLAYLIST_ID}\nPLother000001\n", lists)
+    assert blocks(result) == ["h2 d0 1 Test playlist", "note d1", "row d1 1",
+                              "h2 d0 2 Other", "note d1", "row d1 1"]
+
+
+def test_a_playlist_next_to_a_video_becomes_a_chapter_one_level_lower(tmp_path):
+    result = html(tmp_path, f"## Part\nTESTVIDEO03\n{PLAYLIST_ID}\n",
+                  {PLAYLIST_ID: playlist("TESTVIDEO01", "TESTVIDEO02")})
+    assert blocks(result) == ["h2 d0 1 Part", "row d1 1", "h3 d1 2 Test playlist", "note d2",
+                              "row d2 1", "row d2 2"]
+    assert "<title>Test playlist</title>" in result     # the only playlist of the file
+
+
+def test_at_the_lowest_level_a_playlist_stands_next_to_the_others(tmp_path):
+    result = html(tmp_path, f"# T\n#### Deep\nTESTVIDEO03\n{PLAYLIST_ID}\nTESTVIDEO04\n",
+                  {PLAYLIST_ID: playlist("TESTVIDEO01", "TESTVIDEO02")})
+    assert blocks(result) == ["h4 d2 1 Deep", "row d3 1", "note d3", "row d3 2", "row d3 3",
+                              "row d3 4"]
+
+
+def test_an_empty_heading_over_a_lone_playlist_takes_its_title(tmp_path):
+    lists = {PLAYLIST_ID: playlist("TESTVIDEO01")}
+    result = html(tmp_path, f"# T\n##\n{PLAYLIST_ID}\n## Mine\n{PLAYLIST_ID}\n## Last\n###\n"
+                            "TESTVIDEO02\n", lists)
+    assert blocks(result) == ["h2 d0 1 Test playlist", "note d1", "row d1 1",
+                              "h2 d0 2 Mine", "note d1", "row d1 1",       # the heading wins
+                              "h2 d0 3 Last", "h3 d1 1", "row d2 1"]       # empty, numbered
+
+
+def test_a_title_of_ones_own_over_a_playlist(tmp_path):
+    lists = {PLAYLIST_ID: playlist("TESTVIDEO01")}
+    assert "<title>My course</title>" in html(tmp_path, f"= My course\n{PLAYLIST_ID}\n", lists)
+    result = html(tmp_path, f"# T\n= My course\n{PLAYLIST_ID}\nTESTVIDEO02\n##\n= Inner\n"
+                            f"{PLAYLIST_ID}\n## Heading\n= Loses\n{PLAYLIST_ID}\n", lists)
+    assert blocks(result)[0] == "h2 d0 1 My course"                # its chapter
+    assert "h2 d0 3 Inner" in blocks(result)                      # the empty heading
+    assert "h2 d0 4 Heading" in blocks(result)                    # the heading's own text wins
+    # the playlist's own note still names it as on YouTube
+    assert result.count(f'<a href="{PLAYLIST}" target="_blank" rel="noopener noreferrer">'
+                        f'Test playlist</a>') == 3
+
+
+def test_numbers_start_at_one_on_each_level_and_skip_notes(tmp_path):
+    result = html(tmp_path, "# T\n> Intro\nTESTVIDEO01\n## A\n> About A\nTESTVIDEO02\n"
+                            "### A1\nTESTVIDEO03\nTESTVIDEO04\n## B\n")
+    assert blocks(result) == ["note d0", "row d0 1", "h2 d0 2 A", "note d1", "row d1 1",
+                              "h3 d1 2 A1", "row d2 1", "row d2 2", "h2 d0 3 B"]
+
+
+def test_a_skipped_level_is_shown_as_written(tmp_path):
+    assert blocks(html(tmp_path, "### Deep first\nTESTVIDEO01\n")) == ["h3 d1 1 Deep first",
+                                                                       "row d2 1"]
+
+
+def test_no_numbers(tmp_path):
+    result = html(tmp_path, "!no-numbers\n## A\nTESTVIDEO01\n")
+    assert blocks(result) == ["h2 d0 - A", "row d1 -"]          # the indents stay
+    assert 'class="num"' not in result
+
+
+def test_two_playlists_give_no_title(tmp_path):
+    lists = {PLAYLIST_ID: playlist("TESTVIDEO01"), "PLother000001": playlist("TESTVIDEO02")}
+    assert "<title>series</title>" in html(tmp_path, f"{PLAYLIST_ID}\nPLother000001\n", lists)
+
+
+def test_title_from_the_file_name(tmp_path):
+    result = html(tmp_path, "#\nTESTVIDEO01\n")
+    assert "<title>series</title>" in result and '<h1 class="title">series</h1>' in result
+
+
+def test_the_same_video_twice_has_two_rows(tmp_path):
+    assert len(rows(html(tmp_path, "TESTVIDEO01\nTESTVIDEO01\n"))) == 2
+
+
+# Rows: what is in the folder ---------------------------------------------------
+
+def test_a_video_with_its_page_and_file(tmp_path):
+    page(tmp_path, "TESTVIDEO01", name="My page & co [TESTVIDEO01].html", cover=COVER,
+         language="en-US")
+    (tmp_path / "Title [TESTVIDEO01].mp4").write_bytes(b"")
+    row, = rows(html(tmp_path, "TESTVIDEO01\n"))
+    assert '<div class="row d0">' in row
+    assert (f'<span class="thumb"><img src="{COVER}" alt=""><span class="time">21:48</span>'
+            '</span>') in row
+    assert ('<a class="name" href="My%20page%20%26%20co%20%5BTESTVIDEO01%5D.html" '
+            'target="_blank" rel="noopener noreferrer">Title of TESTVIDEO01</a>') in row
+    # language as in the data, in small letters; the format with the file's name;
+    # YouTube with the original title
+    assert ('<div class="line">en-us · <span title="Title [TESTVIDEO01].mp4">MP4</span> · '
+            f'<a href="{url(1)}" target="_blank" rel="noopener noreferrer" '
+            'title="Title of TESTVIDEO01">YouTube</a></div>') in row
+
+
+def test_only_the_page(tmp_path):
+    page(tmp_path, "TESTVIDEO01", cover=COVER)
+    row, = rows(html(tmp_path, "TESTVIDEO01\n"))
+    assert '<div class="row d0 missing">' in row
+    assert f'<span class="thumb off"><img src="{COVER}" alt="">' in row      # dimmed, with time
+    assert '<span class="time">21:48</span>' in row
+    assert 'pl · <span class="miss">only the page downloaded</span> · <a href=' in row
+
+
+def test_a_video_no_longer_on_youtube(tmp_path):
+    page(tmp_path, "TESTVIDEO01", unavailable="2026-12-03T14:05")
+    (tmp_path / "x [TESTVIDEO01].webm").write_bytes(b"")
+    row, = rows(html(tmp_path, "TESTVIDEO01\n"))
+    assert ('· WEBM</span> · <span class="miss" title="Title of TESTVIDEO01">no longer on '
+            'YouTube</span></div>') in row.replace('<span title="x [TESTVIDEO01].webm">', "")
+    assert "YouTube</a>" not in row
+
+
+def test_console_notes_follow_the_lines(tmp_path):
+    result, builder = build(tmp_path, "clip.mp4\nTESTVIDEO01\nother.mkv\n")
+    assert [note.split(":")[0] for note in builder.console_notes(advice=True)] == [
+        "line 1", "line 2", "line 3"]
+
+
+def test_not_downloaded(tmp_path):
+    result, builder = build(tmp_path, "TESTVIDEO01\nOld name [TESTVIDEO02].html\n"
+                                      "= Mine\nTESTVIDEO03\n")
+    first, second, third = rows(result)
+    assert '<span class="thumb off empty"></span>' in first
+    assert '<span class="name"><span class="id">TESTVIDEO01</span></span>' in first
+    assert ('<span class="miss">not downloaded</span> · '
+            f'<a href="{url(1)}" target="_blank" rel="noopener noreferrer">YouTube</a>') in first
+    assert '<span class="name">Old name</span>' in second         # from the name in the line
+    assert '<span class="name">Mine</span>' in third
+    assert builder.console_notes(advice=True)[:2] == [
+        "line 1: TESTVIDEO01 not downloaded (--index downloads it)",
+        "line 2: TESTVIDEO02 not downloaded (--index downloads it)"]
+    assert builder.console_notes(advice=False)[0] == "line 1: TESTVIDEO01 not downloaded"
+
+
+def test_titles_never_come_from_the_entries_of_a_playlist(tmp_path):
+    # YouTube sends the entries' titles translated (the course is Polish; these are English)
+    data = {COURSE["id"]: playlist(*[e["id"] for e in COURSE["entries"]])}
+    result, builder = build(tmp_path, f"{COURSE['id']}\n", data)
+    assert "Python Fundamentals" not in result
+    assert f'<span class="id">{COURSE["entries"][2]["id"]}</span>' in result
+    assert builder.console_notes(advice=True) == ["line 1: 16 videos not downloaded "
+                                                  "(--index downloads them)"]
+
+
+def test_a_title_of_ones_own_wins_over_the_page(tmp_path):
+    page(tmp_path, "TESTVIDEO01")
+    row, = rows(html(tmp_path, "= Episode one\nTESTVIDEO01\n"))
+    assert '>Episode one</a>' in row and 'title="Title of TESTVIDEO01">YouTube' in row
+
+
+def test_a_video_file_without_a_page(tmp_path):
+    mp4(tmp_path / "Clip name [TESTVIDEO01].mp4", 65)
+    result, builder = build(tmp_path, "TESTVIDEO01\n")
+    row, = rows(result)
+    assert '<div class="row d0">' in row and '<span class="name">Clip name</span>' in row
+    assert '<span class="thumb format">MP4<span class="time">1:05</span></span>' in row
+    assert builder.console_notes(advice=True) == [
+        "line 1: TESTVIDEO01 has a video file but no page (Clip name [TESTVIDEO01].mp4); "
+        "--index makes it"]
+
+
+def test_a_file_of_ones_own(tmp_path):
+    mp4(tmp_path / "Holiday 2026.mp4", 2282)
+    row, = rows(html(tmp_path, "Holiday 2026.mp4\n"))
+    assert '<span class="thumb format">MP4<span class="time">38:02</span></span>' in row
+    assert '<span class="name">Holiday 2026</span>' in row       # plain text: no page
+    assert '<div class="line"><span title="Holiday 2026.mp4">MP4</span></div>' in row
+    assert "YouTube" not in row
+    named, = rows(html(tmp_path, "= Our trip\nHoliday 2026.mp4\n"))
+    assert '<span class="name">Our trip</span>' in named
+
+
+def test_a_file_of_ones_own_that_is_not_there(tmp_path):
+    result, builder = build(tmp_path, "Missing.mkv\n")
+    row, = rows(result)
+    assert '<div class="row d0 missing"><span class="num">1</span><span class="thumb off empty">' in row
+    assert '<span class="miss" title="Missing.mkv">file not found</span>' in row
+    assert builder.console_notes(advice=True) == [
+        f"line 1: file not found: Missing.mkv (looked for in {tmp_path}; check the name)"]
+
+
+def test_no_thumbnails(tmp_path):
+    page(tmp_path, "TESTVIDEO01", cover=COVER)
+    (tmp_path / "x [TESTVIDEO01].mp4").write_bytes(b"")
+    page(tmp_path, "TESTVIDEO02")
+    result = html(tmp_path, "!no-thumbnails\nTESTVIDEO01\nTESTVIDEO02\nTESTVIDEO03\n")
+    first, second, third = rows(result)
+    assert COVER not in result and 'class="thumb' not in result
+    assert f'<span class="play">{index.PLAY_ICON}</span>' in first
+    assert '<div class="line">21:48 · pl · <span title=' in first     # the time in the line
+    assert '<span class="play off">' in second and '21:48 · pl · <span class="miss">' in second
+    assert '<span class="play off">' in third and '<div class="line"><span class="miss">' in third
+
+
+def test_no_thumbnails_and_no_duration(tmp_path):
+    page(tmp_path, "TESTVIDEO01", duration=None)
+    row, = rows(html(tmp_path, "!no-thumbnails\nTESTVIDEO01\n"))
+    assert '<div class="line">pl · <span class="miss">' in row
+
+
+def test_a_folder_is_no_file(tmp_path):
+    (tmp_path / "clip.mp4").mkdir()
+    assert "file not found" in html(tmp_path, "clip.mp4\n")
+
+
+def test_a_page_of_an_older_version(tmp_path):
+    page(tmp_path, "TESTVIDEO01", metadata=None, duration=None, language=None)
+    result, builder = build(tmp_path, "TESTVIDEO01\n")
+    assert ">Title of TESTVIDEO01</a>" in result      # what can be read is shown
+    assert builder.console_notes(advice=False) == [
+        "Made by an older version, without the data the index needs (make it again): "
+        "Page TESTVIDEO01 [TESTVIDEO01].html"]
+
+
+def test_an_unreadable_playlist_keeps_its_place(tmp_path):
+    result = html(tmp_path, f"# T\n= My course\n{PLAYLIST_ID}\nTESTVIDEO01\n", {PLAYLIST_ID: None})
+    first, second = rows(result)
+    assert '<span class="name">My course</span>' in first
+    assert ('<span class="miss">playlist could not be read</span> · '
+            f'<a href="{PLAYLIST}" target="_blank" rel="noopener noreferrer">YouTube</a>') in first
+    assert blocks(result) == ["row d0 1", "row d0 2"]
+    # alone: no title from it
+    assert "<title>series</title>" in html(tmp_path, f"{PLAYLIST_ID}\n", {PLAYLIST_ID: None})
+
+
+# Notes ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("note, shown", [
+    ("**Bold** and *italic* and _too_", "<strong>Bold</strong> and <em>italic</em> and <em>too</em>"),
+    ("snake_case_name and 2*3*4", "snake_case_name and 2*3*4"),
+    ("**not closed and * alone", "**not closed and * alone"),
+    ("<b>tags</b> & such", "&lt;b&gt;tags&lt;/b&gt; &amp; such"),
+    ("See https://example.org/a_b_c.", 'See <a href="https://example.org/a_b_c" target="_blank" '
+                                       'rel="noopener noreferrer">https://example.org/a_b_c</a>.'),
+    ("www.example.org #tag @channel 1:23", "www.example.org #tag @channel 1:23"),
+])
+def test_note_formatting(tmp_path, note, shown):
+    assert f'<div class="note d0"><p>{shown}</p></div>' in html(tmp_path, f"> {note}\n")
+
+
+def test_notes_in_a_row_are_paragraphs_of_one_note(tmp_path):
+    result = html(tmp_path, "> One\n> Two\nTESTVIDEO01\n> Of the video\n> Also\n")
+    assert '<div class="note d0"><p>One</p><p>Two</p></div>' in result
+    row, = rows(result)
+    assert '<div class="note"><p>Of the video</p><p>Also</p></div></div></div>' in row
+
+
+def test_the_notes_of_a_playlist(tmp_path):
+    data = {COURSE["id"]: {"title": COURSE["title"], "channel": COURSE["channel"],
+                           "channel_url": COURSE["uploader_url"],
+                           "count": COURSE["playlist_count"],
+                           "description": COURSE["description"], "entries": ["TESTVIDEO01"]}}
+    result = html(tmp_path, f"# Course\n> Mine before.\n{COURSE['id']}\n> Mine after.\n", data)
+    notes = re.findall(r'<div class="note[^"]*">.*?</div>', body(result), re.S)
+    assert notes[0] == '<div class="note d0"><p>Mine before.</p></div>'
+    assert notes[1].startswith(
+        '<div class="note d0 playlist-note"><p><a href="https://www.youtube.com/playlist?list='
+        f'{COURSE["id"]}" target="_blank" rel="noopener noreferrer">Python podstawy podstaw</a>'
+        ' · Playlist · <a href="https://www.youtube.com/@getitjob" target="_blank" '
+        'rel="noopener noreferrer">getitjob</a> · 16 videos</p><p class="about">💡 Masz')
+    # the description as written: lines kept, addresses clickable
+    assert ('Twoim kodzie.\n\n🔗 Przetestuj AIdama: <a href="https://aidam.pl" target="_blank" '
+            'rel="noopener noreferrer">https://aidam.pl</a></p></div>') in notes[1]
+    assert notes[2] == '<div class="note d0"><p>Mine after.</p></div>'   # after its videos
+    assert body(result).index("Mine after.") > body(result).index('class="row')
+
+
+def test_the_description_of_a_playlist_is_not_formatted(tmp_path):
+    data = {PLAYLIST_ID: playlist("TESTVIDEO01", description="*not italic* and **not bold**")}
+    assert '<p class="about">*not italic* and **not bold**</p>' in html(tmp_path, f"{PLAYLIST_ID}\n",
+                                                                      data)
+
+
+def test_a_playlist_without_a_description_or_count(tmp_path):
+    result = html(tmp_path, f"{PLAYLIST_ID}\n",
+                  {PLAYLIST_ID: playlist("TESTVIDEO01", count=None, channel=None)})
+    assert ('<div class="note d0 playlist-note"><p><a href="' + PLAYLIST
+            + '" target="_blank" rel="noopener noreferrer">Test playlist</a> · Playlist</p></div>'
+            ) in result
+    one = html(tmp_path, f"{PLAYLIST_ID}\n", {PLAYLIST_ID: playlist("TESTVIDEO01",
+                                                                    channel_url=None)})
+    assert "· Playlist · Channel · 1 video</p>" in one
+
+
+# The page -----------------------------------------------------------------------
+
+def test_the_page(tmp_path):
+    result = html(tmp_path, "# A & B\nTESTVIDEO01\n")
+    assert '<meta name="yt2html:index" content="list">' in result
+    assert "<title>A &amp; B</title>" in result and index.INDEX_CSS in result
+    assert re.search(r'<footer class="footer">Index made with yt2html on \d\d\.\d\d\.\d{4}\.'
+                     r'</footer>', result)
+    assert "<script>" not in result               # works without JavaScript
+    assert "archived" not in body(result)
+
+
+def test_the_index_uses_only_colour_variables():
+    assert not re.search(r"#[0-9a-fA-F]{3,6}\b|rgba?\(", index.INDEX_CSS)
+
+
+def test_the_kept_playlists_cannot_close_their_element(tmp_path):
+    data = {PLAYLIST_ID: playlist("TESTVIDEO01", description="</script><b>x</b>")}
+    result = html(tmp_path, f"{PLAYLIST_ID}\n", data)
+    assert result.count("</script>") == 1
+    (tmp_path / "series.html").write_text(result, encoding="utf-8")
+    assert index.kept_playlists(tmp_path / "series.html") == data
+
+
+def test_kept_playlists_of_no_index(tmp_path):
+    assert index.kept_playlists(tmp_path / "none.html") == {}
+    (tmp_path / "broken.html").write_text(
+        f'<script type="application/json" id="{index.DATA_ID}">{{nope</script>', encoding="utf-8")
+    assert index.kept_playlists(tmp_path / "broken.html") == {}
+
+
+# Durations of one's own files ------------------------------------------------------
+
+def box(kind: bytes, payload: bytes) -> bytes:
+    return struct.pack(">I4s", 8 + len(payload), kind) + payload
+
+
+def mp4(path: Path, seconds: float, version: int = 0, moov_last: bool = True,
+        scale: int = 1000, large: bool = False) -> Path:
+    if version == 1:
+        mvhd = bytes([1, 0, 0, 0]) + bytes(16) + struct.pack(">IQ", scale, int(seconds * scale))
+    else:
+        mvhd = bytes(4) + bytes(8) + struct.pack(">II", scale, int(seconds * scale))
+    moov = box(b"moov", box(b"udta", b"x" * 5) + box(b"mvhd", mvhd + bytes(80)))
+    media = (struct.pack(">I4sQ", 1, b"mdat", 16 + 300) + b"\0" * 300 if large  # 64-bit size
+             else box(b"mdat", b"\0" * 300))
+    parts = [box(b"ftyp", b"isom0000"), media, moov] if moov_last else \
+        [box(b"ftyp", b"isom0000"), moov, media]
+    path.write_bytes(b"".join(parts))
+    return path
+
+
+def ebml(element: int, payload: bytes, size: bytes | None = None) -> bytes:
+    """An EBML element: its id, its size (8 bytes, unless given) and data."""
+    head = element.to_bytes((element.bit_length() + 7) // 8, "big")
+    return head + (size or (0x0100000000000000 | len(payload)).to_bytes(8, "big")) + payload
+
+
+def webm(path: Path, duration: float, scale: int | None = None, double: bool = True,
+         unknown_size: bool = False, cluster_first: bool = False) -> Path:
+    info = b""
+    if scale:
+        info += ebml(0x2AD7B1, scale.to_bytes(4, "big"))
+    info += ebml(0x4489, struct.pack(">d" if double else ">f", duration))
+    children = ebml(0x114D9B74, b"\0" * 10)                        # SeekHead, skipped
+    cluster = ebml(0x1F43B675, b"\0" * 20)
+    children += (cluster + ebml(0x1549A966, info)) if cluster_first else (ebml(0x1549A966, info)
+                                                                          + cluster)
+    segment = ebml(0x18538067, children, b"\x01\xff\xff\xff\xff\xff\xff\xff" if unknown_size
+                   else None)
+    path.write_bytes(ebml(0x1A45DFA3, b"\x42\x86\x81\x01") + segment)
+    return path
+
+
+@pytest.mark.parametrize("make, seconds", [
+    (lambda p: mp4(p / "a.mp4", 7.5), 7.5),
+    (lambda p: mp4(p / "a.m4v", 3725, version=1), 3725),
+    (lambda p: mp4(p / "a.mp4", 61, moov_last=False), 61),
+    (lambda p: mp4(p / "a.mp4", 42, large=True), 42),
+    (lambda p: webm(p / "a.webm", 65200.0), 65.2),               # in milliseconds (default)
+    (lambda p: webm(p / "a.mkv", 2.5, scale=1_000_000_000, double=False), 2.5),
+    (lambda p: webm(p / "a.webm", 1000.0, unknown_size=True), 1.0),
+])
+def test_duration_from_the_header(tmp_path, make, seconds):
+    assert index.file_duration(make(tmp_path)) == pytest.approx(seconds)
+
+
+def written(path: Path, data: bytes) -> Path:
+    path.write_bytes(data)
+    return path
+
+
+@pytest.mark.parametrize("make", [
+    lambda p: webm(p / "a.webm", 1000.0, cluster_first=True),     # no Info before the media
+    lambda p: written(p / "a.mp4", b"\0\0\0\x10mdat" + bytes(8)),   # no moov
+    lambda p: written(p / "a.mkv", b"\0garbage"),
+    lambda p: written(p / "a.mp4", box(b"moov", box(b"trak", b""))),  # moov without mvhd
+    lambda p: written(p / "a.webm", b""),
+    lambda p: mp4(p / "a.mp4", 5, scale=0),                         # broken: no time scale
+    lambda p: p / "missing.mp4",
+])
+def test_no_duration(tmp_path, make):
+    assert index.file_duration(make(tmp_path)) is None
+
+
+# Playlists read from YouTube or kept ------------------------------------------------
+
+def test_the_playlist_is_read_each_time_and_kept(tmp_path, youtube, capsys):
+    listing = write_list(tmp_path, f"{PLAYLIST_ID}\n")
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path)]) == 0
+    kept = index.kept_playlists(tmp_path / "series.html")
+    assert kept[PLAYLIST_ID] | {"read": ""} == {
+        "title": "Test playlist", "channel": "Channel",
+        "channel_url": "https://www.youtube.com/@Channel", "count": 3,
+        "description": "About the playlist.", "entries": ["TESTVIDEO01", "TESTVIDEO02"],
+        "read": ""}
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d", kept[PLAYLIST_ID]["read"])
+    youtube.playlists[PLAYLIST_ID] = [entry(3)]             # changed on YouTube
+    yt2html.main(["--index-only", listing, "-o", str(tmp_path)])
+    assert index.kept_playlists(tmp_path / "series.html")[PLAYLIST_ID]["entries"] == ["TESTVIDEO03"]
+    assert len(youtube.lists_read) == 2 and youtube.fetched == []
+
+
+def test_without_youtube_the_kept_playlist_is_used(tmp_path, youtube, capsys):
+    listing = write_list(tmp_path, f"{PLAYLIST_ID}\n")
+    yt2html.main(["--index-only", listing, "-o", str(tmp_path)])
+    youtube.playlists[PLAYLIST_ID] = "ERROR: [youtube:tab] x: Unable to download (offline)"
+    capsys.readouterr()
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert re.search(rf"Playlist {PLAYLIST_ID} could not be read \(Unable to download \(offline\)\); "
+                     r"using the list kept in the index \(read \d\d\.\d\d\.\d{4} \d\d:\d\d\)\.", out)
+    result = (tmp_path / "series.html").read_text(encoding="utf-8")
+    assert len(rows(result)) == 2 and "Test playlist" in result
+
+
+def test_a_playlist_never_read(tmp_path, youtube, capsys):
+    youtube.playlists = {}
+    listing = write_list(tmp_path, f"TESTVIDEO01\n{PLAYLIST_ID}\n")
+    for _ in range(2):          # the index keeps nothing for it, so neither does the next run
+        assert yt2html.main(["--index-only", listing, "-o", str(tmp_path)]) == 1
+        out = capsys.readouterr().out
+        assert f"FAILED: playlist {PLAYLIST}: offline" in out
+        assert "playlist could not be read" in (tmp_path / "series.html").read_text("utf-8")
+
+
+def test_a_playlist_listed_twice_is_read_once(tmp_path, youtube):
+    listing = write_list(tmp_path, f"# Twice\n{PLAYLIST_ID}\n{PLAYLIST}\n")
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path)]) == 0
+    assert youtube.lists_read == [PLAYLIST]
+    assert len(rows((tmp_path / "series.html").read_text("utf-8"))) == 4
+
+
+# --index and --index-only in a run ---------------------------------------------------
+
+def test_index_downloads_what_is_missing_and_makes_the_index(tmp_path, youtube, capsys):
+    out_dir = tmp_path / "pages"
+    out_dir.mkdir()
+    page(out_dir, "TESTVIDEO03")
+    listing = write_list(tmp_path, f"# Series\nTESTVIDEO03\n{PLAYLIST_ID}\nMy clip.mp4\n"
+                                   "https://youtu.be/TESTVIDEO01\n")
+    assert yt2html.main(["--index", listing, "-o", str(out_dir)]) == 0
+    out = capsys.readouterr().out
+    # the playlist first (before any download), each video once, own files never
+    assert youtube.lists_read == [PLAYLIST]
+    assert youtube.fetched == [url(1), url(2)]
+    assert "Skipped (page exists)" in out
+    assert "Done: 2 saved, 1 skipped (page exists), 0 failed." in out
+    assert f"Saved index: {out_dir / 'series.html'}" in out
+    assert "  line 4: file not found: My clip.mp4" in out
+    result = (out_dir / "series.html").read_text(encoding="utf-8")
+    assert ">Original title 1</a>" in result and ">Original title 2</a>" in result
+    assert blocks(result) == ["row d0 1", "h2 d0 2 Test playlist", "note d1", "row d1 1",
+                              "row d1 2", "row d0 3", "row d0 4"]
+
+
+def test_videos_of_a_playlist_know_their_playlist(tmp_path, youtube):
+    listing = write_list(tmp_path, f"{PLAYLIST_ID}\n")
+    yt2html.main(["--index", listing, "-o", str(tmp_path), "--write-json"])
+    saved = json.loads(next(tmp_path.glob("*TESTVIDEO02*.info.json")).read_text("utf-8"))
+    assert saved[yt2html.PLAYLIST_KEY] == {"id": PLAYLIST_ID, "title": "Test playlist",
+                                           "position": 2, "count": 2}
+
+
+def test_a_failed_video_is_only_in_the_console(tmp_path, youtube, capsys):
+    youtube.failing = {"TESTVIDEO02": "ERROR: [youtube] TESTVIDEO02: Private video. Sign in"}
+    listing = write_list(tmp_path, "TESTVIDEO01\nTESTVIDEO02\n")
+    assert yt2html.main(["--index", listing, "-o", str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert f"FAILED: {url(2)}" in out and "  line 2: TESTVIDEO02 not downloaded\n" in out
+    result = (tmp_path / "series.html").read_text(encoding="utf-8")
+    assert "Private video" not in result and "not downloaded" in result
+
+
+def test_an_unreadable_playlist_counts_as_failed(tmp_path, youtube, capsys):
+    youtube.playlists = {}
+    listing = write_list(tmp_path, f"{PLAYLIST_ID}\nTESTVIDEO01\n")
+    assert yt2html.main(["--index", listing, "-o", str(tmp_path)]) == 1
+    assert "Done: 1 saved, 0 skipped (page exists), 1 failed." in capsys.readouterr().out
+
+
+def test_ctrl_c_still_makes_the_index(tmp_path, youtube, capsys):
+    youtube.interrupt = {"TESTVIDEO02"}
+    listing = write_list(tmp_path, "TESTVIDEO01\nTESTVIDEO02\nTESTVIDEO03\n")
+    assert yt2html.main(["--index", listing, "-o", str(tmp_path)]) == 130
+    out = capsys.readouterr().out
+    assert "Interrupted (Ctrl+C)" in out and "Saved index" in out
+    assert len(rows((tmp_path / "series.html").read_text(encoding="utf-8"))) == 3
+
+
+def test_index_only_downloads_nothing(tmp_path, youtube, capsys):
+    page(tmp_path, "TESTVIDEO01")
+    listing = write_list(tmp_path, "TESTVIDEO01\nTESTVIDEO02\n")
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path), "--theme", "light",
+                         "--cookies", "firefox"]) == 0
+    out = capsys.readouterr().out
+    assert youtube.fetched == [] and "Done:" not in out
+    assert "  line 2: TESTVIDEO02 not downloaded (--index downloads it)" in out
+    result = (tmp_path / "series.html").read_text(encoding="utf-8")
+    assert '<meta name="color-scheme" content="light">' in result
+
+
+def test_the_output_folder_is_made(tmp_path, youtube):
+    listing = write_list(tmp_path, "TESTVIDEO01\n")
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path / "new" / "pages")]) == 0
+    assert (tmp_path / "new" / "pages" / "series.html").is_file()
+
+
+def test_an_index_that_cannot_be_written(tmp_path, youtube, capsys):
+    listing = write_list(tmp_path, "TESTVIDEO01\n")
+    (tmp_path / "series.html").mkdir()               # a folder in the way
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path)]) == 1
+    assert f"FAILED: index {tmp_path / 'series.html'}: " in capsys.readouterr().out
+
+
+def test_load_json_with_a_list(tmp_path, youtube, capsys, saved):
+    folder = saved.parent
+    listing = write_list(tmp_path, "TESTVIDEO01\nTESTVIDEO02\n")
+    assert yt2html.main(["--load-json", "--index", listing, "-o", str(folder)]) == 0
+    out = capsys.readouterr().out
+    assert youtube.fetched == [] and f"Reading {saved}" in out
+    assert "No saved data for TESTVIDEO02; skipped." in out
+    assert "Done: 1 saved, 0 skipped (page exists), 0 failed, 1 without saved data." in out
+    assert (folder / "series.html").is_file()
+
+
+# Options ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("argv, message", [
-    (["--load-json", "x.info.json", "--index"], "cannot be used with --load-json"),
-    ([url(1), "--index"], "need a playlist (URL, id or the name of its index page) or a list file"),
-    ([url(1), "--index-only"], "need a playlist (URL, id or the name of its index page) or a list file"),
+    (["--index", "a.txt", "--index-only", "a.txt"], "use one of them"),
+    (["--index", "a.txt", url(1)], f"--index takes the videos from the list file; add {url(1)} "
+                                   "to the file instead of giving it in the command"),
+    (["--index-only", "a.txt", PLAYLIST], "--index-only takes the videos from the list file"),
+    (["--index-only", "a.txt", "--overwrite", "--load-json"],
+     "--index-only downloads nothing and only makes the index, so it cannot be used with "
+     "--load-json, --overwrite (use --index FILE for that)"),
+    (["--index-only", "a.txt", "--transcript"], "cannot be used with --transcript"),
+    (["--index-only", "a.txt", "--max-comments", "0"], "cannot be used with --max-comments"),
+    (["--index-only", "a.txt", "--refresh-json"], "cannot be used with --refresh-json"),
+    (["--index"], "argument --index: expected one argument"),
 ])
 def test_index_option_errors(capsys, argv, message):
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as stop:
         yt2html.parse_args(argv)
-    assert message in capsys.readouterr().err
+    assert stop.value.code == 2 and message in capsys.readouterr().err
 
 
-def test_single_urls_get_no_index(tmp_path, capsys, youtube):
-    yt2html.main([url(5), PLAYLIST, "-o", str(tmp_path), "--index"])
-    assert "only playlists and list files get an index" in capsys.readouterr().out
-    assert len(rows(index_file(tmp_path))) == 4
-
-
-def test_index_only_with_the_name_of_the_index(tmp_path, youtube, monkeypatch):
-    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--index"])
-    youtube.lists_read.clear()
-    youtube.fetched.clear()
-    monkeypatch.chdir(tmp_path)
-    name = index_file(tmp_path).name
-    assert yt2html.main([name, "--index-only"]) == 0
-    assert yt2html.main([name.removesuffix(".html"), "--index-only"]) == 0
-    assert youtube.lists_read == [] and youtube.fetched == []
-    assert [p.name for p in tmp_path.glob("*.html") if "PLtest" in p.name] == [name]
-
-
-def test_index_option_error_names_the_accepted_forms(capsys):
+@pytest.mark.parametrize("name, refused", [(name, key) for name, key in
+                                           yt2html.INDEX_ONLY_REFUSES])
+def test_every_refused_option(capsys, name, refused):
+    value = {"max_comments": ["--max-comments", "5"], "video": ["--video"],
+             "transcript": ["--transcript"]}.get(refused, [name])
     with pytest.raises(SystemExit):
-        yt2html.parse_args(["Something else", "--index-only"])
-    assert "URL, id or the name of its index page" in capsys.readouterr().err
+        yt2html.parse_args(["--index-only", "a.txt", *value])
+    assert f"cannot be used with {name} (" in capsys.readouterr().err
+
+
+def test_a_bad_list_stops_before_anything_is_downloaded(tmp_path, youtube, capsys):
+    listing = write_list(tmp_path, "TESTVIDEO01\nnot a video\n")
+    with pytest.raises(SystemExit) as stop:
+        yt2html.main(["--index", listing, "-o", str(tmp_path)])
+    assert stop.value.code == 2
+    assert f"{listing}, line 2: not a video, playlist or video file" in capsys.readouterr().err
+    assert youtube.fetched == [] and youtube.lists_read == []
+
+
+def test_index_works_with_the_json_options(tmp_path, youtube):
+    listing = write_list(tmp_path, "TESTVIDEO01\n")
+    for option in ("--write-json", "--update-json", "--refresh-json", "--load-json"):
+        assert yt2html.parse_args(["--index", listing, option]).list.children

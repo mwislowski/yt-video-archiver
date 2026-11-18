@@ -36,7 +36,7 @@ build-backend = "hatchling.build"
 path = "yt2html.py"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["yt2html.py"]
+only-include = ["yt2html.py", "yt2html_index.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

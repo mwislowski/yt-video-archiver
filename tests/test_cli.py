@@ -193,15 +193,6 @@ def test_an_existing_file_wins_over_the_lookup(capsys, tmp_path, monkeypatch):
 
 
 
-def test_load_json_patterns_in_a_batch_file(capsys, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    saved(tmp_path / "data")
-    saved(tmp_path / "data", "Other [TESTVIDEO02].info.json", {"id": "TESTVIDEO02", "title": "O"})
-    (tmp_path / "list.txt").write_text("data/*.info.json\n", encoding="utf-8")
-    code, out = run(capsys, "--load-json", "-a", "list.txt", "-o", "pages")
-    assert code == 0 and len(list((tmp_path / "pages").glob("*.html"))) == 2
-
-
 def test_load_json_finds_saved_data_with_the_id_anywhere(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     saved(tmp_path / "out", "Title [TESTVIDEO01] (copy).INFO.JSON")
@@ -236,3 +227,25 @@ def test_one_json_option_at_a_time(capsys, options, message):
     with pytest.raises(SystemExit):
         yt2html.parse_args(["x.info.json", *options])
     assert message in capsys.readouterr().err
+
+
+# Sources in the command ------------------------------------------------------
+
+def test_duplicates_on_the_command_line(capsys):
+    args = yt2html.parse_args(["https://www.youtube.com/watch?v=TESTVIDEO01",
+                               "https://youtu.be/TESTVIDEO01?si=abc", "TESTVIDEO01"])
+    assert args.sources == ["https://www.youtube.com/watch?v=TESTVIDEO01"]
+    assert "Ignored 2 duplicate URLs given on the command line." in capsys.readouterr().out
+
+
+def test_nothing_to_do(capsys):
+    with pytest.raises(SystemExit):
+        yt2html.parse_args([])
+    assert "give at least one URL, or a list file with --index FILE" in capsys.readouterr().err
+
+
+def test_the_batch_file_option_is_gone(capsys, tmp_path):
+    # replaced by --index FILE (archiving from a list always makes its index)
+    with pytest.raises(SystemExit):
+        yt2html.parse_args(["-a", str(tmp_path / "list.txt")])
+    assert "unrecognized arguments: -a" in capsys.readouterr().err

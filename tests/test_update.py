@@ -190,12 +190,14 @@ def test_without_saved_data(capsys, tmp_path, youtube, info, monkeypatch):
     assert page(out_dir).stat().st_mtime_ns == before
 
 
-def test_a_list_file_of_saved_data(capsys, saved, youtube, tmp_path):
-    (tmp_path / "list.txt").write_text(str(saved.parent / "*.info.json") + "\n", encoding="utf-8")
-    code, out = run(capsys, "-a", str(tmp_path / "list.txt"), "-o", str(saved.parent),
+def test_update_with_a_list_file(capsys, saved, youtube, tmp_path):
+    # the saved data are found by the video's id in the output folder
+    (tmp_path / "list.txt").write_text("TESTVIDEO01\n", encoding="utf-8")
+    code, out = run(capsys, "--index", str(tmp_path / "list.txt"), "-o", str(saved.parent),
                     "--update-json", "--transcript", "bilingual:pl")
     assert code == 0 and f"Reading {saved}" in out
     assert yt2html.UPDATES_KEY in json.loads(saved.read_text("utf-8"))
+    assert (saved.parent / "list.html").is_file()
 
 
 def test_a_translation_that_comes_leaves_no_note(fake_ydl):
@@ -455,8 +457,8 @@ def test_refresh_sources_as_for_update(capsys, saved, youtube, refreshed, tmp_pa
     code, out = run(capsys, str(saved.parent / "*.info.json"), "-o", str(saved.parent),
                     "--refresh-json")
     assert code == 0 and f"Reading {saved}" in out
-    (tmp_path / "list.txt").write_text(str(saved.parent / "*.info.json") + "\n", encoding="utf-8")
-    code, out = run(capsys, "-a", str(tmp_path / "list.txt"), "-o", str(saved.parent),
+    (tmp_path / "list.txt").write_text("Title [TESTVIDEO01].html\n", encoding="utf-8")
+    code, out = run(capsys, "--index", str(tmp_path / "list.txt"), "-o", str(saved.parent),
                     "--refresh-json")
     assert code == 0 and f"Reading {saved}" in out
 
@@ -480,21 +482,16 @@ def test_refresh_interrupted_does_not_advise_overwrite(capsys, saved, youtube, m
                             "(--overwrite would replace the saved comments).") in out
 
 
-def test_saved_data_files_in_a_list_and_its_index(capsys, saved, youtube, tmp_path):
-    # a list of saved data files: each counts as its video, also in the index
+def test_the_same_video_twice_in_a_list_is_updated_once(capsys, saved, youtube, tmp_path):
     listing = tmp_path / "mine.txt"
-    listing.write_text(f"{saved.parent / '*.info.json'}\n{URL}\n", encoding="utf-8")
-    code, out = run(capsys, "-a", str(listing), "-o", str(saved.parent), "--update-json",
-                    "--index")
-    assert code == 0 and out.count(f"Reading {saved}") == 1        # the URL is the same video
-    assert "(1 duplicate ignored)" in out
+    listing.write_text(f"Title [TESTVIDEO01].html\n{URL}\n", encoding="utf-8")
+    code, out = run(capsys, "--index", str(listing), "-o", str(saved.parent), "--update-json")
+    assert code == 0 and out.count(f"Reading {saved}") == 1
     index = (saved.parent / "mine.html").read_text("utf-8")
-    assert 'data-id="TESTVIDEO01"' in index and "Not a video" not in index
-    assert index.count('class="item"') == 1
+    assert index.count('<div class="row d0') == 2                 # but shown in both places
 
 
-def test_a_failed_saved_data_file_shows_in_the_index(capsys, saved, youtube, tmp_path,
-                                                      monkeypatch):
+def test_a_failed_update_with_a_list_file(capsys, saved, youtube, tmp_path, monkeypatch):
     def fails(*args):
         raise yt2html.TranscriptError("could not download the transcript (offline)")
     monkeypatch.setattr(yt2html, "update_transcript", fails)
@@ -502,8 +499,10 @@ def test_a_failed_saved_data_file_shows_in_the_index(capsys, saved, youtube, tmp
     del data[yt2html.TRANSCRIPT_KEY]
     saved.write_text(json.dumps(data), encoding="utf-8")
     listing = tmp_path / "mine.txt"
-    listing.write_text(str(saved) + "\n", encoding="utf-8")
-    code, out = run(capsys, "-a", str(listing), "-o", str(saved.parent), "--update-json",
-                    "--transcript", "--index")
+    listing.write_text("TESTVIDEO01\n", encoding="utf-8")
+    code, out = run(capsys, "--index", str(listing), "-o", str(saved.parent), "--update-json",
+                    "--transcript")
     index = (saved.parent / "mine.html").read_text("utf-8")
-    assert code == 1 and 'data-status="failed"' in index and "could not download" in index
+    # the reason is only in the console; the index shows what is in the folder
+    assert code == 1 and "could not download the transcript" in out
+    assert "could not download" not in index and "not downloaded" in index

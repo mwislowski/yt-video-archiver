@@ -134,7 +134,8 @@ def test_video_option_order(capsys):
 
 @pytest.mark.parametrize("options, message", [
     (["--load-json"], "--video needs YouTube, so it cannot be used with --load-json"),
-    (["--index-only"], "--index-only downloads nothing, so it cannot be used with --video"),
+    (["--index-only", "list.txt"], "--index-only downloads nothing and only makes the index, "
+                                   "so it cannot be used with --video"),
     (["--video-formats"], "--video-formats makes no page, so it cannot be used with --video"),
 ])
 def test_video_refuses_options(capsys, options, message):
@@ -282,7 +283,8 @@ def test_video_notes_once(tmp_path, youtube, monkeypatch, capsys):
     playlist = "https://www.youtube.com/playlist?list=PLtest1234567890"
     entries = [{"_type": "url", "id": f"TESTVIDEO0{n}", "title": f"Episode {n}",
                 "url": f"https://www.youtube.com/watch?v=TESTVIDEO0{n}"} for n in (1, 2)]
-    monkeypatch.setattr(yt2html, "fetch_playlist", lambda source, args: ("Test playlist", entries))
+    monkeypatch.setattr(yt2html, "fetch_playlist", lambda source, args: {"title": "Test playlist",
+                                                                  "entries": entries})
     assert yt2html.main([playlist, "-o", str(tmp_path), "--video"]) == 0
     out = capsys.readouterr().out
     assert out.count("Note: no JavaScript runtime (Deno) found, so YouTube may offer fewer "

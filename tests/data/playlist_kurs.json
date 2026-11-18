@@ -1,0 +1,146 @@
+{
+ "id": "PLeBgIYTbh-CwGJwFnluRTgBkvcM2q6jOO",
+ "title": "Python podstawy podstaw",
+ "description": "💡 Masz problem z kodem z tego tutoriala? Poznaj AIdama!\n\nTo dedykowany tutor AI, który pomoże Ci opanować podstawy Pythona, wyjaśni każdą linijkę i natychmiast wskaże błędy w Twoim kodzie.\n\n🔗 Przetestuj AIdama: https://aidam.pl",
+ "playlist_count": 16,
+ "channel": "getitjob",
+ "channel_id": "UCw3L8lysSdQpNaeGLBqnr5A",
+ "channel_url": "https://www.youtube.com/channel/UCw3L8lysSdQpNaeGLBqnr5A",
+ "uploader": "getitjob",
+ "uploader_id": "@getitjob",
+ "uploader_url": "https://www.youtube.com/@getitjob",
+ "availability": "public",
+ "modified_date": "20260617",
+ "_type": "playlist",
+ "webpage_url": "https://www.youtube.com/playlist?list=PLeBgIYTbh-CwGJwFnluRTgBkvcM2q6jOO",
+ "entries": [
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "n8Qt6kOCrB0",
+   "url": "https://www.youtube.com/watch?v=n8Qt6kOCrB0",
+   "title": "Python podstawy",
+   "duration": 2828
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "p8OzBeLIV-w",
+   "url": "https://www.youtube.com/watch?v=p8OzBeLIV-w",
+   "title": "Python podstawy podstaw część 2",
+   "duration": 3809
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "8etkFuBLGZ0",
+   "url": "https://www.youtube.com/watch?v=8etkFuBLGZ0",
+   "title": "Python Fundamentals for Beginners Part 3",
+   "duration": 2853
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "xFmYMeWRXf8",
+   "url": "https://www.youtube.com/watch?v=xFmYMeWRXf8",
+   "title": "Python kurs kompas kolekcji",
+   "duration": 205
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "0qraUB_iVGU",
+   "url": "https://www.youtube.com/watch?v=0qraUB_iVGU",
+   "title": "Python tuple course",
+   "duration": 1498
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "jKRX46EGebY",
+   "url": "https://www.youtube.com/watch?v=jKRX46EGebY",
+   "title": "Python Course List",
+   "duration": 2075
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "neTh1LGq1mE",
+   "url": "https://www.youtube.com/watch?v=neTh1LGq1mE",
+   "title": "Python kurs set",
+   "duration": 1759
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "bwJ2r2x6tK4",
+   "url": "https://www.youtube.com/watch?v=bwJ2r2x6tK4",
+   "title": "Python kurs dict",
+   "duration": 1283
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "Z_49bnCygqk",
+   "url": "https://www.youtube.com/watch?v=Z_49bnCygqk",
+   "title": "Python basics understand functions",
+   "duration": 1644
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "W634s0AsWNA",
+   "url": "https://www.youtube.com/watch?v=W634s0AsWNA",
+   "title": "Python podstawy podstaw zrozum funkcje 2",
+   "duration": 1409
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "-gOgik_mk44",
+   "url": "https://www.youtube.com/watch?v=-gOgik_mk44",
+   "title": "Python podstawy Programowanie obiektowe",
+   "duration": 854
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "03SKE4poIQw",
+   "url": "https://www.youtube.com/watch?v=03SKE4poIQw",
+   "title": "Python Basics Object-Oriented Programming #2",
+   "duration": 1581
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "KZnnyc6LYfQ",
+   "url": "https://www.youtube.com/watch?v=KZnnyc6LYfQ",
+   "title": "Python podstawy Programowanie obiektowe #3",
+   "duration": 1038
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "wOHVOgs9i6E",
+   "url": "https://www.youtube.com/watch?v=wOHVOgs9i6E",
+   "title": "Python Basics Object-Oriented Programming Inheritance",
+   "duration": 1480
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "C4nOLhfq7L4",
+   "url": "https://www.youtube.com/watch?v=C4nOLhfq7L4",
+   "title": "Python object composition",
+   "duration": 767
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "2dIVvYvscjE",
+   "url": "https://www.youtube.com/watch?v=2dIVvYvscjE",
+   "title": "Python Basics 2025",
+   "duration": 1406
+  }
+ ]
+}

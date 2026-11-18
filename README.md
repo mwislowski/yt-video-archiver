@@ -61,7 +61,7 @@ yt2html "https://www.youtube.com/watch?v=..."
 
 The page is saved in the current folder (e.g. the folder with your downloaded videos); `-o FOLDER` saves it elsewhere. Always put the URL in quotes: in PowerShell `&` in a URL would otherwise be treated as an operator.
 
-Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa`) or any file name with the id in square brackets, wherever it stands and whatever the extension (a page, an index, a downloaded video): `"My title [Z8lf5oWKfj0].html"` or `"My title [Z8lf5oWKfj0].mp4"` stands for that video, `"Python course [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa]"` for that playlist. Handy with `--overwrite` and `--index-only`. This also works in list files.
+Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa`) or any file name with the id in square brackets, wherever it stands and whatever the extension (a page, a downloaded video): `"My title [Z8lf5oWKfj0].html"` or `"My title [Z8lf5oWKfj0].mp4"` stands for that video, `"Python course [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa]"` for that playlist. Handy with `--overwrite`. Video names work the same way in list files.
 
 **What to archive**
 
@@ -70,7 +70,7 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | One video | `yt2html "URL"` |
 | Several videos at once | `yt2html "URL1" "URL2" "URL3"` |
 | All videos of a playlist (see below) | `yt2html "https://www.youtube.com/playlist?list=..."` |
-| Videos listed in a text file (see below) | `yt2html -a list.txt` |
+| Videos and playlists listed in a list file, with its index page (see below) | `yt2html --index series.txt` |
 | Save into another folder | `yt2html "URL" -o "D:\Videos\Channel"` |
 | Make a page again although the video already has one (e.g. for newer comments); also works for a whole playlist or list | `yt2html "URL" --overwrite` |
 | When YouTube asks to sign in or to confirm you are not a bot (`--cookies` is short for `--cookies-from-browser`; the browser need not be open; without a profile, the one used most recently) | `yt2html "URL" --cookies firefox` |
@@ -80,10 +80,11 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 
 | Task | Command |
 |---|---|
-| Archive a playlist and make its index | `yt2html "PLAYLIST URL" --index` |
-| Archive a list file and make its index | `yt2html -a list.txt --index` |
-| Only rebuild the index, e.g. after renaming pages (no download) | `yt2html "Index name [PLAYLIST_ID].html" --index-only` / `yt2html -a list.txt --index-only` |
-| Make all pages of a playlist again, with the index | `yt2html "PLAYLIST URL" --overwrite --index` |
+| Archive what a list file lists (what is missing) and make its index `series.html` | `yt2html --index series.txt` |
+| Only make the index, downloading nothing, e.g. after renaming pages or adding a video file | `yt2html --index-only series.txt` |
+| Make the pages of a list again from saved data, then the index | `yt2html --index series.txt --load-json` |
+| Add to the saved data of a list what is missing, then the index | `yt2html --index series.txt --update-json --transcript` |
+| Make all pages of a list again, with the index | `yt2html --index series.txt --overwrite` |
 
 **What the page contains and how it looks**
 
@@ -112,7 +113,7 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Versions of the program and yt-dlp | `yt2html --version` |
 | All options | `yt2html --help` |
 
-Options can be combined, e.g. `yt2html -a list.txt -o "D:\Videos" --max-comments 500 --index`. In option values the case of letters does not matter (`--theme Dark`, `--transcript Plain,bilingual:PL`); paths, addresses and browser profile names stay as typed.
+Options can be combined, e.g. `yt2html --index series.txt -o "D:\Videos" --max-comments 500`. In option values the case of letters does not matter (`--theme Dark`, `--transcript Plain,bilingual:PL`); paths, addresses and browser profile names stay as typed.
 
 ### Transcript versions
 
@@ -176,54 +177,76 @@ Saving and reading are not symmetric: `--write-json` is an extra to a download (
 
 ### Archiving many videos
 
-For many videos, put their URLs into a text file, one per line, e.g. `list.txt` made in Notepad, and run `yt2html -a list.txt`. Blank lines and lines starting with `#` are ignored, so the list can have comments:
-
-```text
-# Season 1
-https://www.youtube.com/watch?v=Z8lf5oWKfj0
-https://youtu.be/qyqCTMirNWg
-```
-
-`-a` can be given several times and combined with URLs in the command; a video listed more than once (also in another URL form) is archived once. The file must be saved as UTF-8 (Notepad's default). The program only reads it, never changes it.
-
-**Playlists:** a playlist URL (`https://www.youtube.com/playlist?list=...`), in the command or in a list file, archives all videos of the playlist in its order, e.g. all episodes of a podcast. A link to a video opened from a playlist (`watch?v=...&list=...`) archives only that video. Channel URLs (`@name`) are not supported: open the channel's playlist and use its URL.
+**Playlists:** a playlist URL (`https://www.youtube.com/playlist?list=...`) or id archives all videos of the playlist in its order, e.g. all episodes of a podcast. A link to a video opened from a playlist (`watch?v=...&list=...`) archives only that video. Channel URLs (`@name`) are not supported: open the channel's playlist and use its URL.
 
 **Videos that already have a page are skipped**, so running the same command again only archives what is missing, and an interrupted run continues where it stopped. A page is any `.html` file with the video id in square brackets in its name, e.g. `[Z8lf5oWKfj0]`: you may rename pages freely (`042 My title [Z8lf5oWKfj0] (copy).html`) as long as that part stays. If several files fit, the first by name is used and a note says so. Only the output folder itself is checked, not its subfolders. To make a page again, delete it or use `--overwrite` (the page keeps its current name). `--load-json` always replaces the page.
 
-### Index page
+For a series of videos you want to keep together, write them into a **list file** and archive it with `--index` (next section): the list also gets an index page.
 
-With `--index`, a playlist URL and a list file each also get an **index page** in the output folder, in the same style and colours as the video pages:
+### List files and their index
 
-- a playlist: `Playlist title [playlist id].html`, e.g. `Python course [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html`;
-- a list file: its name with `.html`, e.g. `list.html` for `list.txt`. Playlists in the file appear as sections with their own heading.
+A list file is a plain text file (UTF-8, Notepad's default; any extension: `series.txt`, `series.md`) with one video or playlist per line. `yt2html --index series.txt` archives what the list names and is not in the folder yet, then makes the **index page** `series.html` in the output folder (`-o`, next to the pages: its links are relative). `yt2html --index-only series.txt` only makes the index, from what is in the folder, and downloads nothing. The program only reads the list file, never changes it. One list file per run; a URL in the same command is an error (add it to the file).
 
-Single URLs given in the command get no index.
+The simplest list is just addresses or ids:
 
-For each video the index shows its position, its original title linking to its page, the date the page was made, a link to the video on YouTube, and below the title a small line about the comments:
+```text
+https://www.youtube.com/watch?v=Z8lf5oWKfj0
+https://youtu.be/qyqCTMirNWg
+PLeBgIYTbh-CwGJwFnluRTgBkvcM2q6jOO
+```
+
+A list can also be organised, in a way close to Markdown (a `.md` list looks like its index in a Markdown preview):
+
+```text
+!no-numbers
+# Railways of the world
+> My collection. **Japan** first, then _the rest_; sources: https://example.org
+## Japan
+Z8lf5oWKfj0
+> The best introduction, start here.
+= Rail in numbers
+The Largest Rail System In the World [qyqCTMirNWg].html
+### My own recordings
+Holiday in the Tatras.mp4
+## A course for dessert
+// a playlist next to nothing else puts its videos right here
+PLeBgIYTbh-CwGJwFnluRTgBkvcM2q6jOO
+```
 
 | Line | Meaning |
 |---|---|
-| `523 comments · complete (YouTube: 530)` | all comments were downloaded; YouTube's own count is usually a bit higher (deleted or hidden comments) |
-| `200 of 1 204 comments · limited` | the download was limited (`--max-comments`) |
-| `312 of 318 comments · interrupted` | the download was stopped with `Ctrl+C` |
-| `Comments not downloaded` | made with `--no-comments` |
-| `Comments turned off` | the author has turned comments off (YouTube says so on the video page) |
-| `Comments unavailable` | there are no comments to download and YouTube did not say why |
+| an address or id of a video | a video; also the name of its page or video file with `[VIDEO_ID]` (`Title [Z8lf5oWKfj0].html`) |
+| an address or id of a playlist | its videos, read from YouTube each time the index is made (see below) |
+| `Holiday.mp4` | a video file of your own in the output folder (`mp4`, `webm`, `m4v`, `mkv`; the name only, no folder) |
+| `# Title` | the title of the index, at most once; without it, the file's name (`series`), or the playlist's title when the list has exactly one playlist |
+| `## Chapter`, `### …`, `#### …` | chapters on three levels, shown as written (a skipped level or an empty chapter stays) |
+| `> text` | a note: each such line is one paragraph; `**bold**`, `*italic*` or `_italic_`, `http(s)://` addresses are links, anything else stays as written. Notes after a video belong to it (shown under its title), notes after a heading introduce the chapter, notes after a playlist follow all its videos |
+| `= Title` | a title of your own for the video, playlist or file on the very next line (instead of the title from the page, from YouTube or the file's name) |
+| `// text` | a comment, ignored |
+| `!no-numbers`, `!no-thumbnails` | settings for the whole list, at the top (before the first chapter, video or playlist): no numbers; no images (a small round play button instead, the duration in the line) |
 
-Videos without a page have a grey title without a link, and instead of the date the reason (hover over *Failed* to see YouTube's message):
+Blank lines do not matter. Every other line is an error: the run stops before anything is downloaded and names the line (`series.txt, line 7: not a video, playlist or video file: …`). Note that `#` now starts the title and chapters: comments start with `//`.
 
-| Reason | Meaning |
+**Playlists in the list:** a playlist that is the only element of its level (not counting notes) puts its videos in its place; next to other videos, playlists or chapters it becomes a chapter one level lower, titled as on YouTube (at the third level its videos stand next to the others). Under an empty heading (`##` alone) the only playlist gives the heading its title. Each playlist gets two notes, as on its page on YouTube: its title, *Playlist*, the channel and the number of videos (YouTube's count, which includes videos it no longer shows), and its description as written. Titles always come from the pages, never from the playlist: YouTube sends the titles in a playlist translated into the language it is asked in (English), while the pages keep the originals.
+
+**What the index shows:** each video in one dense row: its thumbnail with the duration on it, the title linking to its page (in a new tab), and a small line: the language of the video, the file's format (hover for the file's name) and *YouTube* (hover for the original title). Videos are numbered on each level from 1, chapters too. What is missing in the folder is said in grey italics, and the console names the line:
+
+| In the line | Meaning |
 |---|---|
-| `Unavailable` | YouTube marks the video as private or deleted |
-| `Failed` | the last attempt to archive it failed, e.g. `Sign in to confirm your age` (then try `--cookies firefox`) |
-| `Not archived yet` | not tried yet, e.g. because the run was stopped with `Ctrl+C`, or its page was deleted |
-| `Not a video` | only in a list file: a line with a channel or an unknown URL |
+| *only the page downloaded* | the page is there, the video file is not (dimmed thumbnail) |
+| *not downloaded* | neither page nor file: the title is the video's id (or the `= Title`, or the name in the line); `--index` downloads it |
+| *file not found* | your own file is not in the output folder: check the name |
+| *no longer on YouTube* | instead of the YouTube link: the video was gone at the last `--refresh-json` |
+| *playlist could not be read* | in the place of a playlist YouTube did not give and the index did not keep |
 
 Good to know about the index:
 
-- **It always shows the current state of the folder.** It is made at the end of the run, also after `Ctrl+C` (then it lists the whole playlist, with the videos not reached yet in grey). If the program was stopped in any other way, the next run makes it again. Nothing about earlier runs is stored elsewhere: the index itself remembers the list and the reasons, and a reason stays until the video is tried again.
-- **Renaming is safe.** Pages are found by `[video id]` in their names, so after renaming them the index links to the new names and still shows the original titles. The index of a playlist is found by `[playlist id]` and may be renamed the same way; the index of a list file must keep its name.
-- **`--index-only` downloads nothing.** It only rebuilds the index from the pages in the folder, e.g. after renaming or deleting pages. It uses the list kept in the earlier index; only if there is none yet, it reads the playlist's list from YouTube (one request, no video). New videos added to the playlist on YouTube appear only after a normal run with `--index`.
+- **It always shows what is in the folder.** It is made at the end of every run with `--index` (also after `Ctrl+C`), from the pages (only their metadata, at the top) and the files lying there, never from what this run downloaded. `--index`, `--index-only` and `--index … --load-json` give the same index for the same folder; why a download failed is only in the console. A page made by a version before the new index lacks the data the index needs: the console says which, make it again (`--load-json` or `--overwrite`).
+- **Renaming is safe.** Pages and video files are found by `[video id]` in their names, so after renaming them the index links to the new names and still shows the original titles; run `--index-only` to refresh it.
+- **Playlists are read each time** (only their list, one request per about 100 videos, also with `--index-only` and `--load-json`): videos added on YouTube appear in the index, removed ones disappear. The index keeps each playlist's list inside, invisibly; when YouTube cannot be reached, that list is used and the console says so. `--cookies` works for private playlists.
+- **With the JSON options:** `--load-json`, `--update-json` and `--refresh-json` work with `--index` as with videos in the command, then make the index; the saved data are found by the video id in the output folder. With `--load-json`, a video of the list without saved data is skipped with a note (`No saved data for …; skipped.`).
+- **`--index-only` only makes the index:** options that download or shape the pages (`--video`, `--transcript`, the JSON options, `--overwrite`, `--no-comments`, `--max-comments`, `--no-cards`, `--no-avatars`, `--no-snapshot`) are an error with it; `-o`, `--theme` and `--cookies` work.
+- **The index has no player yet;** it works without JavaScript.
 
 ### Downloading the video
 

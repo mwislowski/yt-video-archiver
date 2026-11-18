@@ -208,10 +208,8 @@ def test_source_from_page_name(text, expected):
     assert yt2html.source_from_page_name(text) == expected
 
 
-def test_page_name_in_the_command_and_in_a_list_file(tmp_path):
-    batch = tmp_path / "list.txt"
-    batch.write_text("Other [TESTVIDEO02].html\n", encoding="utf-8")
-    args = yt2html.parse_args(["My page [TESTVIDEO01].html", "-a", str(batch)])
+def test_page_name_in_the_command():
+    args = yt2html.parse_args(["My page [TESTVIDEO01].html", "Other [TESTVIDEO02].mp4"])
     assert args.sources == ["https://www.youtube.com/watch?v=TESTVIDEO01",
                             "https://www.youtube.com/watch?v=TESTVIDEO02"]
 
