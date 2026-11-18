@@ -157,7 +157,8 @@ def test_no_fixed_colours_outside_the_variables():
     allowed = {"#0f0f0f", "#f1f1f1", "#aaaaaa", "#272727", "#3f3f3f", "#3ea6ff", "#3a3a3a",
                "#000", "#ff4e45", "#fff", "#0e8f85", "#3cc8b4",
                "#9cc3e8", "#ffd54a", "#6d5bd0",   # --planned, --chosen, --audio
-               "#b4b4b4", "#2b2b2b"}             # --tag-bg, --tag-fg
+               "#b4b4b4", "#2b2b2b",             # --tag-bg, --tag-fg
+               "#3f2a2a", "#c09a9a"}             # --warn-bg, --warn-fg
     import re
     assert set(re.findall(r"#[0-9a-fA-F]{3,6}\b", yt2html.CSS)) <= allowed
 
@@ -432,3 +433,15 @@ def test_channel_avatar_is_downloaded_small_also_with_no_avatars(capsys, info, t
     assert avatars == [f"https://yt3.ggpht.test/owner=s{yt2html.AVATAR_SIZE}"]
     html = next((tmp_path / "b").glob("*.html")).read_text("utf-8")
     assert 'class="avatar av0"' in html[html.index('<div class="channel">'):]
+
+
+def test_an_unknown_channel_or_author_gets_a_placeholder_without_a_letter(info):
+    for key in ("uploader", "channel"):
+        info.pop(key, None)
+    info["comments"] = [{"id": "c1", "text": "Hi", "parent": "root"}]
+    html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 18))
+    assert "(unknown channel)" in html
+    assert re.search(r'<div class="channel"><span class="avatar" style="--hue:\d+" '
+                     r'aria-hidden="true"></span>', html)
+    assert re.search(r'<article class="comment" id="comment-c1">\n<span class="avatar" '
+                     r'style="--hue:\d+" aria-hidden="true"></span>', html)

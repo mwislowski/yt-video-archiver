@@ -86,3 +86,9 @@ class TestLinkify:
         html = self.render("<script>alert(1)</script> & more")
         assert "<script>" not in html
         assert "&lt;script&gt;" in html and "&amp; more" in html
+
+
+def test_the_letter_on_a_placeholder():
+    assert [yt2html.initial_of(n) for n in
+            ("@kasia", "(unknown)", "😀 ola", "łukasz", "123 Studio", "!!!", "", None)] == \
+        ["K", "U", "O", "Ł", "1", "", "", ""]

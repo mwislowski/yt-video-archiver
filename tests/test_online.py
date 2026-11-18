@@ -111,3 +111,13 @@ def test_srt_made_from_json3_is_youtubes_srt():
         theirs = yt2html.read_url(ydl, yt2html.with_query(url, fmt="srt"))
         ours = yt2html.json3_to_srt(json.loads(yt2html.read_url(ydl, url)))
     assert ours.replace(b"\r\n", b"\n").strip() == theirs.replace(b"\r\n", b"\n").strip()
+
+
+def test_a_removed_video_fails_and_saves_nothing(tmp_path, capsys):
+    # removed for the Terms of Service (seen 17.11.2026; tests/data/gone_playability.json)
+    code = yt2html.main(["r671hNQtok0", "-o", str(tmp_path), "--write-json"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert ("FAILED: r671hNQtok0: This video has been removed for violating YouTube's "
+            "Terms of Service") in out
+    assert not list(tmp_path.iterdir())

@@ -7,6 +7,7 @@ network unless it is marked "online" and pytest runs with --online.
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 import json
 import time
@@ -367,3 +368,86 @@ def cards_collection(*cues: tuple[int, str]) -> dict:
             "teaser": {"simpleCardTeaserRenderer": {"message": {"simpleText": message}}},
             "cueRanges": [{"startCardActiveMs": str(ms), "endCardActiveMs": "0",
                            "teaserDurationMs": "6000"}]}} for ms, message in cues]}}
+
+
+# --------------------------------------------------------------------------
+# Saved data and a faked YouTube for --update-json and --refresh-json
+# (test_update.py, test_unavailable.py)
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def saved(tmp_path, info):
+    """Saved data in the output folder (as --write-json leaves them), with a
+    refused Polish translation and German that YouTube does not offer."""
+    info[yt2html.CAPTION_KEY] = {"language": "en", "kind": "asr"}
+    info[yt2html.TRANSLATIONS_KEY] = {"pl": "Polish", "fr": "French"}
+    transcript = info[yt2html.TRANSCRIPT_KEY]
+    french = {"language": "fr", "name": "French", "cues": transcript["cues"]}
+    transcript["translations"] = {"fr": french}      # already there: kept, not asked for
+    transcript["missing"] = {
+        "pl": {"reason": "YouTube refused to send it (HTTP 429 Too Many Requests)",
+               "refused": True, "date": "2026-11-05"},
+        "de": {"reason": "YouTube offers no translation of this transcript into 'de'",
+               "refused": False, "date": "2026-11-05"}}
+    folder = tmp_path / "out"
+    folder.mkdir()
+    path = folder / "Title [TESTVIDEO01].info.json"
+    path.write_text(json.dumps(info), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def youtube(monkeypatch):
+    """Fresh player data (yt-dlp faked) and the caption requests; a full
+    download (fetch_info) is not expected unless a test allows it."""
+    seen = {"extracted": 0, "fail_translations": 0}
+
+    class FakeYoutubeDL(FakeYDL):
+        def __init__(self, opts):
+            super().__init__(fail_translations=seen["fail_translations"])
+            seen["opts"] = opts
+            seen["ydl"] = self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download):
+            seen["extracted"] += 1
+            assert url == "https://www.youtube.com/watch?v=TESTVIDEO01" and not download and not seen["opts"].get("getcomments")
+            return {"id": "TESTVIDEO01",
+                    "automatic_captions": {"en-orig": caption_formats("English (Original)")}}
+
+        def sanitize_info(self, info):
+            return info
+
+    real = yt2html.yt_dlp.YoutubeDL      # still names the page (output_path)
+    monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL",
+                        lambda opts: FakeYoutubeDL(opts) if "skip_download" in opts else real(opts))
+    monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: pytest.fail("no full download"))
+    return seen
+
+
+@pytest.fixture
+def refreshed(saved, youtube, monkeypatch, info):
+    """Fresh data for --refresh-json: N2r2a deleted, a new comment, N1 edited,
+    more views."""
+    asked = []
+
+    def fetch_info(source, args):
+        asked.append((source, args.transcript))
+        fresh = json.loads(json.dumps(info))
+        fresh["comments"] = [c for c in fresh["comments"] if c["id"] != "N2r2a"]
+        fresh["comments"].insert(1, {**fresh["comments"][1], "id": "NEW", "text": "Fresh one"})
+        next(c for c in fresh["comments"] if c["id"] == "N1")["text"] = "Edited"
+        fresh["comment_count"] = len(fresh["comments"])
+        fresh["view_count"] = 30_000_000
+        fresh[yt2html.YT_COUNT_KEY] = "10"
+        fresh[yt2html.ARCHIVED_KEY] = dt.date.today().isoformat()
+        fresh["automatic_captions"] = {"en-orig": caption_formats("English (Original)")}
+        return fresh
+
+    monkeypatch.setattr(yt2html, "fetch_info", fetch_info)
+    return asked

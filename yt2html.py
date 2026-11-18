@@ -161,9 +161,16 @@ TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
 # What each run of --update-json and --refresh-json did to the saved data:
 # [{date, time, yt2html, added: [text] ("translation pl", "subtitles pl
 # (translated)"), refreshed: true for --refresh-json, comments: {new, gone,
-# back} when the comments were refreshed}]; the copy's date stays. The page
-# names only the runs (Downloaded row); the rest is for the data.
+# back} when the comments were refreshed, unavailable: true for a
+# --refresh-json that found the video no longer on YouTube}]; the copy's date
+# stays. The page names only the runs (Downloaded row); the rest is for the data.
 UPDATES_KEY = "yt2html_updates"
+
+# --refresh-json found the video no longer on YouTube (removed or private):
+# {status, reason} as YouTube gives them (the reason as yt-dlp shows it). The
+# state now, without history (the runs are in UPDATES_KEY); removed when a
+# later --refresh-json finds the video again.
+UNAVAILABLE_KEY = "yt2html_unavailable"
 
 # In a saved comment (--refresh-json): the day it was first not on YouTube,
 # the times it was missing and came back ([{from, until}]), its earlier
@@ -269,6 +276,43 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
 # Reading the watch page (what yt-dlp does not return)
 # --------------------------------------------------------------------------
 
+class VideoUnavailable(Exception):
+    """YouTube refused the video: the watch page has no video, only a
+    playability status other than OK. `status` and `reason` as YouTube gives
+    them; str() is the reason."""
+
+    def __init__(self, status: str, reason: str):
+        super().__init__(reason)
+        self.status, self.reason = status, reason
+
+    @property
+    def gone(self) -> bool:
+        """Removed (YouTube's status ERROR, except "try again later") or
+        private: --refresh-json records it. Any other refusal ("not a bot",
+        sign in to confirm the age, try again later) may not last."""
+        if self.status == "ERROR":
+            return "try again later" not in self.reason.lower()
+        return self.status == "LOGIN_REQUIRED" and self.reason.startswith("Private video")
+
+
+def playability_refusal(player_response: dict) -> VideoUnavailable | None:
+    """The refusal in the watch page's player data, or None. yt-dlp, told to
+    ignore missing formats, only warns and returns an empty shell
+    ("youtube video #ID"), so the program checks it itself. The text joins
+    YouTube's reason and the error screen's description as yt-dlp does
+    ("Video unavailable. This video is no longer available because ...")."""
+    status = player_response.get("playabilityStatus") or {}
+    if status.get("status") in (None, "OK") or player_response.get("videoDetails"):
+        return None
+    screen = (((status.get("errorScreen") or {}).get("playerInterstitialRenderer") or {})
+              .get("content") or {}).get("interstitialViewModel") or {}
+    reason = status.get("reason") or (screen.get("title") or {}).get("content") or status["status"]
+    detail = (screen.get("description") or {}).get("content")
+    if detail and detail != reason:
+        reason = f"{reason}. {detail}"
+    return VideoUnavailable(status["status"], reason)
+
+
 def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -> None:
     """Fill PAGE_KEYS from the watch page, fetched once more.
 
@@ -279,7 +323,8 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
     consent; ytInitialData and ytInitialPlayerResponse are read from it.
     If it cannot be read, all PAGE_KEYS are None and the page falls back to
     yt-dlp's data where it can. Info cards are read only if `cards` is true
-    (--no-cards leaves CARDS_KEY out and does nothing for them).
+    (--no-cards leaves CARDS_KEY out and does nothing for them). Raises
+    VideoUnavailable when YouTube refuses the video (playability_refusal()).
     """
     url = f"{YOUTUBE}/watch?v={info.get('id')}&hl=en"
     try:
@@ -294,14 +339,18 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
         if cards:
             info[CARDS_KEY] = None
         return
+    refusal = None
     try:
         player_response = embedded_json(webpage, "ytInitialPlayerResponse")
+        refusal = playability_refusal(player_response)
         info[CAPTION_KEY] = default_caption_track(player_response)
         info[TRANSLATIONS_KEY] = translation_languages(player_response)
         info[WATCH_PAGE_KEY] = "read"
     except Exception:
         info[CAPTION_KEY] = info[TRANSLATIONS_KEY] = None
         info[WATCH_PAGE_KEY] = "partial"
+    if refusal:
+        raise refusal
     info[MARKERS_KEY] = parse_marker_lists(data, info.get("description") or "",
                                            info.get("duration"))
     info[EXTRAS_KEY] = parse_description_extras(data)
@@ -1335,6 +1384,21 @@ def fetch_thumbnail(info: dict) -> str | None:
     return None
 
 
+PAGE_THUMBNAIL_RE = re.compile(r'<img class="thumbnail" src="(data:image/[^"]+)"')
+
+
+def images_of_page(path: Path | None) -> dict[str, str]:
+    """The images of an existing page that YouTube may no longer give when the
+    page is made again (a video gone from YouTube: its thumbnails go with it):
+    {"thumbnail": data URI}, only what the page has."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore") if path else ""
+    except OSError:
+        return {}
+    found = PAGE_THUMBNAIL_RE.search(text)
+    return {"thumbnail": found.group(1)} if found else {}
+
+
 def fetch_images(urls: set, what: str, resize=None) -> dict[str, str]:
     """Download images in parallel; returns {original url: data URI}.
 
@@ -1422,8 +1486,10 @@ def avatar_hue(name: str) -> int:
 
 
 def initial_of(name: str) -> str:
-    name = (name or "?").lstrip("@")
-    return (name[:1] or "?").upper()
+    """The letter on a placeholder: the first letter or digit of the name
+    (not "@", "(" or an emoji); none for a name without one, and for an
+    unknown author or channel (the caller passes "")."""
+    return next((ch.upper() for ch in name or "" if ch.isalnum()), "")
 
 
 # --------------------------------------------------------------------------
@@ -1572,7 +1638,7 @@ CSS = """
 :root{
   --bg:#0f0f0f; --text:#f1f1f1; --muted:#aaaaaa; --panel:#272727;
   --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
-  --tag-bg:#b4b4b4; --tag-fg:#2b2b2b;
+  --tag-bg:#b4b4b4; --tag-fg:#2b2b2b; --warn-bg:#3f2a2a; --warn-fg:#c09a9a;
   --accent:#0e8f85; --on-accent:#fff; --accent-text:#3cc8b4;
   --accent-soft:rgba(14,143,133,.28); --hover:brightness(1.15);
   --planned:#9cc3e8; --chosen:#ffd54a; --audio:#6d5bd0;
@@ -1602,6 +1668,9 @@ h1.title a{color:var(--text)}
 .fact .value{font-size:16px;font-weight:700;line-height:22px;white-space:nowrap}
 .fact .label{color:var(--muted);font-size:12px;line-height:18px}
 .fact.extra .value{color:var(--muted)}
+/* The video is no longer on YouTube: the Refreshed tile, red emerging from grey */
+.fact.warn{background:var(--warn-bg)}
+.fact.warn .value{color:var(--warn-fg)}
 /* Panels below the facts share one look */
 .description,.desc-extra,.markers,.transcript{background:var(--panel);border-radius:12px;
   padding:12px;margin-top:12px}
@@ -1826,7 +1895,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 LIGHT_VARIABLES = """
   --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
   --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
-  --tag-bg:#5f5f5f; --tag-fg:#ececec;
+  --tag-bg:#5f5f5f; --tag-fg:#ececec; --warn-bg:#edd9d9; --warn-fg:#7d4c4c;
   --accent:#0f766e; --accent-text:#0f766e; --accent-soft:rgba(15,118,110,.16);
   --hover:brightness(.92); --planned:#2f6a9e; --chosen:#9a6700; --audio:#5b47c4;
   color-scheme:light;
@@ -1886,7 +1955,7 @@ def render_comment(c: dict, children: dict, avatars: AvatarStyles,
     time_title = f' title="≈ {approx}"' if approx else ""
 
     parts = [f'<article class="comment" id="comment-{esc(c.get("id", ""))}">',
-             avatars.html(c.get("author_thumbnail"), author),
+             avatars.html(c.get("author_thumbnail"), c.get("author") or ""),
              '<div class="body">']
     if c.get("is_pinned"):
         parts.append(f'<div class="pinned">📌 Pinned by {esc(uploader)}</div>')
@@ -1919,9 +1988,10 @@ def render_comment(c: dict, children: dict, avatars: AvatarStyles,
     return "\n".join(parts)
 
 
-def fact(label: str, value: str, extra: bool = False) -> str:
-    """One fact tile; extra=True marks information added by this program (grey)."""
-    cls = "fact extra" if extra else "fact"
+def fact(label: str, value: str, extra: bool = False, warn: bool = False) -> str:
+    """One fact tile; extra=True marks information added by this program
+    (grey), warn=True a warning (the video no longer on YouTube)."""
+    cls = "fact" + (" extra" if extra else "") + (" warn" if warn else "")
     return (f'<div class="{cls}"><div class="value">{esc(value)}</div>'
             f'<div class="label">{esc(label)}</div></div>')
 
@@ -2239,7 +2309,8 @@ def page_metadata(info: dict, archived: dt.date) -> dict[str, str]:
         "yt2html:comments-status": comment_status(info),
         "yt2html:comments-downloaded": str(len(info.get("comments") or [])),
         "yt2html:comments-youtube": count_text,
-    }
+    } | ({"yt2html:unavailable": "{date}T{time}".format(**unavailable_checks(info)[-1])}
+         if info.get(UNAVAILABLE_KEY) else {})
 
 
 META_RE = re.compile(r'<meta name="(yt2html:[a-z-]+)" content="([^"]*)">')
@@ -2919,9 +2990,16 @@ def about_downloaded(info: dict, archived: dt.date) -> str:
     if ytdlp:
         programs.append(f"yt-dlp {esc(ytdlp)}")
     text = f"{when} from {source}" + (f" with {' and '.join(programs)}" if programs else "")
-    for update in info.get(UPDATES_KEY) or []:   # the later runs; what they did: in the data
-        text += (f"; {'refreshed' if update.get('refreshed') else 'updated'} "
-                 f"{esc(format_date(update['date']))} {esc(update.get('time') or '')}").rstrip()
+    updates = info.get(UPDATES_KEY) or []
+    unavailable = info.get(UNAVAILABLE_KEY)
+    last_check = max((i for i, u in enumerate(updates) if u.get("unavailable")), default=None)
+    for i, update in enumerate(updates):   # the later runs; what they did: in the data
+        event = ("no longer on YouTube" if update.get("unavailable") else
+                 "refreshed" if update.get("refreshed") else "updated")
+        text += (f"; {event} {esc(format_date(update['date']))} "
+                 f"{esc(update.get('time') or '')}").rstrip()
+        if unavailable and i == last_check:   # YouTube's words, once, while it lasts
+            text += f" “{esc(unavailable.get('reason') or '')}”"
     return text
 
 
@@ -3137,6 +3215,23 @@ def closed_note(closed: dict) -> str:
 def gone_comments(comments: list[dict]) -> int:
     """How many saved comments --refresh-json no longer found on YouTube."""
     return sum(1 for c in comments if c.get(MISSING_SINCE_KEY))
+
+
+def unavailable_checks(info: dict) -> list[dict]:
+    """The runs of --refresh-json that found the video no longer on YouTube."""
+    return [u for u in info.get(UPDATES_KEY) or [] if u.get("unavailable")]
+
+
+def refreshed_tile(info: dict, archived: dt.date) -> str:
+    """The Refreshed tile: the day of the last --refresh-json, if not the copy's
+    day; for a video no longer on YouTube the day of the last check, in the
+    warning colour, always."""
+    if info.get(UNAVAILABLE_KEY):
+        day = dt.date.fromisoformat(unavailable_checks(info)[-1]["date"])
+        return fact("Refreshed", day.strftime(DATE_FORMAT), extra=True, warn=True)
+    refreshed = last_refresh(info)
+    return fact("Refreshed", refreshed.strftime(DATE_FORMAT), extra=True) \
+        if refreshed and refreshed != archived else ""
 
 
 def last_refresh(info: dict, comments: bool = False) -> dt.date | None:
@@ -4004,7 +4099,8 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     verified = ' <span class="badge" title="Verified">✓</span>' if info.get("channel_is_verified") else ""
     subs = info.get("channel_follower_count")
     subs_text = f"{format_compact(subs)} subscribers" if subs is not None else ""
-    body.append('<div class="channel">' + avatars.html(channel_avatar, uploader)
+    body.append('<div class="channel">'
+                + avatars.html(channel_avatar, info.get("uploader") or info.get("channel") or "")
                 + f'<div><div class="name">{channel_name}{verified}</div>'
                 + f'<div class="subs">{esc(subs_text)}</div></div></div>')
 
@@ -4016,9 +4112,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 + fact("Comments", youtube_comment_count(info)[0] or "—")
                 + (fact("Snapshot", archived.strftime(DATE_FORMAT), extra=True)
                    if show_snapshot else "")
-                + (fact("Refreshed", refreshed.strftime(DATE_FORMAT), extra=True)
-                   if show_snapshot and (refreshed := last_refresh(info))
-                   and refreshed != archived else "")
+                + (refreshed_tile(info, archived) if show_snapshot else "")
                 + "</div>")
 
     description = info.get("description") or ""
@@ -4820,11 +4914,12 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
 
 
 def note_update(info: dict, record: dict, added: list[str] = (), refreshed: bool = False,
-                comments: dict | None = None) -> None:
+                comments: dict | None = None, unavailable: bool = False) -> None:
     """Record what this run of --update-json or --refresh-json did in its own
     entry of UPDATES_KEY (`record`, empty until something happens): what was
-    added, whether the data were refreshed, what changed in the comments."""
-    if not added and not refreshed:
+    added, whether the data were refreshed, what changed in the comments,
+    whether the video was found no longer on YouTube."""
+    if not added and not refreshed and not unavailable:
         return
     if not record:
         now = dt.datetime.now()
@@ -4834,6 +4929,8 @@ def note_update(info: dict, record: dict, added: list[str] = (), refreshed: bool
     record["added"] += [item for item in added if item not in record["added"]]
     if refreshed:
         record["refreshed"] = True
+    if unavailable:
+        record["unavailable"] = True
     if comments is not None:
         record["comments"] = comments
 
@@ -5010,14 +5107,26 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     record = outcome.setdefault("record", {})   # this run's entry in UPDATES_KEY
     if updating:
         fresh = started = None
+        gone = False
         if args.refresh_json:
             log(f"Fetching {source} (to refresh the saved data)")
             started = time.monotonic()
-            # the transcript as the data have it; what it lacks comes below
-            fresh = fetch_info(f"{YOUTUBE}/watch?v={info.get('id')}",
-                               argparse.Namespace(**{**vars(args), "transcript": []}))
-            note_update(info, record, refreshed=True, comments=refresh_saved(info, fresh))
-        whole, targets = missing_for_update(info, args)
+            try:
+                # the transcript as the data have it; what it lacks comes below
+                fresh = fetch_info(f"{YOUTUBE}/watch?v={info.get('id')}",
+                                   argparse.Namespace(**{**vars(args), "transcript": []}))
+            except VideoUnavailable as refusal:
+                if not refusal.gone:   # may not last: nothing is marked, nothing saved
+                    raise
+                # recorded; the page is made again from the data, nothing else changes
+                gone = True
+                info[UNAVAILABLE_KEY] = {"status": refusal.status, "reason": refusal.reason}
+                note_update(info, record, unavailable=True)
+                log(f"No longer on YouTube: {refusal.reason} (recorded)")
+            else:
+                info.pop(UNAVAILABLE_KEY, None)
+                note_update(info, record, refreshed=True, comments=refresh_saved(info, fresh))
+        whole, targets = ((False, []) if gone else missing_for_update(info, args))
         if whole or targets:
             note_update(info, record, update_transcript(info, args, whole, targets, fresh,
                                                         started))
@@ -5072,7 +5181,10 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     log("Downloading thumbnail...")
     thumbnail = fetch_thumbnail(info)
     if not thumbnail:
-        log("  Thumbnail could not be downloaded.")
+        kept = images_of_page(found).get("thumbnail")
+        log("  Thumbnail could not be downloaded" +
+            ("; kept from the existing page." if kept else "."))
+        thumbnail = kept
     avatar_uris = fetch_images(avatar_urls(shown(note=True), comments=not args.no_avatars),
                                "avatars", resize=resize_avatar_url)
     extra_images = fetch_images(extra_image_urls(shown()), "images (people, podcast, cards)")
@@ -5884,7 +5996,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "counts, the title and description, and the comments merged with "
                              "the saved ones (new ones "
                              "added, edited ones updated, those YouTube no longer has kept "
-                             "and marked 'not on YouTube on DD.MM.YYYY'); the copy's date stays")
+                             "and marked 'not on YouTube on DD.MM.YYYY'); the copy's date stays; "
+                             "a video no longer on YouTube (removed or private) is recorded "
+                             "and its page made again from the saved data")
     parser.add_argument("--load-json", action="store_true",
                         help="build pages only from saved .info.json files (or video ids "
                              "looked up in -o), without YouTube; existing pages are always "

@@ -4,6 +4,16 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+
+- `--refresh-json` records a video that is no longer on YouTube (removed, its account terminated, made private), instead of refreshing it: the saved data stay as they were, with YouTube's status and words added, and the page is made again from them. The *Refreshed* tile shows the day of the check in a muted red (also on the copy's day), *Downloaded* names each check (`no longer on YouTube 03.12.2026 14:05`) with YouTube's words after the last one, and the page's metadata note it for the index (`yt2html:unavailable`). When the video is back, the next refresh is an ordinary one. Other refusals (`not a bot`, `try again later`) fail the video and change nothing.
+
+### Fixed
+
+- A private or removed video (also in a playlist) no longer gives an empty page titled `youtube video #ID` (yt-dlp only warns about it): it fails with YouTube's words, e.g. `FAILED: ID: Video unavailable. This video is no longer available because the YouTube account associated with this video has been terminated.`, and nothing is saved. Before, `--refresh-json` of such a video would also have replaced the saved title, cleared the timestamp lists and marked all comments as no longer on YouTube.
+- A page made again keeps its thumbnail when YouTube no longer gives one (its thumbnails go with a video that is gone), instead of showing *Thumbnail not available*.
+- The placeholder of an avatar shows the first letter or digit of the name, no longer a sign such as `(` or `@`; an unknown channel or comment author gets a placeholder without a letter.
+
 ## [0.9.3] - 2026-11-15
 
 ### Fixed
