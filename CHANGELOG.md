@@ -7,6 +7,7 @@ All notable changes to this project. Versions: the second number for new feature
 ### Added
 
 - `--refresh-json` records a video that is no longer on YouTube (removed, its account terminated, made private), instead of refreshing it: the saved data stay as they were, with YouTube's status and words added, and the page is made again from them. The *Refreshed* tile shows the day of the check in a muted red (also on the copy's day), *Downloaded* names each check (`no longer on YouTube 03.12.2026 14:05`) with YouTube's words after the last one, and the page's metadata note it for the index (`yt2html:unavailable`). When the video is back, the next refresh is an ordinary one. Other refusals (`not a bot`, `try again later`) fail the video and change nothing.
+- Pages carry more metadata for the coming index, invisibly in their header: the time of the download (`yt2html:archived` now with the time, e.g. `2026-11-17T14:05`), the last refresh, the publication day, the duration in seconds, the original language and YouTube's small cover (320×180, embedded; about 15–20 KB more per page). A value that is not known is left out, never written empty; `yt2html:metadata` (`2`) marks pages with this set. A cover YouTube no longer gives is kept from the page being made again.
 
 ### Fixed
 

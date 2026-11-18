@@ -6,6 +6,8 @@ a failure here usually means YouTube changed something the program reads,
 or yt-dlp needs an update. Run them now and then, not on every change.
 """
 
+import re
+
 import pytest
 
 import yt2html
@@ -46,7 +48,15 @@ def test_description_chapters_summary_podcast_and_dubbed_transcript(tmp_path):
     assert info[yt2html.TRANSCRIPT_KEY]["original"] is True
     assert info[yt2html.PLAYLIST_KEY] is None
     assert "<dt>Video page</dt><dd>read</dd>" in html
-    import re
+    # metadata for the index, incl. YouTube's small cover (mqdefault)
+    page = next(tmp_path.glob("*[[]Z8lf5oWKfj0[]].html"))
+    meta = yt2html.read_page_metadata(page)
+    assert meta["yt2html:metadata"] == yt2html.METADATA_VERSION
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d", meta["yt2html:archived"])
+    assert re.fullmatch(r"\d{4}-\d\d-\d\d", meta["yt2html:published"])
+    assert int(meta["yt2html:duration"]) == round(info["duration"])
+    assert meta["yt2html:language"].startswith("en")
+    assert meta["yt2html:cover"].startswith("data:image/jpeg;base64,")
     assert re.search(r"<dt>Images</dt><dd>thumbnail \d+×\d+;", html)  # size read from the image
 
 

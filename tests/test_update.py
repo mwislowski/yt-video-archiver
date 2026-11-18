@@ -315,8 +315,9 @@ def test_refresh(capsys, saved, youtube, refreshed):
     assert by_id["NEW"][yt2html.FIRST_SEEN_KEY] == dt.date.today().isoformat()
     assert yt2html.FIRST_SEEN_KEY not in by_id["N1"]          # there from the first download
     record, = data[yt2html.UPDATES_KEY]
-    time = record.pop("time")
-    assert record == {"date": dt.date.today().isoformat(), "yt2html": yt2html.__version__,
+    time = record["time"]
+    assert record == {"date": dt.date.today().isoformat(), "time": time,
+                      "yt2html": yt2html.__version__,
                       "added": ["translation pl"], "refreshed": True,
                       "comments": {"new": 1, "gone": 1, "back": 0}}
     html = page(saved.parent).read_text("utf-8")

@@ -1387,16 +1387,24 @@ def fetch_thumbnail(info: dict) -> str | None:
 PAGE_THUMBNAIL_RE = re.compile(r'<img class="thumbnail" src="(data:image/[^"]+)"')
 
 
+def cover_url(info: dict) -> str:
+    """YouTube's small ready-made cover (mqdefault, 320×180), for the index."""
+    return f"https://i.ytimg.com/vi/{info.get('id')}/mqdefault.jpg"
+
+
 def images_of_page(path: Path | None) -> dict[str, str]:
     """The images of an existing page that YouTube may no longer give when the
     page is made again (a video gone from YouTube: its thumbnails go with it):
-    {"thumbnail": data URI}, only what the page has."""
+    {"thumbnail": data URI, "cover": data URI}, only what the page has."""
     try:
         text = path.read_text(encoding="utf-8", errors="ignore") if path else ""
     except OSError:
         return {}
     found = PAGE_THUMBNAIL_RE.search(text)
-    return {"thumbnail": found.group(1)} if found else {}
+    images = {"cover": read_page_metadata(path).get("yt2html:cover")} if text else {}
+    if found:
+        images["thumbnail"] = found.group(1)
+    return {kind: uri for kind, uri in images.items() if uri}
 
 
 def fetch_images(urls: set, what: str, resize=None) -> dict[str, str]:
@@ -1468,17 +1476,24 @@ def format_timestamp(ts) -> str | None:
     return dt.datetime.fromtimestamp(ts).strftime(DATE_FORMAT)
 
 
-def published_date(info: dict) -> str:
-    """Publication date as YouTube shows it (premiere/stream start if any)."""
+def published_day(info: dict) -> dt.date | None:
+    """Publication day as YouTube shows it (premiere/stream start if any), in
+    the computer's local time zone when yt-dlp gives the moment."""
     for key in ("release_timestamp", "timestamp"):
-        text = format_timestamp(info.get(key))
-        if text:
-            return text
+        if info.get(key) is not None:
+            return dt.datetime.fromtimestamp(info[key]).date()
     for key in ("release_date", "upload_date"):
-        raw = info.get(key)
-        if raw and len(raw) == 8:
-            return f"{raw[6:8]}.{raw[4:6]}.{raw[0:4]}"
-    return "—"
+        try:
+            return dt.datetime.strptime(info.get(key) or "", "%Y%m%d").date()
+        except ValueError:
+            continue
+    return None
+
+
+def published_date(info: dict) -> str:
+    """The Published tile: DD.MM.YYYY, or a dash."""
+    day = published_day(info)
+    return day.strftime(DATE_FORMAT) if day else "—"
 
 
 def avatar_hue(name: str) -> int:
@@ -2298,32 +2313,62 @@ def comment_status(info: dict) -> str:
     return "complete"
 
 
-def page_metadata(info: dict, archived: dt.date) -> dict[str, str]:
+# The set of yt2html:... tags a page has (DEVELOPMENT, *Page metadata*). A
+# page with this version has every tag whose value is known; an absent tag
+# means the value is unknown (refreshed, unavailable: it did not happen).
+# Pages without it were made by older versions: make them again.
+METADATA_VERSION = "2"
+
+
+def run_moment(update: dict) -> str:
+    """When a run of --update-json / --refresh-json was: YYYY-MM-DDTHH:MM."""
+    return f"{update['date']}T{update['time']}"
+
+
+def page_metadata(info: dict, archived: dt.date, cover: str | None = None) -> dict[str, str]:
     """Data for the index, kept invisibly in the page's <head> as
-    <meta name="yt2html:..."> (read back by read_page_metadata())."""
-    count_text = youtube_comment_count(info)[0] or ""  # as on the Comments tile
-    return {
-        "yt2html:video-id": info.get("id") or "",
-        "yt2html:title": info.get("title") or "",
-        "yt2html:archived": archived.isoformat(),
+    <meta name="yt2html:..."> (read back by read_page_metadata()). Only the
+    values that are known: an empty one is left out, never written empty.
+    Times are local, of the computer that downloaded or refreshed."""
+    epoch = info.get("epoch")
+    refreshes = [u for u in info.get(UPDATES_KEY) or [] if u.get("refreshed")]
+    published = published_day(info)
+    duration = info.get("duration")
+    tags = {
+        "yt2html:metadata": METADATA_VERSION,
+        "yt2html:video-id": info.get("id"),
+        "yt2html:title": info.get("title"),
+        # the moment of the download (as the Downloaded row), else the day
+        "yt2html:archived": (dt.datetime.fromtimestamp(epoch).strftime("%Y-%m-%dT%H:%M")
+                             if epoch else archived.isoformat()),
+        "yt2html:refreshed": run_moment(refreshes[-1]) if refreshes else None,
+        "yt2html:unavailable": (run_moment(unavailable_checks(info)[-1])
+                                if info.get(UNAVAILABLE_KEY) else None),
+        "yt2html:published": published.isoformat() if published else None,
+        "yt2html:duration": str(round(duration)) if duration is not None else None,
+        "yt2html:language": transcript_language(info),
         "yt2html:comments-status": comment_status(info),
         "yt2html:comments-downloaded": str(len(info.get("comments") or [])),
-        "yt2html:comments-youtube": count_text,
-    } | ({"yt2html:unavailable": "{date}T{time}".format(**unavailable_checks(info)[-1])}
-         if info.get(UNAVAILABLE_KEY) else {})
+        "yt2html:comments-youtube": youtube_comment_count(info)[0],  # as on the Comments tile
+        "yt2html:cover": cover,   # last: by far the longest
+    }
+    return {name: value for name, value in tags.items() if value}
 
 
 META_RE = re.compile(r'<meta name="(yt2html:[a-z-]+)" content="([^"]*)">')
-META_READ_BYTES = 16384  # the metadata is at the top, before the large <style>
+META_READ_BYTES = 65536  # read in pieces until <title>: the metadata is above it
 
 
 def read_page_metadata(path: Path) -> dict[str, str]:
     """The yt2html:... metadata of a page made by this program ({} if none)."""
+    head = b""
     try:
         with open(path, "rb") as file:
-            head = file.read(META_READ_BYTES).decode("utf-8", errors="ignore")
+            while b"<title>" not in head and (piece := file.read(META_READ_BYTES)):
+                head += piece
     except OSError:
         return {}
+    head = head.split(b"<title>")[0].decode("utf-8", errors="ignore")
     return {name: html.unescape(value) for name, value in META_RE.findall(head)}
 
 
@@ -4070,9 +4115,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 theme: str = "auto", no_avatars: bool = False,
                 from_json: bool = False, built: dt.datetime | None = None,
                 video_files: list[str] | None = None, video_size: int | None = None,
-                audio_files: dict | None = None) -> str:
+                audio_files: dict | None = None, cover: str | None = None) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
-    `avatar_uris` and `extra_images` ({image url: data URI}). `no_avatars`,
+    `avatar_uris`, `extra_images` ({image url: data URI}) and `cover` (only
+    in the metadata, for the index). `no_avatars`,
     `from_json` and `built` (the build time, default now) are only described
     in "About this copy". `video_files` and `audio_files` ({(code, role):
     file}) are what was found next to the page."""
@@ -4213,7 +4259,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         f'<meta name="generator" content="yt2html {__version__} (yt-video-archiver)">',
         f'<meta name="source-url" content="{esc(url)}">',
         *(f'<meta name="{name}" content="{esc(value)}">'
-          for name, value in page_metadata(info, archived).items()),
+          for name, value in page_metadata(info, archived, cover).items()),
         f"<title>{esc(title)}</title>",
         f'<meta name="color-scheme" content="{COLOR_SCHEMES.get(theme, "dark")}">',
         # The body is already rendered here, so every avatar class is known.
@@ -4370,7 +4416,7 @@ def render_index_rows(entries: list[dict], output_dir: Path, run: Run,
                     + (f'<div class="sub">{esc(comments_summary(meta))}</div>'
                        if comments_summary(meta) else ""))
             try:
-                when = dt.date.fromisoformat(meta.get("yt2html:archived") or "").strftime(DATE_FORMAT)
+                when = dt.date.fromisoformat((meta.get("yt2html:archived") or "")[:10]).strftime(DATE_FORMAT)
             except ValueError:
                 when = ""
             date = f'<td class="date">{when}</td>'
@@ -5178,13 +5224,18 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
             view.pop(CARDS_KEY, None)
         return view
 
-    log("Downloading thumbnail...")
+    log("Downloading thumbnail and cover...")
     thumbnail = fetch_thumbnail(info)
+    cover = fetch_image(cover_url(info))
+    kept = images_of_page(found)   # if YouTube no longer gives them
     if not thumbnail:
-        kept = images_of_page(found).get("thumbnail")
+        thumbnail = kept.get("thumbnail")
         log("  Thumbnail could not be downloaded" +
-            ("; kept from the existing page." if kept else "."))
-        thumbnail = kept
+            ("; kept from the existing page." if thumbnail else "."))
+    if not cover:
+        cover = kept.get("cover")
+        log("  Cover could not be downloaded" +
+            ("; kept from the existing page." if cover else "."))
     avatar_uris = fetch_images(avatar_urls(shown(note=True), comments=not args.no_avatars),
                                "avatars", resize=resize_avatar_url)
     extra_images = fetch_images(extra_image_urls(shown()), "images (people, podcast, cards)")
@@ -5198,7 +5249,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         video_files = video_files_for(info, output_dir)
         video_size = (output_dir / video_files[0]).stat().st_size if video_files else None
         audio_files = audio_files_for(info, output_dir)
-        page = render_page(shown(), thumbnail, avatar_uris, archived,
+        page = render_page(shown(), thumbnail, avatar_uris, archived, cover=cover,
                            show_snapshot=not args.no_snapshot,
                            theme=args.theme,
                            transcript_spec=args.transcript,
