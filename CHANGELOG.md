@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-19
+
 ### Added
 
 - Three layouts for the index, chosen in the list file: `!layout: plain` (the default: a video's note under its thumbnail, across the whole width), `!layout: compact` (beside the thumbnail, under the title) and `!layout: cards` (the title, its line and the note in one rounded frame beside the thumbnail, for every row). The notes of chapters and the list follow the layout: without frames in `plain` and `compact`, framed in `cards`.
@@ -206,7 +208,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.4...v0.10.0
 [0.9.4]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.2...v0.9.3
