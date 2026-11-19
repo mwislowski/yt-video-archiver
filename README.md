@@ -4,6 +4,8 @@
 
 With `--video` it also downloads the video itself as an mp4 next to the page, and on request extra audio tracks and subtitles (needs ffmpeg; see *Downloading the video*). The page gets the same base name as yt-dlp's default video file name, `Title [video id].html`, so a video downloaded separately (e.g. with yt-dlp) can sit beside it too.
 
+A **list file** of videos, playlists and video files of your own gets an **index page** with chapters, notes and its own player, for watching a whole series (see *List files and their index*).
+
 ## What the page contains
 
 - **Thumbnail, title, channel** with its avatar and subscriber count.
@@ -82,8 +84,9 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 |---|---|
 | Archive what a list file lists (what is missing) and make its index `series.html` | `yt2html --index series.txt` |
 | Only make the index, downloading nothing, e.g. after renaming pages or adding a video file | `yt2html --index-only series.txt` |
-| Make the pages of a list again from saved data, then the index | `yt2html --index series.txt --load-json` |
+| Make the pages of a list again from saved data, then the index (`--transcript` as when they were made: without it the pages lose the transcript) | `yt2html --index series.txt --load-json --transcript` |
 | Add to the saved data of a list what is missing, then the index | `yt2html --index series.txt --update-json --transcript` |
+| Refresh the counts and comments of a list's videos in their saved data, then the index | `yt2html --index series.txt --refresh-json --transcript` |
 | Make all pages of a list again, with the index | `yt2html --index series.txt --overwrite` |
 
 **What the page contains and how it looks**
@@ -375,6 +378,10 @@ At the bottom of every page, *About this copy* is folded to a single grey line w
 - **`FAILED: ... this is a channel URL`:** pass the URL of a video or of a playlist.
 - **`FAILED: ...: Video unavailable. ...`, `Private video. ...` and the like:** YouTube no longer shows the video (removed, its account terminated, made private), also in a playlist; nothing is saved for it. Each run tries it again; it does not stop the other videos. A video saved before keeps its page; `--refresh-json` records that it is gone (see *Saved data*).
 - **`FAILED: https://www.youtube.com/watch?v=...` in a playlist:** yt-dlp's `ERROR` line above says why. Each run tries it again; it does not stop the other videos.
+- **`series.txt, line 7: …` and nothing downloaded:** the list file has a line the program does not understand; the run stops before any download. Fix that line (comments start with `//`, no longer `#`; see *List files and their index*).
+- **`Made by an older version, without the data the index needs (make it again): …`:** that page was made before the new index and lacks its metadata, so its row shows little. Make it again: `yt2html --index series.txt --load-json --transcript` with saved data, else `--overwrite`.
+- ***playlist could not be read* in the index:** YouTube did not give the playlist and no earlier index kept its list. Run again when YouTube can be reached; a private playlist needs `--cookies firefox`.
+- **`This file could not be played.` in the index's player:** the file was moved or deleted after the index was made, or the browser does not play its format; see *The player of the index*.
 - **Some avatars are letters:** those images could not be downloaded (or the author has none).
 - **`Info card link ... kept as a YouTube redirect`:** the website behind a link card could not be read; the card links through YouTube instead, which may stop working later. Run again with `--overwrite`, or leave the cards out with `--no-cards` if this keeps failing.
 
