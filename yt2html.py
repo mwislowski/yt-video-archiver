@@ -906,8 +906,7 @@ def parse_card(content: dict) -> dict | None:
         count = text_of(model.get("videoCountShortText")).strip()
         details = [byline, f"{count} video{'' if count == '1' else 's'}" if count.isdigit() else count]
     elif kind == "channel":
-        channel_id = (navigation.get("browseEndpoint") or {}).get("browseId")
-        url = f"{YOUTUBE}/channel/{channel_id}" if channel_id else None
+        url = channel_address((navigation.get("browseEndpoint") or {}).get("browseId"))
         details = [text_of(model.get("subscriberCountText"))]
     else:  # link: a YouTube redirect; the target address is not in the data
         target = ((model.get("endpoint") or {}).get("urlEndpoint") or {}).get("url")
@@ -1938,13 +1937,22 @@ class AvatarStyles:
         )
 
 
+def channel_address(channel_id: str | None) -> str | None:
+    """The lasting address of a channel, by its id ("UC…"). Not by its handle
+    ("@name"): the owner can change a handle, YouTube keeps the old one for 14
+    days and then someone else may take it, so in an old copy a handle link
+    could lead to another channel."""
+    return f"{YOUTUBE}/channel/{channel_id}" if channel_id else None
+
+
 def render_comment(c: dict, children: dict, avatars: AvatarStyles,
                    video_id: str, duration, uploader: str) -> str:
     """One comment and, below it, its replies (recursively)."""
     author = c.get("author") or "(unknown)"
     author_html = esc(author)
-    if c.get("author_url"):
-        author_html = link(c["author_url"], author)
+    author_url = channel_address(c.get("author_id")) or c.get("author_url")   # (a handle)
+    if author_url:
+        author_html = link(author_url, author)
     owner = " owner" if c.get("author_is_uploader") else ""
     verified = ' <span class="badge" title="Verified">✓</span>' if c.get("author_is_verified") else ""
 
@@ -4120,7 +4128,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     duration = info.get("duration")
     url = info.get("webpage_url") or f"{YOUTUBE}/watch?v={video_id}"
     uploader = info.get("uploader") or info.get("channel") or "(unknown channel)"
-    channel_url = info.get("uploader_url") or info.get("channel_url")
+    channel_url = info.get("channel_url") or info.get("uploader_url")   # by id, else the handle
     comments = info.get("comments") or []
     avatars = AvatarStyles(avatar_uris)
 
@@ -4438,7 +4446,7 @@ def read_playlist(source: str, args: argparse.Namespace, run: Run) -> dict:
     section = {"playlist_id": playlist_id, "title": info.get("title") or playlist_id,
                "url": f"{YOUTUBE}/playlist?list={playlist_id}",
                "channel": info.get("channel") or info.get("uploader"),
-               "channel_url": info.get("uploader_url") or info.get("channel_url"),
+               "channel_url": info.get("channel_url") or info.get("uploader_url"),  # by id first
                "count": info.get("playlist_count"), "description": info.get("description"),
                "entries": [{"id": video_id, "url": f"{YOUTUBE}/watch?v={video_id}"}
                            for video_id in ids]}

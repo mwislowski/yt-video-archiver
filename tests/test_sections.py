@@ -124,6 +124,22 @@ def test_comment_count_from_page():
     assert yt2html.youtube_comment_count({yt2html.YT_COUNT_KEY: "1.2K"}) == ("1.2K", 1200)
 
 
+CHANNEL_BY_ID = "https://www.youtube.com/channel/UCw3L8lysSdQpNaeGLBqnr5A"
+
+
+def test_the_channel_link_is_by_id_not_by_handle(info):
+    """A handle can change and pass to another channel; the id stays."""
+    info["channel_url"] = CHANNEL_BY_ID
+    def name(page):
+        return re.search(r'<div class="name">(.*?)</div>', page).group(1)
+    assert name(yt2html.render_page(info, None, {}, DAY)).startswith(
+        f'<a href="{CHANNEL_BY_ID}" target="_blank" rel="noopener noreferrer">Channel</a>')
+    del info["channel_url"]                     # only the handle known: still a link
+    assert name(yt2html.render_page(info, None, {}, DAY)).startswith(
+        '<a href="https://www.youtube.com/@Channel" target="_blank" '
+        'rel="noopener noreferrer">Channel</a>')
+
+
 def test_facts_and_snapshot(info):
     html = yt2html.render_page(info, None, {}, DAY)
     assert '<div class="fact extra"><div class="value">05.11.2026</div><div class="label">Snapshot' in html

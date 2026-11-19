@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- The links to channels go to the channel's lasting address (`/channel/UC…`), not to its handle (`/@name`): the channel under the video, the channel of a playlist in the index and the authors of comments. A handle can be changed by its owner and, 14 days later, taken by someone else, so in an old copy it could lead to another channel. Without the id (older data) the handle stays. Pages get the new links when they are made again, e.g. with `--load-json`; the ids are already in the saved data.
+
 ## [0.9.4] - 2026-11-19
 
 ### Added

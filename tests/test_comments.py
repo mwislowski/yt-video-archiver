@@ -3,7 +3,7 @@
 import re
 
 import yt2html
-from conftest import make_comments
+from conftest import make_comment, make_comments
 
 
 def ids(comments):
@@ -117,3 +117,17 @@ def test_comments_turned_off(info):
     assert comments_section(html) == '<div class="note">Comments are unavailable.</div>'
     info[yt2html.COMMENTS_MESSAGE_KEY] = "a <b>"
     assert "a &lt;b&gt;" in yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
+
+
+def test_a_comment_author_links_by_channel_id():
+    """As the channel of the video: by id ("UC…"), the handle only without one."""
+    by_id = make_comment("A", "root", "@alice", "Hi", 1, "1 day ago",
+                         author_id="UCw3L8lysSdQpNaeGLBqnr5A")
+    handle_only = make_comment("B", "root", "@bob", "Hi", 1, "1 day ago")
+    avatars = yt2html.AvatarStyles({})
+    first = yt2html.render_comment(by_id, {}, avatars, "TESTVIDEO01", 600, "Channel")
+    second = yt2html.render_comment(handle_only, {}, avatars, "TESTVIDEO01", 600, "Channel")
+    assert ('<a href="https://www.youtube.com/channel/UCw3L8lysSdQpNaeGLBqnr5A" target="_blank" '
+            'rel="noopener noreferrer">@alice</a>') in first and "youtube.com/@alice" not in first
+    assert ('<a href="https://www.youtube.com/@bob" target="_blank" '
+            'rel="noopener noreferrer">@bob</a>') in second

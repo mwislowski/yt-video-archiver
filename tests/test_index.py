@@ -416,7 +416,7 @@ def test_notes_in_a_row_are_paragraphs_of_one_note(tmp_path):
 
 def test_the_notes_of_a_playlist(tmp_path):
     data = {COURSE["id"]: {"title": COURSE["title"], "channel": COURSE["channel"],
-                           "channel_url": COURSE["uploader_url"],
+                           "channel_url": COURSE["channel_url"],
                            "count": COURSE["playlist_count"],
                            "description": COURSE["description"], "entries": ["TESTVIDEO01"]}}
     result = html(tmp_path, f"# Course\n> Mine before.\n{COURSE['id']}\n> Mine after.\n", data)
@@ -425,7 +425,8 @@ def test_the_notes_of_a_playlist(tmp_path):
     assert notes[1].startswith(
         '<div class="note d0 playlist-note"><p><a href="https://www.youtube.com/playlist?list='
         f'{COURSE["id"]}" target="_blank" rel="noopener noreferrer">Python podstawy podstaw</a>'
-        ' · Playlist · <a href="https://www.youtube.com/@getitjob" target="_blank" '
+        ' · Playlist · <a href="https://www.youtube.com/channel/UCw3L8lysSdQpNaeGLBqnr5A" '
+        'target="_blank" '
         'rel="noopener noreferrer">getitjob</a> · 16 videos</p><p class="about">💡 Masz')
     # the description as written: lines kept, addresses clickable
     assert ('Twoim kodzie.\n\n🔗 Przetestuj AIdama: <a href="https://aidam.pl" target="_blank" '
@@ -610,7 +611,7 @@ def test_the_playlist_is_read_each_time_and_kept(tmp_path, youtube, capsys):
     kept = index.kept_playlists(tmp_path / "series.html")
     assert kept[PLAYLIST_ID] | {"read": ""} == {
         "title": "Test playlist", "channel": "Channel",
-        "channel_url": "https://www.youtube.com/@Channel", "count": 3,
+        "channel_url": "https://www.youtube.com/channel/UCx", "count": 3,   # by id, not @Channel
         "description": "About the playlist.", "entries": ["TESTVIDEO01", "TESTVIDEO02"],
         "read": ""}
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d", kept[PLAYLIST_ID]["read"])
