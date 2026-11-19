@@ -92,7 +92,8 @@ def html(tmp_path, text: str, playlists: dict | None = None, folder: Path | None
 
 
 def body(page_html: str) -> str:
-    return page_html.split('<main class="page index">', 1)[1].split("<footer", 1)[0]
+    main = re.split(r'<main class="page index[^"]*">', page_html, maxsplit=1)[1]
+    return main.split("<footer", 1)[0]
 
 
 def rows(page_html: str) -> list[str]:
@@ -411,7 +412,34 @@ def test_notes_in_a_row_are_paragraphs_of_one_note(tmp_path):
     result = html(tmp_path, "> One\n> Two\nTESTVIDEO01\n> Of the video\n> Also\n")
     assert '<div class="note d0"><p>One</p><p>Two</p></div>' in result
     row, = rows(result)
-    assert '<div class="note"><p>Of the video</p><p>Also</p></div></div></div>' in row
+    # plain (the default): the note after the title and line, under the thumbnail
+    assert ('</div></div><div class="note"><p>Of the video</p><p>Also</p></div></div>'
+            in row)
+
+
+@pytest.mark.parametrize("layout", ["plain", "compact", "cards"])
+def test_the_layout_names_the_index_and_places_the_note(tmp_path, layout):
+    result = html(tmp_path, f"!layout: {layout}\n> Intro\nTESTVIDEO01\n> Of the video\n")
+    assert f'<main class="page index layout-{layout}">' in result
+    row, = rows(result)
+    info = re.search(r'<div class="info">.*?<div class="line">.*?</div>(.*)', row).group(1)
+    note = '<div class="note"><p>Of the video</p></div>'
+    # plain: the note follows the info (under the thumbnail); else inside it
+    assert info == ("</div>" + note + "</div>" if layout == "plain" else note + "</div></div>")
+    assert '<div class="note d0"><p>Intro</p></div>' in result   # chapters' notes: the same
+
+
+def test_the_default_layout_is_plain(tmp_path):
+    assert '<main class="page index layout-plain">' in html(tmp_path, "TESTVIDEO01\n")
+
+
+def test_the_layouts_in_css():
+    css = index.INDEX_CSS
+    assert ".layout-plain .row>.note{grid-column:2/4;grid-row:2}" in css
+    assert (".index.layout-plain .note,.index.layout-compact .note,.index.layout-cards .row .note{"
+            in css)
+    assert ".index.layout-cards .row .info{min-height:var(--thumb-h)" in css
+    assert ".layout-cards .note{" not in css      # the notes of chapters keep their frame
 
 
 def test_the_notes_of_a_playlist(tmp_path):

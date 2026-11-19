@@ -4,7 +4,8 @@ A list file is plain UTF-8 text, close to Markdown: videos (address, id or
 a page name with "[VIDEO_ID]"), playlists, video files of the user's own,
 an optional title ("# Title"), chapters ("##" to "####"), notes ("> text"),
 a title of the user's own for the next video or playlist ("= Title"),
-comments ("// text") and settings ("!numbers: no", "!thumbnails: no"). The
+comments ("// text") and settings ("!numbers: no", "!thumbnails: no",
+"!layout: compact"). The
 whole file is checked before anything is downloaded; a line that is not
 understood stops the run with its number.
 
@@ -37,7 +38,8 @@ import yt2html as core
 
 # Settings ("!key: value", at the top of the file): the allowed values, the
 # first one the default.
-SETTINGS = {"numbers": ("yes", "no"), "thumbnails": ("yes", "no")}
+SETTINGS = {"numbers": ("yes", "no"), "thumbnails": ("yes", "no"),
+            "layout": ("plain", "compact", "cards")}
 LEVELS = 3   # chapters: "##" (1) to "####" (3)
 HEADING = re.compile(r"(#+)(?:\s+(.*))?")
 YOUTUBE_HOSTS = ("www.youtube.", "youtube.", "m.youtube.", "music.youtube.", "youtu.be/")
@@ -542,6 +544,7 @@ class Builder:
         self.output_dir = output_dir
         self.numbers = settings["numbers"] == "yes"
         self.thumbnails = settings["thumbnails"] == "yes"
+        self.layout = settings["layout"]   # plain: the note under the thumbnail; else beside it
         self.notes: list[tuple[int, str, str]] = []   # (line, note, advice) for the console
         self.old_pages: set[str] = set()
         self.missing: dict[int, list[str]] = {}   # line -> videos not downloaded
@@ -558,10 +561,12 @@ class Builder:
         thumb, title, line, missing = parts
         notes = (f'<div class="note">{"".join(f"<p>{links_only(p, True)}</p>" for p in row.notes)}'
                  f'</div>' if row.notes else "")
+        info = (f'<div class="info">{title}'
+                f'<div class="line">{" · ".join(p for p in line if p)}</div>')
         return (f'<div class="row d{depth}{" missing" if missing else ""}">'
-                + (f'<span class="num">{number}</span>' if self.numbers else "")
-                + f'{thumb}<div class="info">{title}'
-                f'<div class="line">{" · ".join(p for p in line if p)}</div>{notes}</div></div>')
+                + (f'<span class="num">{number}</span>' if self.numbers else "") + thumb
+                + (f'{info}</div>{notes}' if self.layout == "plain" else f'{info}{notes}</div>')
+                + '</div>')
 
     def thumb(self, duration: float | None, cover: str | None = None, label: str = "",
               file: Path | None = None) -> str:
@@ -729,7 +734,7 @@ def playlist_notes(block: PlaylistNotes, depth: int) -> str:
 
 INDEX_CSS = """
 /* Index of a list file: rows with a small thumbnail, chapters indented */
-.index{--indent:24px}
+.index{--indent:24px;--thumb-h:72px}
 .index .chapter{display:flex;gap:8px;font-weight:700;margin:20px 0 6px;overflow-wrap:anywhere}
 .index h2.chapter{font-size:17px;line-height:24px}
 .index h3.chapter{font-size:16px;line-height:22px}
@@ -742,7 +747,7 @@ INDEX_CSS = """
 .index .row{display:flex;gap:12px;align-items:flex-start;padding:6px 8px;margin-right:-8px;
   border-radius:8px}
 .index .row .num{line-height:20px;font-weight:600}
-.index .thumb{position:relative;display:flex;flex:none;width:128px;height:72px;
+.index .thumb{position:relative;display:flex;flex:none;width:128px;height:var(--thumb-h);
   border-radius:8px;overflow:hidden;background:var(--chip);align-items:center;
   justify-content:center;color:var(--muted);font-size:12px;font-weight:600}
 .index .thumb img{width:100%;height:100%;object-fit:cover}
@@ -767,9 +772,25 @@ INDEX_CSS = """
 .index .note p{margin:0 0 6px}
 .index .note p:last-child{margin-bottom:0}
 .index .note .about{white-space:pre-wrap}
+/* The layouts (!layout). plain: the note of a row under its thumbnail (or
+   round button), from its left edge to the right; compact: beside it, under
+   the title and the line; both without frames, the notes of chapters too.
+   cards: every row's title, line and note in one frame, at least as tall as
+   the thumbnail (or the button); the notes of chapters framed as well */
+.index.layout-plain .row{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:0}
+.index.layout-plain .row .num{margin-right:12px}
+.index.layout-plain .row>.thumb,.index.layout-plain .row>.play{grid-column:2;margin-right:12px}
+.index.layout-plain .row>.note{grid-column:2/4;grid-row:2}
+.index.layout-plain .note,.index.layout-compact .note,.index.layout-cards .row .note{
+  background:none;border-radius:0;padding:0}
+.index.layout-cards .row .info{min-height:var(--thumb-h);padding:8px 12px;border-radius:8px;
+  background:var(--panel)}
+.index.layout-cards .row>.play~.info{min-height:28px}
+.index.layout-cards .row .num{padding-top:8px}
+.index.layout-cards .row>.play{margin-top:4px}
 @media (max-width:600px){
-  .index{--indent:12px}
-  .index .thumb{width:96px;height:54px}
+  .index{--indent:12px;--thumb-h:54px}
+  .index .thumb{width:96px}
 }
 /* The player on the left (the page player's look, shown by the script):
    one row of eight equal buttons that wraps in a narrow panel, the speeds,
@@ -1053,7 +1074,7 @@ def render_index(listing: ListFile, playlists: dict[str, dict | None], output_di
         "</head>",
         "<body>",
         render_player(),
-        '<main class="page index">',
+        f'<main class="page index layout-{builder.layout}">',
         f'<h1 class="title">{core.esc(title)}</h1>',
         *body,
         f'<footer class="footer">Index made with yt2html on {today.strftime(core.DATE_FORMAT)}.'

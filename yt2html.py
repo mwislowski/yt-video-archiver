@@ -5679,7 +5679,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "playlist addresses or ids, page names, video files of your own; "
                              "a '# Title', '## Chapter' to '#### Chapter', '> notes', "
                              "'= Title' above a line, '// comments', '!numbers: no', "
-                             "'!thumbnails: no') and make its index page in the output folder, "
+                             "'!thumbnails: no', '!layout: plain|compact|cards') and make its index page in the output folder, "
                              "named after the file ('series.txt' -> 'series.html'): built from "
                              "the pages and video files in the folder; playlists are read from "
                              "YouTube each time (the index keeps their lists for when YouTube "

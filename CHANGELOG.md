@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+
+- Three layouts for the index, chosen in the list file: `!layout: plain` (the default: a video's note under its thumbnail, across the whole width), `!layout: compact` (beside the thumbnail, under the title) and `!layout: cards` (the title, its line and the note in one rounded frame beside the thumbnail, for every row). The notes of chapters and the list follow the layout: without frames in `plain` and `compact`, framed in `cards`.
+
 ### Changed
 
 - The settings of a list file are written `!key: value`: `!numbers: no` and `!thumbnails: no` instead of `!no-numbers` and `!no-thumbnails` (both `yes` by default; any case, the space after `:` optional). An unknown setting or value stops the run and names the allowed ones; the old forms are now unknown settings.

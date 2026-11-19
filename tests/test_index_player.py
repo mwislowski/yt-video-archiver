@@ -1,4 +1,5 @@
-"""The index player in a real browser: Chromium, clicked with Playwright.
+"""The index player in a real browser: Chromium, clicked with Playwright;
+also the layouts of the index (!layout), measured where the browser puts them.
 
 Run with: uv run --group browser pytest --browser (once before:
 uv run --group browser playwright install chromium). The video is a real
@@ -423,3 +424,103 @@ def test_enter_on_a_thumbnail_plays_it(open_index):
     page.keyboard.press(" ")                    # on the file in the player: nothing
     page.wait_for_timeout(300)
     assert not page.evaluate("document.querySelector('video').paused")
+
+
+# Layouts (!layout) ----------------------------------------------------------------------
+
+LAYOUT_LIST = ("## Part\n> Of the chapter.\na.webm\n> Of the file, long enough to wrap. "
+               + "Words " * 60 + "\nb.webm\n")
+MEASURE = """() => {
+    const box = el => el && el.getBoundingClientRect().toJSON();
+    const style = el => el && getComputedStyle(el);
+    const line = el => { const range = document.createRange();   // the first line of its text
+        range.selectNodeContents(el); return range.getClientRects()[0].toJSON(); };
+    const probe = document.createElement('span');
+    probe.style.backgroundColor =
+        getComputedStyle(document.documentElement).getPropertyValue('--panel');
+    document.body.appendChild(probe);
+    const panel = getComputedStyle(probe).backgroundColor; probe.remove();
+    const rows = [...document.querySelectorAll('.index .row')].map(row => ({
+        thumb: box(row.querySelector('.thumb, .play')), info: box(row.querySelector('.info')),
+        note: box(row.querySelector('.note')),
+        infoBg: style(row.querySelector('.info')).backgroundColor,
+        infoMin: style(row.querySelector('.info')).minHeight,
+        noteBg: row.querySelector('.note') && style(row.querySelector('.note')).backgroundColor,
+        num: box(row.querySelector('.num')),
+        numText: row.querySelector('.num') && line(row.querySelector('.num')),
+        title: line(row.querySelector('.name'))}));
+    const chapter = getComputedStyle(document.querySelector('.index .note.d1')).backgroundColor;
+    return {panel, rows, chapter}; }"""
+CLEAR = "rgba(0, 0, 0, 0)"
+
+
+def test_plain_puts_the_note_under_the_thumbnail_without_a_frame(open_index):
+    found = open_index(LAYOUT_LIST, files=["a.webm", "b.webm"]).evaluate(MEASURE)  # the default
+    row = found["rows"][0]
+    assert row["note"]["left"] == row["thumb"]["left"]           # from the thumbnail's edge
+    assert row["note"]["top"] >= row["thumb"]["bottom"]          # under it
+    assert abs(row["note"]["right"] - row["info"]["right"]) < 1  # to the right, as the title
+    assert row["noteBg"] == CLEAR and found["chapter"] == CLEAR
+    assert found["rows"][1]["infoBg"] == CLEAR
+
+
+def test_compact_puts_the_note_beside_the_thumbnail_without_a_frame(open_index):
+    found = open_index("!layout: compact\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
+                       ).evaluate(MEASURE)
+    row = found["rows"][0]
+    assert row["note"]["left"] == row["info"]["left"] > row["thumb"]["right"]
+    assert row["note"]["top"] < row["thumb"]["bottom"]
+    assert row["noteBg"] == CLEAR and found["chapter"] == CLEAR and row["infoBg"] == CLEAR
+
+
+def test_cards_frame_every_row_at_least_as_tall_as_its_thumbnail(open_index):
+    found = open_index("!layout: cards\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
+                       ).evaluate(MEASURE)
+    long, short = found["rows"]
+    assert long["infoBg"] == short["infoBg"] == found["panel"] != CLEAR  # also without a note
+    assert short["info"]["height"] == short["thumb"]["height"]      # as tall as the thumbnail
+    assert long["info"]["height"] > long["thumb"]["height"]         # grows with the note
+    assert long["note"]["left"] > long["info"]["left"]              # the note inside the frame
+    assert long["noteBg"] == CLEAR                                  # one frame, not two
+    assert found["chapter"] == found["panel"]                       # chapters' notes framed
+
+
+def test_without_thumbnails_the_round_button_takes_their_place(open_index):
+    plain = open_index("!thumbnails: no\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
+                       ).evaluate(MEASURE)["rows"][0]
+    assert plain["note"]["left"] == plain["thumb"]["left"] and plain["thumb"]["width"] == 28
+    assert plain["note"]["top"] >= plain["thumb"]["bottom"]
+    cards = open_index("!thumbnails: no\n!layout: cards\n" + LAYOUT_LIST,
+                       files=["a.webm", "b.webm"]).evaluate(MEASURE)["rows"][1]
+    assert cards["infoMin"] == "28px"                               # the button's height
+
+
+@pytest.mark.parametrize("layout", ["plain", "compact", "cards"])
+@pytest.mark.parametrize("thumbnails", ["yes", "no"])
+def test_every_layout_keeps_the_spacing_and_the_number_on_the_title_line(open_index, layout,
+                                                                       thumbnails):
+    found = open_index(f"!layout: {layout}\n!thumbnails: {thumbnails}\n" + LAYOUT_LIST,
+                       files=["a.webm", "b.webm"]).evaluate(MEASURE)
+    for row in found["rows"]:
+        assert row["thumb"]["left"] - row["num"]["right"] == 12
+        assert row["info"]["left"] - row["thumb"]["right"] == 12
+        line = (row["title"]["top"] + row["title"]["bottom"]) / 2
+        assert abs((row["numText"]["top"] + row["numText"]["bottom"]) / 2 - line) <= 2
+        if thumbnails == "no" and layout == "cards":   # the button on the title line (in
+            # plain and compact it stands at the top of the row, 4 px lower, as before)
+            assert abs((row["thumb"]["top"] + row["thumb"]["bottom"]) / 2 - line) <= 2
+
+
+def test_plain_without_numbers_keeps_the_note_under_the_thumbnail(open_index):
+    row = open_index("!numbers: no\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
+                     ).evaluate(MEASURE)["rows"][0]
+    assert row["note"]["left"] == row["thumb"]["left"]
+    assert row["info"]["left"] - row["thumb"]["right"] == 12
+    assert abs(row["note"]["right"] - row["info"]["right"]) < 1
+
+
+def test_in_a_narrow_window_the_cards_follow_the_smaller_thumbnail(open_index):
+    short = open_index("!layout: cards\n" + LAYOUT_LIST, files=["a.webm", "b.webm"],
+                       width=500).evaluate(MEASURE)["rows"][1]
+    assert short["thumb"]["height"] == 54
+    assert short["infoMin"] == "54px" and short["info"]["height"] >= 54

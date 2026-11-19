@@ -32,7 +32,8 @@ def test_the_simplest_list_has_no_syntax(tmp_path):
     listing = read(tmp_path, "TESTVIDEO01\n\n  https://youtu.be/TESTVIDEO02  \n\t\n")
     assert kinds(listing.children) == [("video", "TESTVIDEO01"), ("video", "TESTVIDEO02")]
     assert listing.title == ""
-    assert listing.settings == {"numbers": "yes", "thumbnails": "yes"}   # the defaults
+    assert listing.settings == {"numbers": "yes", "thumbnails": "yes",
+                                "layout": "plain"}                     # the defaults
     assert [i.line for i in listing.items()] == [1, 3]
 
 
@@ -173,15 +174,19 @@ def test_no_fourth_level(tmp_path):
 def test_settings_in_the_header(tmp_path):
     """"!key: value"; any case, the space after ":" optional."""
     listing = read(tmp_path, "!numbers:no\n# Title\n> An introduction.\n// comment\n\n"
-                             "! Thumbnails : No\nTESTVIDEO01\n")
-    assert listing.settings == {"numbers": "no", "thumbnails": "no"}
-    listing = read(tmp_path, "!numbers: yes\nTESTVIDEO01\n")       # the default, written out
-    assert listing.settings == {"numbers": "yes", "thumbnails": "yes"}
+                             "! Thumbnails : No\n!LAYOUT: Cards\nTESTVIDEO01\n")
+    assert listing.settings == {"numbers": "no", "thumbnails": "no", "layout": "cards"}
+    listing = read(tmp_path, "!numbers: yes\n!layout: compact\nTESTVIDEO01\n")
+    assert listing.settings == {"numbers": "yes", "thumbnails": "yes", "layout": "compact"}
 
 
 @pytest.mark.parametrize("text, message", [
-    ("!tumbnails: no\n", "line 1: unknown setting: !tumbnails: no (known: !numbers, !thumbnails)"),
-    ("!no-numbers\n", "line 1: unknown setting: !no-numbers (known: !numbers, !thumbnails)"),
+    ("!tumbnails: no\n", "line 1: unknown setting: !tumbnails: no "
+                         "(known: !numbers, !thumbnails, !layout)"),
+    ("!no-numbers\n", "line 1: unknown setting: !no-numbers (known: !numbers, !thumbnails, "
+                      "!layout)"),
+    ("!layout: boxes\n", "line 1: !layout: boxes: !layout is one of: plain, compact, cards "
+                         "(e.g. !layout: cards)"),
     ("!numbers: maybe\n", "line 1: !numbers: maybe: !numbers is one of: yes, no "
                           "(e.g. !numbers: no)"),
     ("!numbers\n", "line 1: !numbers: !numbers is one of: yes, no"),
