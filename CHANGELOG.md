@@ -20,6 +20,7 @@ All notable changes to this project. Versions: the second number for new feature
 
 - A private or removed video (also in a playlist) no longer gives an empty page titled `youtube video #ID` (yt-dlp only warns about it): it fails with YouTube's words, e.g. `FAILED: ID: Video unavailable. This video is no longer available because the YouTube account associated with this video has been terminated.`, and nothing is saved. Before, `--refresh-json` of such a video would also have replaced the saved title, cleared the timestamp lists and marked all comments as no longer on YouTube.
 - A page made again keeps its thumbnail when YouTube no longer gives one (its thumbnails go with a video that is gone), instead of showing *Thumbnail not available*.
+- With saved comments that are limited or interrupted, the note at a rebuild says that `--refresh-json` without `--max-comments` adds the rest; it told to download again without `--load-json`, also when the command had no `--load-json`. README: more comments come with `--refresh-json`, not `--update-json`.
 - The placeholder of an avatar shows the first letter or digit of the name, no longer a sign such as `(` or `@`; an unknown channel or comment author gets a placeholder without a letter.
 
 ## [0.9.3] - 2026-11-15

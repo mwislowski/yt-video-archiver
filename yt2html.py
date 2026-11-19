@@ -2847,13 +2847,23 @@ PLAYER_JS = r"""
 """
 
 
+# "Title [id].f399.mp4": one format of an unfinished --video download
+FORMAT_PART_RE = re.compile(r"\.f[0-9][^.]*\.[^.]+$")
+
+
+def video_files(folder: Path, ident: str | None) -> list[Path]:
+    """The finished video files with the video's id in their name, sorted by
+    name (files_with_id()): not the formats of an unfinished --video download.
+    The page and the index take the same files."""
+    return [p for p in files_with_id(folder, ident, VIDEO_FILE_EXTENSIONS)
+            if not FORMAT_PART_RE.search(p.name)]
+
+
 def video_files_for(info: dict, folder: Path) -> list[str]:
     """Video files next to the page with the video's id in their name, found
     when the page is built: the page tries them first, so a renamed video is
     found too (the browser itself cannot look into the folder)."""
-    # "Title [id].f399.mp4": one format of an unfinished --video download
-    files = [p for p in files_with_id(folder, info.get("id"), VIDEO_FILE_EXTENSIONS)
-             if not re.search(r"\.f[0-9][^.]*\.[^.]+$", p.name)]
+    files = video_files(folder, info.get("id"))
     if len(files) > 1:
         log(f"Note: several videos for [{info.get('id')}] in {folder}: "
             + ", ".join(p.name for p in files) + f"; the page tries {files[0].name} first")
@@ -4485,8 +4495,13 @@ def files_with_id(folder: Path, ident: str | None, extensions: tuple[str, ...]) 
 def file_with_id(folder: Path, ident: str | None, extensions: tuple[str, ...],
                  what: str) -> Path | None:
     """The first of files_with_id(); several of them get a note (once)."""
-    found = files_with_id(folder, ident, extensions)
-    key = (str(folder), ident, extensions)
+    return first_of(files_with_id(folder, ident, extensions), folder, ident, what)
+
+
+def first_of(found: list[Path], folder: Path, ident: str | None, what: str) -> Path | None:
+    """The first of `found` (files with "[ident]" in `folder`); several of
+    them get a note, once for each folder, id and kind of file (`what`)."""
+    key = (str(folder), ident, what)
     if len(found) > 1 and key not in _SEVERAL_NOTED:
         _SEVERAL_NOTED.add(key)
         log(f"Note: several {what} for [{ident}] in {folder}: "
@@ -4495,9 +4510,9 @@ def file_with_id(folder: Path, ident: str | None, extensions: tuple[str, ...],
 
 
 def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
-    """A page (or a playlist's index) for this id in the output folder, not its
-    subfolders: any ".html" file with "[id]" in its name, so pages may be
-    renamed freely as long as that part stays."""
+    """The page of this video in the output folder, not its subfolders: any
+    ".html" file with "[id]" in its name, so pages may be renamed freely as
+    long as that part stays."""
     return file_with_id(output_dir, video_id, (".html",), "pages")
 
 
@@ -4541,8 +4556,8 @@ def narrow_saved_comments(info: dict, args: argparse.Namespace, note: bool = Tru
         info[LIMIT_KEY] = limit
         info["comment_count"] = limit  # cut by the limit, not by Ctrl+C any more
     elif note and comment_status(info) in ("limited", "interrupted"):
-        log(f"  The saved data has only {plural(len(comments), 'comment')}; download "
-            f"again (without --load-json) to get more.")
+        log(f"  The saved data has only {plural(len(comments), 'comment')}; "
+            f"--refresh-json without --max-comments adds the rest.")
 
 
 def update_data_path(source: str, output_dir: Path) -> Path | None:
@@ -5854,7 +5869,12 @@ def main(argv=None) -> int:
     listing = args.index is not None or args.index_only is not None
     if listing:
         import yt2html_index as index   # (here: that module imports this one)
-        lists, unread = index.start(args, run)   # the playlists, before any download
+        try:
+            lists, unread = index.start(args, run)   # the playlists, before any download
+        except KeyboardInterrupt:
+            log("Interrupted (Ctrl+C) while reading the playlists: nothing was downloaded "
+                "and the index was not changed.")
+            return 130
         if args.index_only is not None:
             return 0 if index.write_index(args, lists) and not unread else 1
         counts["failed"] += unread

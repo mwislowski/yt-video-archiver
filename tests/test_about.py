@@ -547,14 +547,16 @@ def test_a_cut_after_ctrl_c_counts_as_limited(capsys, tmp_path, info):
     assert row(html, "Comments").endswith("; limited to 5")
     code, out, html = rebuild(capsys, tmp_path, info, "--max-comments", "100")
     assert row(html, "Comments").endswith("; interrupted (Ctrl+C)")
-    assert "The saved data has only 7 comments; download again" in out
+    assert ("The saved data has only 7 comments; --refresh-json without --max-comments adds "
+            "the rest.") in out
 
 
 def test_a_larger_limit_cannot_widen_the_saved_data(capsys, tmp_path, info):
     info["comments"] = info["comments"][:5]
     info[yt2html.LIMIT_KEY] = 5
     _, out, html = rebuild(capsys, tmp_path, info, "--max-comments", "50")
-    assert "The saved data has only 5 comments; download again" in out
+    assert ("The saved data has only 5 comments; --refresh-json without --max-comments adds "
+            "the rest.") in out
     assert row(html, "Comments").endswith("; limited to 5")
     assert "--max-comments 5" in command(html)
     _, out, _ = rebuild(capsys, tmp_path, dict(info, comments=info["comments"], **{

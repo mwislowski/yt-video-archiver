@@ -280,6 +280,31 @@ def test_titles_never_come_from_the_entries_of_a_playlist(tmp_path):
                                                   "(--index downloads them)"]
 
 
+def test_formats_of_an_unfinished_video_download_are_not_the_video(tmp_path):
+    """As on the page: "Title [ID].f399.mp4" (video only, left by an
+    interrupted --video) is not the video, also beside the finished file."""
+    page(tmp_path, "TESTVIDEO01")
+    mp4(tmp_path / "Title [TESTVIDEO01].f399.mp4", 65)
+    (tmp_path / "Title [TESTVIDEO01].f251.webm").write_bytes(b"audio only")
+    row, = rows(html(tmp_path, "TESTVIDEO01\n"))
+    assert "data-file" not in row and "f399" not in row
+    mp4(tmp_path / "Title [TESTVIDEO01].mp4", 65)
+    row, = rows(html(tmp_path, "TESTVIDEO01\n"))
+    assert 'data-file="Title%20%5BTESTVIDEO01%5D.mp4"' in row and "f399" not in row
+    assert yt2html.video_files(tmp_path, "TESTVIDEO01") == [tmp_path / "Title [TESTVIDEO01].mp4"]
+
+
+def test_several_pages_and_several_videos_each_get_a_note(tmp_path, capsys):
+    page(tmp_path, "TESTVIDEO01", "A [TESTVIDEO01].html")
+    page(tmp_path, "TESTVIDEO01", "B [TESTVIDEO01].html")
+    mp4(tmp_path / "A [TESTVIDEO01].mp4", 65)
+    mp4(tmp_path / "B [TESTVIDEO01].mp4", 65)
+    html(tmp_path, "TESTVIDEO01\n")
+    out = capsys.readouterr().out
+    assert "Note: several pages for [TESTVIDEO01]" in out
+    assert "Note: several video files for [TESTVIDEO01]" in out
+
+
 def test_a_title_of_ones_own_wins_over_the_page(tmp_path):
     page(tmp_path, "TESTVIDEO01")
     row, = rows(html(tmp_path, "= Episode one\nTESTVIDEO01\n"))
@@ -293,9 +318,11 @@ def test_a_video_file_without_a_page(tmp_path):
     assert '<div class="row d0">' in row and '<span class="name">Clip name</span>' in row
     assert ('<span class="thumb format" data-file="Clip%20name%20%5BTESTVIDEO01%5D.mp4">MP4'
             '<span class="time">1:05</span></span>') in row
-    assert builder.console_notes(advice=True) == [
-        "line 1: TESTVIDEO01 has a video file but no page (Clip name [TESTVIDEO01].mp4); "
-        "--index makes it"]
+    assert builder.console_notes(advice=True) == [          # after --index-only
+        "line 1: TESTVIDEO01 has a video file but no page (Clip name [TESTVIDEO01].mp4) "
+        "(--index makes it)"]
+    assert builder.console_notes(advice=False) == [         # after --index: no advice
+        "line 1: TESTVIDEO01 has a video file but no page (Clip name [TESTVIDEO01].mp4)"]
 
 
 def test_a_file_of_ones_own(tmp_path):
@@ -670,6 +697,22 @@ def test_ctrl_c_still_makes_the_index(tmp_path, youtube, capsys):
     out = capsys.readouterr().out
     assert "Interrupted (Ctrl+C)" in out and "Saved index" in out
     assert len(rows((tmp_path / "series.html").read_text(encoding="utf-8"))) == 3
+
+
+@pytest.mark.parametrize("option", ["--index", "--index-only"])
+def test_ctrl_c_while_reading_the_playlists(tmp_path, youtube, capsys, monkeypatch, option):
+    """Before any download: the usual message, the earlier index untouched."""
+    def interrupted(source, args):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(yt2html, "fetch_playlist", interrupted)
+    (tmp_path / "series.html").write_text("earlier index", encoding="utf-8")
+    listing = write_list(tmp_path, f"TESTVIDEO01\n{PLAYLIST_ID}\n")
+    assert yt2html.main([option, listing, "-o", str(tmp_path)]) == 130
+    out = capsys.readouterr().out
+    assert ("Interrupted (Ctrl+C) while reading the playlists: nothing was downloaded and the "
+            "index was not changed.") in out
+    assert youtube.fetched == []
+    assert (tmp_path / "series.html").read_text(encoding="utf-8") == "earlier index"
 
 
 def test_index_only_downloads_nothing(tmp_path, youtube, capsys):

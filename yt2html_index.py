@@ -534,7 +534,7 @@ class Builder:
         self.output_dir = output_dir
         self.numbers = "no-numbers" not in settings
         self.thumbnails = "no-thumbnails" not in settings
-        self.notes: list[tuple[int, str]] = []   # (line, note) for the console
+        self.notes: list[tuple[int, str, str]] = []   # (line, note, advice) for the console
         self.old_pages: set[str] = set()
         self.missing: dict[int, list[str]] = {}   # line -> videos not downloaded
 
@@ -585,8 +585,8 @@ class Builder:
         meta = core.read_page_metadata(page) if page else {}
         if page and "yt2html:metadata" not in meta:
             self.old_pages.add(page.name)
-        file = core.file_with_id(self.output_dir, video_id, core.VIDEO_FILE_EXTENSIONS,
-                                 "video files")
+        file = core.first_of(core.video_files(self.output_dir, video_id), self.output_dir,
+                             video_id, "video files")
         original = meta.get("yt2html:title")
         title = (row.title or original or name_without_id(row.name, video_id)
                  or (name_without_id(page.name, video_id) if page else None)
@@ -620,7 +620,7 @@ class Builder:
             duration = file_duration(file)
             kind = format_label(file)
             self.notes.append((row.line, f"line {row.line}: {video_id} has a video file but "
-                                         f"no page ({file.name}); --index makes it"))
+                                         f"no page ({file.name})", " (--index makes it)"))
             return (self.thumb(duration, label=kind, file=file), name,
                     [self.time_in_line(duration),
                      f'<span title="{core.esc(file.name)}">{kind}</span>', youtube], False)
@@ -635,7 +635,7 @@ class Builder:
         name = f'<span class="name">{core.esc(title)}</span>'
         if not path.is_file():
             self.notes.append((row.line, f"line {row.line}: file not found: {row.ref} (looked "
-                                         f"for in {self.output_dir}; check the name)"))
+                                         f"for in {self.output_dir}; check the name)", ""))
             return (self.thumb(None), name,
                     [f'<span class="miss" title="{core.esc(row.ref)}">file not found</span>'], True)
         duration = file_duration(path)
@@ -678,7 +678,8 @@ class Builder:
     def console_notes(self, advice: bool) -> list[str]:
         """What the console gets after the index: rows without a page or
         file, pages of older versions."""
-        lines = list(self.notes)
+        # the advice names --index, so only after --index-only
+        lines = [(line, text + (tip if advice else "")) for line, text, tip in self.notes]
         for line, videos in self.missing.items():
             what = videos[0] if len(videos) == 1 else core.plural(len(videos), "video")
             lines.append((line, f"line {line}: {what} not downloaded"

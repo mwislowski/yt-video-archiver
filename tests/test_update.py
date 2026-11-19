@@ -301,6 +301,21 @@ def test_refresh_saved_counts_and_comments(info):
         "new": 1, "gone": 0, "back": 0}
 
 
+def test_a_refresh_without_a_limit_completes_limited_comments(info):
+    """What the hint after a limited copy promises: --refresh-json without
+    --max-comments (fetch_info leaves LIMIT_KEY None) adds the rest."""
+    info["comments"] = info["comments"][:3]
+    info[yt2html.LIMIT_KEY] = 3
+    info["comment_count"] = 3
+    assert yt2html.comment_status(info) == "limited"
+    fresh = json.loads(json.dumps(info))
+    fresh["comments"] = fresh["comments"] + [comment("NEW1"), comment("NEW2")]
+    fresh["comment_count"] = 5
+    fresh[yt2html.LIMIT_KEY] = None
+    assert yt2html.refresh_saved(info, fresh) == {"new": 2, "gone": 0, "back": 0}
+    assert len(info["comments"]) == 5 and yt2html.comment_status(info) == "complete"
+
+
 def test_refresh(capsys, saved, youtube, refreshed):
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json",
                     "--transcript", "bilingual:pl")

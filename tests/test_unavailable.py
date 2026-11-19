@@ -1,7 +1,9 @@
 """A video no longer on YouTube (removed or private): refused on the first
 download, recorded by --refresh-json, shown on the page and in its metadata.
 
-The refusals are the real ones from 17.11.2026 (data/gone_playability.json).
+The refusals are the real ones from 17.11.2026 (data/gone_playability.json);
+an age-restricted video without cookies, which is no refusal, is the real one
+from 19.11.2026 (data/agegate_playability.json).
 """
 
 import datetime as dt
@@ -16,6 +18,8 @@ from test_update import page, row, run
 
 GONE = json.loads((Path(__file__).parent / "data" / "gone_playability.json")
                   .read_text(encoding="utf-8"))
+AGEGATE = json.loads((Path(__file__).parent / "data" / "agegate_playability.json")
+                     .read_text(encoding="utf-8"))
 TERMINATED = ("Video unavailable. This video is no longer available because the YouTube "
               "account associated with this video has been terminated.")
 TODAY = dt.date.today()
@@ -61,6 +65,20 @@ def test_what_is_not_a_refusal_and_what_does_not_count_as_gone():
         "status": "ERROR", "errorScreen": {"playerInterstitialRenderer": {"content": {
             "interstitialViewModel": {"title": {"content": "Video unavailable."}}}}}}})
     assert titled.reason == "Video unavailable."
+
+
+def test_an_age_restricted_video_without_cookies_is_no_refusal():
+    """YouTube refuses to play it without signing in, but the video is there
+    (videoDetails): the page is made, a refresh does not record it as gone."""
+    status = AGEGATE["playabilityStatus"]
+    assert (status["status"], status["reason"]) == ("LOGIN_REQUIRED", "Sign in to confirm your age")
+    assert yt2html.playability_refusal(AGEGATE) is None
+    shell = {"id": "6Ib4MxtHFFM", "description": ""}
+    yt2html.add_watch_page_data(FakeYDL(webpage=watch_page({}, AGEGATE)), shell)
+    assert shell[yt2html.WATCH_PAGE_KEY] == "read" and shell[yt2html.CAPTION_KEY] is None
+    # without videoDetails the same status would be a refusal, one that may not last
+    alone = yt2html.playability_refusal({"playabilityStatus": status})
+    assert alone.status == "LOGIN_REQUIRED" and not alone.gone
 
 
 def test_the_watch_page_raises_before_reading_anything_else(info):

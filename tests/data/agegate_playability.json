@@ -1,0 +1,28 @@
+{
+ "_about": "ytInitialPlayerResponse of the watch page (hl=en) of an age-restricted video, 6Ib4MxtHFFM (Kick Ass 2 - Restricted Trailer, Universal Pictures UK), without cookies, as YouTube sent it on 19.11.2026 (C:\\Projects\\test-age, yt-dlp --write-pages), trimmed: playabilityStatus to its status, reason, age-gate mark and the error screen's title and description; videoDetails to a few keys. It had no streamingData and no captions; yt-dlp got the formats through its web_embedded client.",
+ "playabilityStatus": {
+  "status": "LOGIN_REQUIRED",
+  "reason": "Sign in to confirm your age",
+  "desktopLegacyAgeGateReason": 1,
+  "errorScreen": {
+   "playerInterstitialRenderer": {
+    "content": {
+     "interstitialViewModel": {
+      "title": {
+       "content": "Sign in to confirm your age"
+      },
+      "description": {
+       "content": "This video may be inappropriate for some users."
+      }
+     }
+    }
+   }
+  }
+ },
+ "videoDetails": {
+  "videoId": "6Ib4MxtHFFM",
+  "title": "Kick Ass 2 - Restricted Trailer",
+  "lengthSeconds": "93",
+  "author": "Universal Pictures UK"
+ }
+}
