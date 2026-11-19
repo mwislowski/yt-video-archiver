@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- The numbers in the index stand before the titles instead of in a column of their own, so an index with numbers is laid out as one without them; a long title wraps under its first letter, with the number left of it. The notes of a chapter stand at its indent (its videos and chapters one step in), and the indent is a little smaller (20 px).
+
 ## [0.10.1] - 2026-11-19
 
 ### Added

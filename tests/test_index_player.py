@@ -428,13 +428,15 @@ def test_enter_on_a_thumbnail_plays_it(open_index):
 
 # Layouts (!layout) ----------------------------------------------------------------------
 
-LAYOUT_LIST = ("## Part\n> Of the chapter.\na.webm\n> Of the file, long enough to wrap. "
-               + "Words " * 60 + "\nb.webm\n")
+LONG = "A title long enough to wrap " * 6
+LAYOUT_LIST = (f"## Part, also long enough to wrap: {LONG}\n> Of the chapter.\n= {LONG}\na.webm\n"
+               "> Of the file, long enough to wrap. " + "Words " * 60 + "\nb.webm\n")
 MEASURE = """() => {
     const box = el => el && el.getBoundingClientRect().toJSON();
     const style = el => el && getComputedStyle(el);
-    const line = el => { const range = document.createRange();   // the first line of its text
-        range.selectNodeContents(el); return range.getClientRects()[0].toJSON(); };
+    const lines = el => { const range = document.createRange();   // the lines of its text
+        range.selectNodeContents(el); return [...range.getClientRects()].map(r => r.toJSON()); };
+    const line = el => el && lines(el)[0];
     const probe = document.createElement('span');
     probe.style.backgroundColor =
         getComputedStyle(document.documentElement).getPropertyValue('--panel');
@@ -447,10 +449,15 @@ MEASURE = """() => {
         infoMin: style(row.querySelector('.info')).minHeight,
         noteBg: row.querySelector('.note') && style(row.querySelector('.note')).backgroundColor,
         num: box(row.querySelector('.num')),
-        numText: row.querySelector('.num') && line(row.querySelector('.num')),
-        title: line(row.querySelector('.name'))}));
-    const chapter = getComputedStyle(document.querySelector('.index .note.d1')).backgroundColor;
-    return {panel, rows, chapter}; }"""
+        numText: line(row.querySelector('.num')),
+        infoPad: parseFloat(style(row.querySelector('.info')).paddingLeft),
+        title: line(row.querySelector('.name')), titleLines: lines(row.querySelector('.name'))}));
+    const heading = document.querySelector('.index .chapter');
+    const chapter = getComputedStyle(document.querySelector('.index>.note')).backgroundColor;
+    return {panel, rows, chapter,
+        heading: {box: box(heading), num: line(heading.querySelector('.num')),
+                  text: lines(heading.querySelector('.text'))},
+        chapterNote: box(document.querySelector('.index>.note'))}; }"""
 CLEAR = "rgba(0, 0, 0, 0)"
 
 
@@ -458,7 +465,7 @@ def test_plain_puts_the_note_under_the_thumbnail_without_a_frame(open_index):
     found = open_index(LAYOUT_LIST, files=["a.webm", "b.webm"]).evaluate(MEASURE)  # the default
     row = found["rows"][0]
     assert row["note"]["left"] == row["thumb"]["left"]           # from the thumbnail's edge
-    assert row["note"]["top"] >= row["thumb"]["bottom"]          # under it
+    assert row["note"]["top"] - row["thumb"]["bottom"] == 6      # under it, as close as in compact
     assert abs(row["note"]["right"] - row["info"]["right"]) < 1  # to the right, as the title
     assert row["noteBg"] == CLEAR and found["chapter"] == CLEAR
     assert found["rows"][1]["infoBg"] == CLEAR
@@ -497,18 +504,40 @@ def test_without_thumbnails_the_round_button_takes_their_place(open_index):
 
 @pytest.mark.parametrize("layout", ["plain", "compact", "cards"])
 @pytest.mark.parametrize("thumbnails", ["yes", "no"])
-def test_every_layout_keeps_the_spacing_and_the_number_on_the_title_line(open_index, layout,
-                                                                       thumbnails):
-    found = open_index(f"!layout: {layout}\n!thumbnails: {thumbnails}\n" + LAYOUT_LIST,
-                       files=["a.webm", "b.webm"]).evaluate(MEASURE)
-    for row in found["rows"]:
-        assert row["thumb"]["left"] - row["num"]["right"] == 12
+def test_the_number_changes_nothing_but_the_title(open_index, layout, thumbnails):
+    """The user, 19.11.2026: with numbers every layout looks as without them;
+    the number stands before the title, which wraps under its own first letter."""
+    head = f"!layout: {layout}\n!thumbnails: {thumbnails}\n"
+    found = open_index(head + LAYOUT_LIST, files=["a.webm", "b.webm"]).evaluate(MEASURE)
+    plain = open_index(head + "!numbers: no\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
+                       ).evaluate(MEASURE)
+    for row, without in zip(found["rows"], plain["rows"]):
+        for part in ("thumb", "info", "note"):
+            assert row[part] == without[part]                    # the same place and size
+        assert row["numText"]["left"] == row["info"]["left"] + row["infoPad"]
+        assert row["numText"]["top"] == row["title"]["top"]      # on the title's first line
+        assert row["title"]["left"] - row["numText"]["right"] == 7      # .5em: about two spaces
         assert row["info"]["left"] - row["thumb"]["right"] == 12
+        assert without["title"]["left"] == row["numText"]["left"]
+    long = found["rows"][0]["titleLines"]
+    assert len(long) > 1 and {r["left"] for r in long} == {long[0]["left"]}   # number hangs out
+    if thumbnails == "no" and layout == "cards":   # the button on the title line (in plain and
+        row = found["rows"][1]                     # compact at the top of the row, 4 px lower)
         line = (row["title"]["top"] + row["title"]["bottom"]) / 2
-        assert abs((row["numText"]["top"] + row["numText"]["bottom"]) / 2 - line) <= 2
-        if thumbnails == "no" and layout == "cards":   # the button on the title line (in
-            # plain and compact it stands at the top of the row, 4 px lower, as before)
-            assert abs((row["thumb"]["top"] + row["thumb"]["bottom"]) / 2 - line) <= 2
+        assert abs((row["thumb"]["top"] + row["thumb"]["bottom"]) / 2 - line) <= 2
+
+
+def test_a_chapter_number_hangs_out_and_its_note_stays_at_its_indent(open_index):
+    found = open_index(LAYOUT_LIST, files=["a.webm", "b.webm"]).evaluate(MEASURE)
+    heading, text = found["heading"], found["heading"]["text"]
+    assert heading["num"]["left"] == heading["box"]["left"]
+    assert text[0]["left"] - heading["num"]["right"] == 8.5         # .5em of 17 px
+    assert len(text) > 1 and {r["left"] for r in text} == {text[0]["left"]}
+    assert found["chapterNote"]["left"] == heading["box"]["left"]    # not indented
+    assert found["rows"][0]["thumb"]["left"] - heading["box"]["left"] == 20 + 8   # indent, padding
+    without = open_index("!numbers: no\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
+                         ).evaluate(MEASURE)["heading"]["text"]
+    assert without[0]["left"] == heading["box"]["left"]
 
 
 def test_plain_without_numbers_keeps_the_note_under_the_thumbnail(open_index):

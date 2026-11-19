@@ -561,10 +561,13 @@ class Builder:
         thumb, title, line, missing = parts
         notes = (f'<div class="note">{"".join(f"<p>{links_only(p, True)}</p>" for p in row.notes)}'
                  f'</div>' if row.notes else "")
+        # the number goes before the title, beside it: a long title wraps under its
+        # own first letter; the layout is the same without the number
+        if self.numbers:
+            title = f'<div class="title"><span class="num">{number}</span> {title}</div>'
         info = (f'<div class="info">{title}'
                 f'<div class="line">{" · ".join(p for p in line if p)}</div>')
-        return (f'<div class="row d{depth}{" missing" if missing else ""}">'
-                + (f'<span class="num">{number}</span>' if self.numbers else "") + thumb
+        return (f'<div class="row d{depth}{" missing" if missing else ""}">' + thumb
                 + (f'{info}</div>{notes}' if self.layout == "plain" else f'{info}{notes}</div>')
                 + '</div>')
 
@@ -669,13 +672,16 @@ class Builder:
 
     def blocks(self, blocks: list, depth: int) -> list[str]:
         out, number = [], 0
+        # notes standing on their own belong to the chapter: at its indent, not at
+        # the indent of its videos and chapters (the list's notes at the title's)
+        level = max(depth - 1, 0)
         for block in blocks:
             if isinstance(block, Notes):
-                out.append(f'<div class="note d{depth}">'
+                out.append(f'<div class="note d{level}">'
                            + "".join(f"<p>{links_only(p, True)}</p>" for p in block.paragraphs)
                            + "</div>")
             elif isinstance(block, PlaylistNotes):
-                out.append(playlist_notes(block, depth))
+                out.append(playlist_notes(block, level))
             elif isinstance(block, Heading):
                 number += 1
                 tag = f"h{block.level + 1}"
@@ -734,19 +740,20 @@ def playlist_notes(block: PlaylistNotes, depth: int) -> str:
 
 INDEX_CSS = """
 /* Index of a list file: rows with a small thumbnail, chapters indented */
-.index{--indent:24px;--thumb-h:72px}
-.index .chapter{display:flex;gap:8px;font-weight:700;margin:20px 0 6px;overflow-wrap:anywhere}
+.index{--indent:20px;--thumb-h:72px}
+.index .chapter{display:flex;gap:.5em;font-weight:700;margin:20px 0 6px;overflow-wrap:anywhere}
 .index h2.chapter{font-size:17px;line-height:24px}
 .index h3.chapter{font-size:16px;line-height:22px}
 .index h4.chapter{font-size:15px;line-height:21px}
-.index .num{flex:none;min-width:2ch;text-align:right;color:var(--muted);
+.index .num{color:var(--muted);
   font-variant-numeric:tabular-nums}
 .index .d1{margin-left:var(--indent)}
 .index .d2{margin-left:calc(2 * var(--indent))}
 .index .d3{margin-left:calc(3 * var(--indent))}
 .index .row{display:flex;gap:12px;align-items:flex-start;padding:6px 8px;margin-right:-8px;
   border-radius:8px}
-.index .row .num{line-height:20px;font-weight:600}
+.index .row .title{display:flex;gap:.5em}
+.index .row .num{font-weight:600}
 .index .thumb{position:relative;display:flex;flex:none;width:128px;height:var(--thumb-h);
   border-radius:8px;overflow:hidden;background:var(--chip);align-items:center;
   justify-content:center;color:var(--muted);font-size:12px;font-weight:600}
@@ -777,16 +784,13 @@ INDEX_CSS = """
    the title and the line; both without frames, the notes of chapters too.
    cards: every row's title, line and note in one frame, at least as tall as
    the thumbnail (or the button); the notes of chapters framed as well */
-.index.layout-plain .row{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:0}
-.index.layout-plain .row .num{margin-right:12px}
-.index.layout-plain .row>.thumb,.index.layout-plain .row>.play{grid-column:2;margin-right:12px}
-.index.layout-plain .row>.note{grid-column:2/4;grid-row:2}
+.index.layout-plain .row{display:grid;grid-template-columns:auto minmax(0,1fr);row-gap:0}
+.index.layout-plain .row>.note{grid-column:1/3}
 .index.layout-plain .note,.index.layout-compact .note,.index.layout-cards .row .note{
   background:none;border-radius:0;padding:0}
 .index.layout-cards .row .info{min-height:var(--thumb-h);padding:8px 12px;border-radius:8px;
   background:var(--panel)}
 .index.layout-cards .row>.play~.info{min-height:28px}
-.index.layout-cards .row .num{padding-top:8px}
 .index.layout-cards .row>.play{margin-top:4px}
 @media (max-width:600px){
   .index{--indent:12px;--thumb-h:54px}

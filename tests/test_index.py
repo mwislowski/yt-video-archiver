@@ -138,14 +138,14 @@ def test_two_playlists_become_chapters(tmp_path):
     lists = {PLAYLIST_ID: playlist("TESTVIDEO01"), "PLother000001": playlist("TESTVIDEO02",
                                                                              title="Other")}
     result = html(tmp_path, f"# Two\n{PLAYLIST_ID}\nPLother000001\n", lists)
-    assert blocks(result) == ["h2 d0 1 Test playlist", "note d1", "row d1 1",
-                              "h2 d0 2 Other", "note d1", "row d1 1"]
+    assert blocks(result) == ["h2 d0 1 Test playlist", "note d0", "row d1 1",
+                              "h2 d0 2 Other", "note d0", "row d1 1"]
 
 
 def test_a_playlist_next_to_a_video_becomes_a_chapter_one_level_lower(tmp_path):
     result = html(tmp_path, f"## Part\nTESTVIDEO03\n{PLAYLIST_ID}\n",
                   {PLAYLIST_ID: playlist("TESTVIDEO01", "TESTVIDEO02")})
-    assert blocks(result) == ["h2 d0 1 Part", "row d1 1", "h3 d1 2 Test playlist", "note d2",
+    assert blocks(result) == ["h2 d0 1 Part", "row d1 1", "h3 d1 2 Test playlist", "note d1",
                               "row d2 1", "row d2 2"]
     assert "<title>Test playlist</title>" in result     # the only playlist of the file
 
@@ -153,7 +153,7 @@ def test_a_playlist_next_to_a_video_becomes_a_chapter_one_level_lower(tmp_path):
 def test_at_the_lowest_level_a_playlist_stands_next_to_the_others(tmp_path):
     result = html(tmp_path, f"# T\n#### Deep\nTESTVIDEO03\n{PLAYLIST_ID}\nTESTVIDEO04\n",
                   {PLAYLIST_ID: playlist("TESTVIDEO01", "TESTVIDEO02")})
-    assert blocks(result) == ["h4 d2 1 Deep", "row d3 1", "note d3", "row d3 2", "row d3 3",
+    assert blocks(result) == ["h4 d2 1 Deep", "row d3 1", "note d2", "row d3 2", "row d3 3",
                               "row d3 4"]
 
 
@@ -161,8 +161,8 @@ def test_an_empty_heading_over_a_lone_playlist_takes_its_title(tmp_path):
     lists = {PLAYLIST_ID: playlist("TESTVIDEO01")}
     result = html(tmp_path, f"# T\n##\n{PLAYLIST_ID}\n## Mine\n{PLAYLIST_ID}\n## Last\n###\n"
                             "TESTVIDEO02\n", lists)
-    assert blocks(result) == ["h2 d0 1 Test playlist", "note d1", "row d1 1",
-                              "h2 d0 2 Mine", "note d1", "row d1 1",       # the heading wins
+    assert blocks(result) == ["h2 d0 1 Test playlist", "note d0", "row d1 1",
+                              "h2 d0 2 Mine", "note d0", "row d1 1",       # the heading wins
                               "h2 d0 3 Last", "h3 d1 1", "row d2 1"]       # empty, numbered
 
 
@@ -182,7 +182,8 @@ def test_a_title_of_ones_own_over_a_playlist(tmp_path):
 def test_numbers_start_at_one_on_each_level_and_skip_notes(tmp_path):
     result = html(tmp_path, "# T\n> Intro\nTESTVIDEO01\n## A\n> About A\nTESTVIDEO02\n"
                             "### A1\nTESTVIDEO03\nTESTVIDEO04\n## B\n")
-    assert blocks(result) == ["note d0", "row d0 1", "h2 d0 2 A", "note d1", "row d1 1",
+    # notes on their own at the indent of their chapter (the list's at the title's)
+    assert blocks(result) == ["note d0", "row d0 1", "h2 d0 2 A", "note d0", "row d1 1",
                               "h3 d1 2 A1", "row d2 1", "row d2 2", "h2 d0 3 B"]
 
 
@@ -341,7 +342,9 @@ def test_a_file_of_ones_own(tmp_path):
 def test_a_file_of_ones_own_that_is_not_there(tmp_path):
     result, builder = build(tmp_path, "Missing.mkv\n")
     row, = rows(result)
-    assert '<div class="row d0 missing"><span class="num">1</span><span class="thumb off empty">' in row
+    assert ('<div class="row d0 missing"><span class="thumb off empty"></span><div class="info">'
+            '<div class="title"><span class="num">1</span> <span class="name">Missing</span></div>'
+            in row)
     assert '<span class="miss" title="Missing.mkv">file not found</span>' in row
     assert builder.console_notes(advice=True) == [
         f"line 1: file not found: Missing.mkv (looked for in {tmp_path}; check the name)"]
@@ -429,13 +432,25 @@ def test_the_layout_names_the_index_and_places_the_note(tmp_path, layout):
     assert '<div class="note d0"><p>Intro</p></div>' in result   # chapters' notes: the same
 
 
+def test_the_number_stands_beside_the_title_in_its_info(tmp_path):
+    """Not a column of the row: the row is laid out as without numbers; the
+    title (which the player shows) does not include the number."""
+    row, = rows(html(tmp_path, "= Mine\nTESTVIDEO01\n"))
+    assert ('<span class="thumb off empty"></span><div class="info"><div class="title">'
+            '<span class="num">1</span> <span class="name">Mine</span></div><div class="line">'
+            in row)
+    row, = rows(html(tmp_path, "!numbers: no\n= Mine\nTESTVIDEO01\n"))
+    assert '<div class="info"><span class="name">Mine</span><div class="line">' in row
+    assert 'class="num"' not in row and 'class="title"' not in row
+
+
 def test_the_default_layout_is_plain(tmp_path):
     assert '<main class="page index layout-plain">' in html(tmp_path, "TESTVIDEO01\n")
 
 
 def test_the_layouts_in_css():
     css = index.INDEX_CSS
-    assert ".layout-plain .row>.note{grid-column:2/4;grid-row:2}" in css
+    assert ".layout-plain .row>.note{grid-column:1/3}" in css
     assert (".index.layout-plain .note,.index.layout-compact .note,.index.layout-cards .row .note{"
             in css)
     assert ".index.layout-cards .row .info{min-height:var(--thumb-h)" in css
@@ -541,7 +556,7 @@ def test_no_weight_windows_shows_as_regular():
     looked regular there; 600 is its Semibold, as on the video pages."""
     assert "font-weight:500" not in index.INDEX_CSS
     assert ".index .name{font-weight:600;" in index.INDEX_CSS
-    assert ".index .row .num{line-height:20px;font-weight:600}" in index.INDEX_CSS
+    assert ".index .row .num{font-weight:600}" in index.INDEX_CSS
 
 
 def test_the_index_uses_only_colour_variables():
@@ -704,7 +719,7 @@ def test_index_downloads_what_is_missing_and_makes_the_index(tmp_path, youtube, 
     assert "  line 4: file not found: My clip.mp4" in out
     result = (out_dir / "series.html").read_text(encoding="utf-8")
     assert ">Original title 1</a>" in result and ">Original title 2</a>" in result
-    assert blocks(result) == ["row d0 1", "h2 d0 2 Test playlist", "note d1", "row d1 1",
+    assert blocks(result) == ["row d0 1", "h2 d0 2 Test playlist", "note d0", "row d1 1",
                               "row d1 2", "row d0 3", "row d0 4"]
 
 
