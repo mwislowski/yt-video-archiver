@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-19
+
 ### Changed
 
 - The numbers in the index stand before the titles instead of in a column of their own, so an index with numbers is laid out as one without them; a long title wraps under its first letter, with the number left of it. The notes of a chapter stand at its indent (its videos and chapters one step in), and the indent is a little smaller (20 px).
@@ -212,7 +214,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.4...v0.10.0
 [0.9.4]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.3...v0.9.4
