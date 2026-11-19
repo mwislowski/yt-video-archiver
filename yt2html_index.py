@@ -556,17 +556,21 @@ class Builder:
                 f'<div class="line">{" · ".join(p for p in line if p)}</div>{notes}</div></div>')
 
     def thumb(self, duration: float | None, cover: str | None = None, label: str = "",
-              playable: bool = True) -> str:
-        """The image (or, with !no-thumbnails, the round play button)."""
+              file: Path | None = None) -> str:
+        """The image (or, with !no-thumbnails, the round play button); with
+        a video file it plays the file in the player (data-file: its address
+        relative to the index)."""
+        play = f' data-file="{core.esc(urllib.parse.quote(file.name))}"' if file else ""
         if not self.thumbnails:
-            return f'<span class="play{"" if playable else " off"}">{PLAY_ICON}</span>'
+            return f'<span class="play{"" if file else " off"}"{play}>{PLAY_ICON}</span>'
         time = (f'<span class="time">{core.format_duration(duration)}</span>'
                 if duration is not None else "")
-        classes = "thumb" + ("" if playable else " off")
+        classes = "thumb" + ("" if file else " off")
         if cover:
-            return f'<span class="{classes}"><img src="{core.esc(cover)}" alt="">{time}</span>'
+            return (f'<span class="{classes}"{play}><img src="{core.esc(cover)}" alt="">{time}'
+                    f'</span>')
         if label:
-            return f'<span class="{classes} format">{core.esc(label)}{time}</span>'
+            return f'<span class="{classes} format"{play}>{core.esc(label)}{time}</span>'
         return f'<span class="{classes} empty"></span>'
 
     def time_in_line(self, duration: float | None) -> str:
@@ -604,11 +608,11 @@ class Builder:
             language = (meta.get("yt2html:language") or "").lower()
             if file:
                 kind = format_label(file)
-                return (self.thumb(duration, meta.get("yt2html:cover"), kind),
+                return (self.thumb(duration, meta.get("yt2html:cover"), kind, file),
                         name, [self.time_in_line(duration), language,
                                f'<span title="{core.esc(file.name)}">{kind}</span>', youtube],
                         False)
-            return (self.thumb(duration, meta.get("yt2html:cover"), playable=False), name,
+            return (self.thumb(duration, meta.get("yt2html:cover")), name,
                     [self.time_in_line(duration), language,
                      '<span class="miss">only the page downloaded</span>', youtube], True)
         name = f'<span class="name">{shown}</span>'
@@ -617,12 +621,12 @@ class Builder:
             kind = format_label(file)
             self.notes.append((row.line, f"line {row.line}: {video_id} has a video file but "
                                          f"no page ({file.name}); --index makes it"))
-            return (self.thumb(duration, label=kind), name,
+            return (self.thumb(duration, label=kind, file=file), name,
                     [self.time_in_line(duration),
                      f'<span title="{core.esc(file.name)}">{kind}</span>', youtube], False)
         self.missing.setdefault(row.line, []).append(video_id)
         youtube = f'<a href="{core.esc(url)}" target="_blank" rel="noopener noreferrer">YouTube</a>'
-        return (self.thumb(None, playable=False), name,
+        return (self.thumb(None), name,
                 ['<span class="miss">not downloaded</span>', youtube], True)
 
     def own_file(self, row: Row) -> tuple[str, str, list[str], bool]:
@@ -632,18 +636,18 @@ class Builder:
         if not path.is_file():
             self.notes.append((row.line, f"line {row.line}: file not found: {row.ref} (looked "
                                          f"for in {self.output_dir}; check the name)"))
-            return (self.thumb(None, playable=False), name,
+            return (self.thumb(None), name,
                     [f'<span class="miss" title="{core.esc(row.ref)}">file not found</span>'], True)
         duration = file_duration(path)
         kind = format_label(path)
-        return (self.thumb(duration, label=kind), name,
+        return (self.thumb(duration, label=kind, file=path), name,
                 [self.time_in_line(duration), f'<span title="{core.esc(path.name)}">{kind}</span>'],
                 False)
 
     def unread_playlist(self, row: Row) -> tuple[str, str, list[str], bool]:
         url = f"{core.YOUTUBE}/playlist?list={row.ref}"
         shown = core.esc(row.title) if row.title else f'<span class="id">{core.esc(row.ref)}</span>'
-        return (self.thumb(None, playable=False), f'<span class="name">{shown}</span>',
+        return (self.thumb(None), f'<span class="name">{shown}</span>',
                 ['<span class="miss">playlist could not be read</span>',
                  f'<a href="{core.esc(url)}" target="_blank" rel="noopener noreferrer">YouTube</a>'],
                 True)
@@ -758,6 +762,254 @@ INDEX_CSS = """
   .index{--indent:12px}
   .index .thumb{width:96px;height:54px}
 }
+/* The player on the left (the page player's look, shown by the script):
+   one row of eight equal buttons that wraps in a narrow panel, the speeds,
+   the title of the file playing; greyed until the first play */
+.player.ix-player .ix-controls button{width:50px}
+.player.ix-player button[data-do=autoplay][aria-pressed=true]{background:var(--accent);
+  color:var(--on-accent)}
+.ix-player .seek input:disabled{opacity:.45}
+.ix-player .ix-screen{position:relative}
+.ix-player .ix-failed{position:absolute;inset:0;display:flex;flex-direction:column;gap:4px;
+  align-items:center;justify-content:center;padding:16px;color:var(--muted);text-align:center;
+  overflow-wrap:anywhere}
+.ix-player .ix-failed[hidden]{display:none}
+.ix-player .ix-playing{font-size:16px;line-height:22px;font-weight:600;overflow-wrap:anywhere}
+.player-open .index [data-file]{cursor:pointer}
+.player-open .index [data-file]:hover{filter:var(--hover)}
+.index .row.now{background:var(--accent-soft)}
+.index .row.now .thumb{box-shadow:0 0 0 2px var(--accent)}
+.index .row.now .play{background:var(--accent);color:var(--on-accent)}
+.index .row.failed .thumb,.index .row.failed .play{opacity:.45}
+.player-open .index .row.failed [data-file]{cursor:default;filter:none}
+"""
+
+SPEEDS = core.PLAYER_SPEEDS
+
+
+def render_player() -> str:
+    """The player panel: hidden without the script (the index then is a plain
+    list), always shown with it. Buttons that show symbols have an
+    aria-label: the name screen readers and voice control use."""
+    speeds = "".join(f'<button type="button" data-speed="{v}" aria-pressed="{str(v == "1").lower()}" '
+                     f'aria-label="Speed {v}">{v}×</button>' for v in SPEEDS)
+    buttons = [
+        ("previous", "Previous file (Shift+P)", "Previous file", "|◀◀"),
+        ("start", "To the start (Ctrl+←)", "To the start", "|◀"),
+        ("back", "10 s back (←)", "10 seconds back", "−10 s"),
+        ("toggle", "Play / pause (space)", "Play", "▶"),
+        ("forward", "10 s forward (→)", "10 seconds forward", "+10 s"),
+        ("end", "To the end (Ctrl+→)", "To the end", "▶|"),
+        ("next", "Next file (Shift+N)", "Next file", "▶▶|"),
+    ]
+    main = ' class="main"'   # Play in the accent colour, as on a video's page
+    return (
+        '<aside class="player ix-player" aria-label="Video player">'
+        '<div class="ix-screen"><video preload="none"></video>'
+        '<div class="ix-failed" hidden><div>This file could not be played.</div>'
+        '<div class="ix-failed-title"></div></div></div>'
+        '<div class="seek"><span class="now">0:00</span>'
+        '<input type="range" min="0" max="0" step="0.1" value="0" aria-label="Position">'
+        '<span class="total">0:00</span></div>'
+        '<div class="buttons ix-controls">'
+        + "".join(f'<button type="button" data-do="{do}"{main if do == "toggle" else ""} '
+                  f'title="{core.esc(title)}" aria-label="{label}">{core.esc(text)}</button>'
+                  for do, title, label, text in buttons)
+        + '<button type="button" data-do="autoplay" aria-pressed="false" '
+        'title="Autoplay: play the next file when this one ends" aria-label="Autoplay">A</button>'
+        '</div>'
+        f'<div class="buttons speed">{speeds}</div>'
+        '<div class="ix-playing"></div>'
+        '</aside>')
+
+
+# The only script of the index: the player. The thumbnails (or round
+# buttons) of rows with a video file play it; the panel plays one file at a
+# time. Without the script the index is a plain list.
+PLAYER_JS = r"""
+(function () {
+  var body = document.body, panel = document.querySelector('.ix-player');
+  if (!panel) return;
+  function all(selector, root) {
+    return Array.prototype.slice.call((root || document).querySelectorAll(selector));
+  }
+  var video = panel.querySelector('video'), seek = panel.querySelector('.seek input');
+  var failedBox = panel.querySelector('.ix-failed'), playing = panel.querySelector('.ix-playing');
+  var buttons = {};
+  all('[data-do]', panel).forEach(function (b) { buttons[b.dataset.do] = b; });
+  var speeds = all('[data-speed]', panel);
+  // The files, in the order of the list; current: the one in the player
+  // (-1 before the first play); failed: files that could not be played,
+  // skipped until the page is loaded again (a file put right gets a new chance).
+  var items = all('.index [data-file]'), current = -1, failed = [];
+  function clock(s) {
+    s = Math.floor(s || 0);
+    var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = String(s % 60);
+    return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + sec.padStart(2, '0');
+  }
+  function rowOf(i) { return items[i].closest('.row'); }
+  function titleOf(i) {
+    var name = rowOf(i).querySelector('.name');
+    return name ? name.textContent : '';
+  }
+  function isFailed(i) { return failed.indexOf(i) >= 0; }
+  function playableFrom(i, step) {  // the next file to play before or after i, or -1
+    for (i += step; i >= 0 && i < items.length; i += step) if (!isFailed(i)) return i;
+    return -1;
+  }
+  function setState() {  // greyed: everything before the first play, the controls of a failed file
+    var started = current >= 0, usable = started && !isFailed(current);
+    ['start', 'back', 'toggle', 'forward', 'end'].forEach(function (k) {
+      buttons[k].disabled = !usable;
+    });
+    seek.disabled = !usable;
+    buttons.previous.disabled = !started || playableFrom(current, -1) < 0;
+    buttons.next.disabled = !started || playableFrom(current, 1) < 0;
+    buttons.autoplay.disabled = !started;
+    speeds.forEach(function (b) { b.disabled = !started; });
+  }
+  function showTime() {
+    seek.value = video.currentTime || 0;
+    panel.querySelector('.now').textContent = clock(video.currentTime);
+  }
+  function load(i) {
+    if (current >= 0) rowOf(current).classList.remove('now');
+    current = i;
+    rowOf(i).classList.add('now');
+    playing.textContent = titleOf(i);
+    failedBox.hidden = true;
+    seek.max = 0;
+    panel.querySelector('.total').textContent = clock(0);
+    video.src = items[i].dataset.file;   // keeps the speed (defaultPlaybackRate)
+    showTime();
+    setState();
+    video.play().catch(function () {});
+  }
+  function fail(i) {
+    failed.push(i);
+    rowOf(i).classList.add('failed');
+    failedBox.querySelector('.ix-failed-title').textContent = titleOf(i);
+    failedBox.hidden = false;
+    setState();
+  }
+  video.addEventListener('error', function () {
+    if (current >= 0 && video.getAttribute('src')) fail(current);
+  });
+  // The visible part of the window: below the panel when it stands above
+  // the list (narrow windows).
+  function edges() {
+    var top = getComputedStyle(panel).position === 'sticky'
+      ? Math.max(0, panel.getBoundingClientRect().bottom) : 0;
+    return {top: top, bottom: window.innerHeight};
+  }
+  function visible(row) {
+    var r = row.getBoundingClientRect(), e = edges();
+    return r.bottom > e.top && r.top < e.bottom;
+  }
+  // A row that would be out of sight comes into view, with a margin, by the
+  // shortest scroll (at the ends of the list the margin goes).
+  function reveal(row) {
+    var r = row.getBoundingClientRect(), e = edges(), by = 0, MARGIN = 48;
+    if (r.top < e.top) by = r.top - e.top - MARGIN;
+    else if (r.bottom > e.bottom) by = r.bottom - e.bottom + MARGIN;
+    if (!by) return;
+    var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollBy({top: by, behavior: still ? 'auto' : 'smooth'});
+  }
+  function go(step) {
+    var i = playableFrom(current, step);
+    if (i < 0) return;
+    load(i);
+    reveal(rowOf(i));
+  }
+  // Autoplay: the next file that is not known to fail; scrolls only if the
+  // row that ended was in sight (it never pulls the reader away from the list).
+  video.addEventListener('ended', function () {
+    if (buttons.autoplay.getAttribute('aria-pressed') !== 'true') return;
+    var i = playableFrom(current, 1);
+    if (i < 0) return;
+    var follow = visible(rowOf(current));
+    load(i);
+    if (follow) reveal(rowOf(i));
+  });
+  function jump(t) { video.currentTime = Math.max(0, Math.min(video.duration || 0, t)); }
+  var actions = {
+    previous: function () { go(-1); },
+    start: function () { video.pause(); jump(0); },  // always stopped at the start
+    back: function () { jump(video.currentTime - 10); },
+    toggle: function () { if (video.paused) video.play(); else video.pause(); },
+    forward: function () { jump(video.currentTime + 10); },
+    end: function () { jump(video.duration); },
+    next: function () { go(1); },
+    autoplay: function () {
+      var on = buttons.autoplay.getAttribute('aria-pressed') !== 'true';
+      buttons.autoplay.setAttribute('aria-pressed', String(on));
+    }
+  };
+  all('[data-do]', panel).forEach(function (button) {
+    button.addEventListener('click', function () { actions[button.dataset.do](); button.blur(); });
+  });
+  speeds.forEach(function (button) {
+    button.addEventListener('click', function () {
+      video.defaultPlaybackRate = video.playbackRate = Number(button.dataset.speed);
+      speeds.forEach(function (other) { other.setAttribute('aria-pressed', String(other === button)); });
+      button.blur();
+    });
+  });
+  // A thumbnail plays its file; the file in the player, or one that failed,
+  // does nothing (the panel controls it).
+  items.forEach(function (item, i) {
+    item.setAttribute('role', 'button');
+    item.tabIndex = 0;
+    item.setAttribute('aria-label', 'Play: ' + titleOf(i));
+    function choose() { if (i !== current && !isFailed(i)) load(i); }
+    item.addEventListener('click', choose);
+    item.addEventListener('keydown', function (e) {  // other keys work as anywhere else
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      e.stopPropagation();
+      choose();
+    });
+  });
+  seek.addEventListener('input', function () { jump(Number(seek.value)); });
+  video.addEventListener('loadedmetadata', function () {
+    seek.max = video.duration;
+    panel.querySelector('.total').textContent = clock(video.duration);
+  });
+  video.addEventListener('timeupdate', showTime);
+  video.addEventListener('play', function () {
+    buttons.toggle.textContent = '❚❚'; buttons.toggle.setAttribute('aria-label', 'Pause');
+  });
+  video.addEventListener('pause', function () {
+    buttons.toggle.textContent = '▶'; buttons.toggle.setAttribute('aria-label', 'Play');
+  });
+  video.addEventListener('enterpictureinpicture', function () { body.classList.add('pip'); });
+  video.addEventListener('leavepictureinpicture', function () { body.classList.remove('pip'); });
+  if ('mediaSession' in navigator) {  // the browser's own controls (picture-in-picture, media keys)
+    [['seekbackward', 'back'], ['seekforward', 'forward'],
+     ['previoustrack', 'previous'], ['nexttrack', 'next']].forEach(function (pair) {
+      try {
+        navigator.mediaSession.setActionHandler(pair[0], function () {
+          if (!buttons[pair[1]].disabled) actions[pair[1]]();
+        });
+      } catch (e) { /* not supported */ }
+    });
+  }
+  // Keys as on a video's page (space, arrows, Ctrl+arrows), Shift+P and
+  // Shift+N the previous and next file; a greyed button's key does nothing.
+  document.addEventListener('keydown', function (e) {
+    if (e.altKey || e.metaKey
+        || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(e.target.tagName)) return;
+    var key = (e.ctrlKey ? 'Ctrl+' : '') + (e.shiftKey ? 'Shift+' : '')
+      + (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    var action = {' ': 'toggle', 'ArrowLeft': 'back', 'ArrowRight': 'forward',
+                  'Ctrl+ArrowLeft': 'start', 'Ctrl+ArrowRight': 'end',
+                  'Shift+P': 'previous', 'Shift+N': 'next'}[key];
+    if (action && !buttons[action].disabled) { e.preventDefault(); actions[action](); }
+  });
+  body.classList.add('player-open');
+  setState();
+})();
 """
 
 
@@ -784,6 +1036,7 @@ def render_index(listing: ListFile, playlists: dict[str, dict | None], output_di
         f"<style>{core.CSS}\n{INDEX_CSS}\n{core.theme_css(theme)}\n</style>",
         "</head>",
         "<body>",
+        render_player(),
         '<main class="page index">',
         f'<h1 class="title">{core.esc(title)}</h1>',
         *body,
@@ -791,6 +1044,7 @@ def render_index(listing: ListFile, playlists: dict[str, dict | None], output_di
         f'</footer>',
         "</main>",
         f'<script type="application/json" id="{DATA_ID}">{data}</script>',
+        f"<script>{PLAYER_JS}</script>",
         "</body>",
         "</html>",
         "",

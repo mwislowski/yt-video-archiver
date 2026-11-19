@@ -14,10 +14,15 @@ dependencies = [
 ]
 
 # Development tools: "uv run pytest" installs them into the project's .venv
-# (they are not part of the installed program).
+# (they are not part of the installed program). The browser tests of the
+# index player need Playwright and its Chromium: "uv run --group browser
+# playwright install chromium" once, then "uv run --group browser pytest --browser".
 [dependency-groups]
 dev = [
     "pytest>=8",
+]
+browser = [
+    "playwright>=1.65",
 ]
 
 [project.urls]
@@ -40,4 +45,7 @@ only-include = ["yt2html.py", "yt2html_index.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["online: downloads real pages from YouTube (run with --online)"]
+markers = [
+    "online: downloads real pages from YouTube (run with --online)",
+    "browser: clicks pages in Chromium with Playwright (run with --browser)",
+]

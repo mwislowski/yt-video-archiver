@@ -2,7 +2,8 @@
 
 All data here is made up, but shaped like the real structures seen on the
 reference videos listed in README.md (section B). No test touches the
-network unless it is marked "online" and pytest runs with --online.
+network unless it is marked "online" and pytest runs with --online; tests
+marked "browser" (Chromium with Playwright) run only with --browser.
 """
 
 from __future__ import annotations
@@ -19,21 +20,29 @@ import yt2html
 
 
 # --------------------------------------------------------------------------
-# pytest options: online tests are skipped unless --online is given
+# pytest options: online tests are skipped unless --online is given, browser
+# tests unless --browser is given
 # --------------------------------------------------------------------------
 
 def pytest_addoption(parser):
     parser.addoption("--online", action="store_true",
                      help="also run tests that download real pages from YouTube")
+    parser.addoption("--browser", action="store_true",
+                     help="also run tests that click pages in Chromium (Playwright)")
+
+
+SKIPPED = {"online": "needs --online (downloads from YouTube)",
+           "browser": "needs --browser (Chromium with Playwright)"}
 
 
 def pytest_collection_modifyitems(config, items):
-    if config.getoption("--online"):
-        return
-    skip = pytest.mark.skip(reason="needs --online (downloads from YouTube)")
-    for item in items:
-        if "online" in item.keywords:
-            item.add_marker(skip)
+    for mark, reason in SKIPPED.items():
+        if config.getoption(f"--{mark}"):
+            continue
+        skip = pytest.mark.skip(reason=reason)
+        for item in items:
+            if mark in item.keywords:
+                item.add_marker(skip)
 
 
 # --------------------------------------------------------------------------

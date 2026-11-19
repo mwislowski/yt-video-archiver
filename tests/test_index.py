@@ -218,8 +218,9 @@ def test_a_video_with_its_page_and_file(tmp_path):
     (tmp_path / "Title [TESTVIDEO01].mp4").write_bytes(b"")
     row, = rows(html(tmp_path, "TESTVIDEO01\n"))
     assert '<div class="row d0">' in row
-    assert (f'<span class="thumb"><img src="{COVER}" alt=""><span class="time">21:48</span>'
-            '</span>') in row
+    # the thumbnail plays the file (its address relative to the index)
+    assert (f'<span class="thumb" data-file="Title%20%5BTESTVIDEO01%5D.mp4"><img src="{COVER}" '
+            'alt=""><span class="time">21:48</span></span>') in row
     assert ('<a class="name" href="My%20page%20%26%20co%20%5BTESTVIDEO01%5D.html" '
             'target="_blank" rel="noopener noreferrer">Title of TESTVIDEO01</a>') in row
     # language as in the data, in small letters; the format with the file's name;
@@ -290,7 +291,8 @@ def test_a_video_file_without_a_page(tmp_path):
     result, builder = build(tmp_path, "TESTVIDEO01\n")
     row, = rows(result)
     assert '<div class="row d0">' in row and '<span class="name">Clip name</span>' in row
-    assert '<span class="thumb format">MP4<span class="time">1:05</span></span>' in row
+    assert ('<span class="thumb format" data-file="Clip%20name%20%5BTESTVIDEO01%5D.mp4">MP4'
+            '<span class="time">1:05</span></span>') in row
     assert builder.console_notes(advice=True) == [
         "line 1: TESTVIDEO01 has a video file but no page (Clip name [TESTVIDEO01].mp4); "
         "--index makes it"]
@@ -299,7 +301,8 @@ def test_a_video_file_without_a_page(tmp_path):
 def test_a_file_of_ones_own(tmp_path):
     mp4(tmp_path / "Holiday 2026.mp4", 2282)
     row, = rows(html(tmp_path, "Holiday 2026.mp4\n"))
-    assert '<span class="thumb format">MP4<span class="time">38:02</span></span>' in row
+    assert ('<span class="thumb format" data-file="Holiday%202026.mp4">MP4'
+            '<span class="time">38:02</span></span>') in row
     assert '<span class="name">Holiday 2026</span>' in row       # plain text: no page
     assert '<div class="line"><span title="Holiday 2026.mp4">MP4</span></div>' in row
     assert "YouTube" not in row
@@ -323,9 +326,11 @@ def test_no_thumbnails(tmp_path):
     result = html(tmp_path, "!no-thumbnails\nTESTVIDEO01\nTESTVIDEO02\nTESTVIDEO03\n")
     first, second, third = rows(result)
     assert COVER not in result and 'class="thumb' not in result
-    assert f'<span class="play">{index.PLAY_ICON}</span>' in first
+    assert (f'<span class="play" data-file="x%20%5BTESTVIDEO01%5D.mp4">{index.PLAY_ICON}</span>'
+            in first)
     assert '<div class="line">21:48 · pl · <span title=' in first     # the time in the line
-    assert '<span class="play off">' in second and '21:48 · pl · <span class="miss">' in second
+    assert '<span class="play off">' in second and "data-file" not in second + third
+    assert '21:48 · pl · <span class="miss">' in second
     assert '<span class="play off">' in third and '<div class="line"><span class="miss">' in third
 
 
@@ -427,8 +432,46 @@ def test_the_page(tmp_path):
     assert "<title>A &amp; B</title>" in result and index.INDEX_CSS in result
     assert re.search(r'<footer class="footer">Index made with yt2html on \d\d\.\d\d\.\d{4}\.'
                      r'</footer>', result)
-    assert "<script>" not in result               # works without JavaScript
     assert "archived" not in body(result)
+
+
+def test_the_player_is_shown_by_its_script(tmp_path):
+    result = html(tmp_path, "TESTVIDEO01\n")
+    # without JavaScript the panel stays hidden (the page player's rule) and the
+    # index is a plain list; the script, the only one, opens it
+    assert ".player{display:none}" in yt2html.CSS
+    assert '<body>\n<aside class="player ix-player" aria-label="Video player">' in result
+    assert result.count("<script>") == 1 and f"<script>{index.PLAYER_JS}</script>" in result
+    assert "body.classList.add('player-open')" in index.PLAYER_JS
+
+
+def test_the_player_panel():
+    panel = index.render_player()
+    controls = re.findall(r'<button type="button" data-do="(\w+)"[^>]*>([^<]*)</button>', panel)
+    assert controls == [("previous", "|◀◀"), ("start", "|◀"), ("back", "−10 s"),
+                        ("toggle", "▶"), ("forward", "+10 s"), ("end", "▶|"),
+                        ("next", "▶▶|"), ("autoplay", "A")]
+    assert '<div class="buttons ix-controls">' in panel
+    assert ('data-do="previous" title="Previous file (Shift+P)" aria-label="Previous file"'
+            in panel)
+    assert 'data-do="next" title="Next file (Shift+N)" aria-label="Next file"' in panel
+    assert 'data-do="toggle" class="main"' in panel
+    assert ('data-do="autoplay" aria-pressed="false" title="Autoplay: play the next file when '
+            'this one ends" aria-label="Autoplay">A</button>') in panel
+    speeds = re.findall(r'data-speed="([\d.]+)" aria-pressed="(\w+)"', panel)
+    assert speeds == [(v, str(v == "1").lower()) for v in yt2html.PLAYER_SPEEDS]
+    assert '<div class="ix-failed" hidden><div>This file could not be played.</div>' in panel
+    assert '<video preload="none"></video>' in panel
+    # only the title under the buttons: no link, no transcript or audio rows
+    assert panel.endswith('<div class="ix-playing"></div></aside>')
+    assert "<a " not in panel and "follow" not in panel and "audio" not in panel.replace(
+        "autoplay", "").replace("Autoplay", "")
+
+
+def test_all_player_buttons_are_equal():
+    """Eight buttons of 50 px, Play too; the row wraps, they never scale."""
+    assert ".player.ix-player .ix-controls button{width:50px}" in index.INDEX_CSS
+    assert ".player .buttons{display:flex;flex-wrap:wrap;gap:8px}" in yt2html.CSS
 
 
 def test_the_index_uses_only_colour_variables():
@@ -438,7 +481,7 @@ def test_the_index_uses_only_colour_variables():
 def test_the_kept_playlists_cannot_close_their_element(tmp_path):
     data = {PLAYLIST_ID: playlist("TESTVIDEO01", description="</script><b>x</b>")}
     result = html(tmp_path, f"{PLAYLIST_ID}\n", data)
-    assert result.count("</script>") == 1
+    assert result.count("</script>") == 2          # the data and the player
     (tmp_path / "series.html").write_text(result, encoding="utf-8")
     assert index.kept_playlists(tmp_path / "series.html") == data
 
