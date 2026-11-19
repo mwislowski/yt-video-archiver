@@ -156,6 +156,108 @@ def test_previous_and_next_skip_rows_without_a_file(open_index):
     assert now_row(page) == 1 and disabled(page)["previous"]
 
 
+# Previous and next keep playing or waiting (user's decision 19.11.2026) --------------
+
+PAUSED = "() => document.querySelector('video').paused"
+
+
+def waiting_at_start(page) -> bool:
+    """Stopped at 0:00, with the duration read (the first frame shown)."""
+    return page.evaluate("""() => { const v = document.querySelector('video');
+        return v.paused && v.currentTime === 0 && v.readyState >= 1
+          && document.querySelector('.ix-player .total').textContent !== '0:00'; }""")
+
+
+def test_previous_and_next_go_on_playing(open_index):
+    page = open_index("a.webm\nb.webm\n", files=["a.webm", "b.webm"])
+    thumb(page, 1).click()
+    page.wait_for_function(PLAYING)
+    button(page, "next").click()
+    wait_title(page, "b")
+    page.wait_for_function(PLAYING)
+    button(page, "previous").click()
+    wait_title(page, "a")
+    page.wait_for_function(PLAYING)
+
+
+def test_stopped_previous_and_next_wait_at_the_start(open_index):
+    page = open_index("a.webm\nb.webm\n", files=["a.webm", "b.webm"])
+    thumb(page, 1).click()
+    page.wait_for_function(PLAYING)
+    button(page, "toggle").click()               # paused in the middle
+    button(page, "next").click()
+    wait_title(page, "b")
+    page.wait_for_function("() => document.querySelector('video').readyState >= 1")
+    page.wait_for_timeout(300)
+    assert waiting_at_start(page)
+    assert button(page, "toggle").get_attribute("aria-label") == "Play"
+    page.keyboard.press("Shift+P")               # the keys the same
+    wait_title(page, "a")
+    page.wait_for_function("() => document.querySelector('video').readyState >= 1")
+    page.wait_for_timeout(300)
+    assert waiting_at_start(page)
+    button(page, "toggle").click()               # and it plays from there
+    page.wait_for_function(PLAYING)
+
+
+def test_after_to_the_start_next_waits(open_index):
+    page = open_index("a.webm\nb.webm\n", files=["a.webm", "b.webm"])
+    thumb(page, 1).click()
+    page.wait_for_function(PLAYING)
+    button(page, "start").click()
+    button(page, "next").click()
+    wait_title(page, "b")
+    page.wait_for_function("() => document.querySelector('video').readyState >= 1")
+    page.wait_for_timeout(300)
+    assert waiting_at_start(page)
+
+
+def test_after_the_end_next_waits(open_index):
+    page = open_index("a.webm\nb.webm\n", files=["a.webm", "b.webm"])
+    thumb(page, 1).click()                       # Autoplay off: the file ends and stops
+    page.wait_for_function("() => document.querySelector('video').ended", timeout=10000)
+    button(page, "next").click()
+    wait_title(page, "b")
+    page.wait_for_function("() => document.querySelector('video').readyState >= 1")
+    page.wait_for_timeout(300)
+    assert waiting_at_start(page)
+
+
+@pytest.mark.parametrize("playing", [True, False])
+def test_after_a_failed_file_the_state_from_before_it(open_index, playing):
+    page = open_index("a.webm\nbroken.webm\nb.webm\n", files=["a.webm", "b.webm"],
+                      broken=["broken.webm"])
+    thumb(page, 1).click()
+    page.wait_for_function(PLAYING)
+    if not playing:
+        button(page, "toggle").click()
+    button(page, "next").click()
+    page.wait_for_selector(".ix-failed:not([hidden])")
+    assert button(page, "toggle").text_content() == "▶"
+    button(page, "next").click()
+    wait_title(page, "b")
+    if playing:
+        page.wait_for_function(PLAYING)
+    else:
+        page.wait_for_function("() => document.querySelector('video').readyState >= 1")
+        page.wait_for_timeout(300)
+        assert waiting_at_start(page)
+
+
+def test_a_failed_file_from_its_thumbnail_counts_as_playing(open_index):
+    """A thumbnail always means play: after it fails, next plays."""
+    page = open_index("a.webm\nbroken.webm\nb.webm\n", files=["a.webm", "b.webm"],
+                      broken=["broken.webm"])
+    thumb(page, 1).click()
+    page.wait_for_function(PLAYING)
+    button(page, "toggle").click()               # stopped on a
+    thumb(page, 2).click()
+    page.wait_for_selector(".ix-failed:not([hidden])")
+    button(page, "next").click()
+    wait_title(page, "b")
+    page.wait_for_function(PLAYING)
+
+
 def test_keys(open_index):
     page = open_index("a.webm\nb.webm\n", files=["a.webm", "b.webm"])
     page.keyboard.press("Shift+N")                  # nothing before the first play

@@ -843,6 +843,11 @@ PLAYER_JS = r"""
   // (-1 before the first play); failed: files that could not be played,
   // skipped until the page is loaded again (a file put right gets a new chance).
   var items = all('.index [data-file]'), current = -1, failed = [];
+  // What previous / next carry over (user's decision 19.11.2026): playing
+  // goes on playing, stopped (paused, at the start, at the end) waits at the
+  // start of the other file. A file that failed has no state of its own: the
+  // one from before it stays. A thumbnail and Autoplay always play.
+  var playOn = true;
   function clock(s) {
     s = Math.floor(s || 0);
     var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = String(s % 60);
@@ -873,18 +878,20 @@ PLAYER_JS = r"""
     seek.value = video.currentTime || 0;
     panel.querySelector('.now').textContent = clock(video.currentTime);
   }
-  function load(i) {
+  function load(i, play) {
     if (current >= 0) rowOf(current).classList.remove('now');
+    playOn = play;
     current = i;
     rowOf(i).classList.add('now');
     playing.textContent = titleOf(i);
     failedBox.hidden = true;
     seek.max = 0;
     panel.querySelector('.total').textContent = clock(0);
+    video.preload = 'metadata';          // waiting: the duration and the first frame
     video.src = items[i].dataset.file;   // keeps the speed (defaultPlaybackRate)
     showTime();
     setState();
-    video.play().catch(function () {});
+    if (play) video.play().catch(function () {});
   }
   function fail(i) {
     failed.push(i);
@@ -920,7 +927,7 @@ PLAYER_JS = r"""
   function go(step) {
     var i = playableFrom(current, step);
     if (i < 0) return;
-    load(i);
+    load(i, isFailed(current) ? playOn : !video.paused);
     reveal(rowOf(i));
   }
   // Autoplay: the next file that is not known to fail; scrolls only if the
@@ -930,7 +937,7 @@ PLAYER_JS = r"""
     var i = playableFrom(current, 1);
     if (i < 0) return;
     var follow = visible(rowOf(current));
-    load(i);
+    load(i, true);
     if (follow) reveal(rowOf(i));
   });
   function jump(t) { video.currentTime = Math.max(0, Math.min(video.duration || 0, t)); }
@@ -963,7 +970,7 @@ PLAYER_JS = r"""
     item.setAttribute('role', 'button');
     item.tabIndex = 0;
     item.setAttribute('aria-label', 'Play: ' + titleOf(i));
-    function choose() { if (i !== current && !isFailed(i)) load(i); }
+    function choose() { if (i !== current && !isFailed(i)) load(i, true); }
     item.addEventListener('click', choose);
     item.addEventListener('keydown', function (e) {  // other keys work as anywhere else
       if (e.key !== 'Enter' && e.key !== ' ') return;
