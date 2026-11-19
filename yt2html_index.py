@@ -733,7 +733,7 @@ INDEX_CSS = """
 .index .d3{margin-left:calc(3 * var(--indent))}
 .index .row{display:flex;gap:12px;align-items:flex-start;padding:6px 8px;margin-right:-8px;
   border-radius:8px}
-.index .row .num{line-height:20px;font-weight:500}
+.index .row .num{line-height:20px;font-weight:600}
 .index .thumb{position:relative;display:flex;flex:none;width:128px;height:72px;
   border-radius:8px;overflow:hidden;background:var(--chip);align-items:center;
   justify-content:center;color:var(--muted);font-size:12px;font-weight:600}
@@ -741,12 +741,12 @@ INDEX_CSS = """
 .index .thumb.empty,.index .thumb.off,.index .play.off{opacity:.45}
 .index .thumb .time{position:absolute;right:4px;bottom:4px;padding:1px 4px;border-radius:4px;
   background:var(--badge-bg);color:var(--badge-fg);font-size:12px;line-height:16px;
-  font-weight:500;font-variant-numeric:tabular-nums}
+  font-weight:600;font-variant-numeric:tabular-nums}
 .index .play{display:flex;flex:none;width:28px;height:28px;border-radius:50%;
   background:var(--chip);color:var(--text);align-items:center;justify-content:center}
 .index .play svg{width:10px;height:12px;margin-left:.6px;fill:currentColor}
 .index .info{min-width:0;flex:1}
-.index .name{font-weight:500;overflow-wrap:anywhere}
+.index .name{font-weight:600;overflow-wrap:anywhere}
 .index a.name{color:var(--text)}
 .index .name .id{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;font-size:13px}
 .index .line{color:var(--muted);font-size:12px;line-height:18px;margin-top:2px}

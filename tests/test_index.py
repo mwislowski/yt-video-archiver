@@ -501,6 +501,14 @@ def test_all_player_buttons_are_equal():
     assert ".player .buttons{display:flex;flex-wrap:wrap;gap:8px}" in yt2html.CSS
 
 
+def test_no_weight_windows_shows_as_regular():
+    """Segoe UI (Windows) has no 500: titles, numbers and durations at 500
+    looked regular there; 600 is its Semibold, as on the video pages."""
+    assert "font-weight:500" not in index.INDEX_CSS
+    assert ".index .name{font-weight:600;" in index.INDEX_CSS
+    assert ".index .row .num{line-height:20px;font-weight:600}" in index.INDEX_CSS
+
+
 def test_the_index_uses_only_colour_variables():
     assert not re.search(r"#[0-9a-fA-F]{3,6}\b|rgba?\(", index.INDEX_CSS)
 
