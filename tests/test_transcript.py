@@ -76,6 +76,46 @@ class TestChooseTrack:
     def test_nothing_available(self):
         assert yt2html.choose_caption_track({}) is None
 
+    def test_the_original_wins_over_a_dubs_default(self):
+        # 8etkFuBLGZ0 (20.11.2026): Polish original, an English auto-dub; for
+        # yt-dlp's English request the page named the dub's captions default
+        auto = {f"{lang}-orig": caption_formats(f"{lang} (Original)") for lang in ("pl", "en-US")}
+        auto.update({lang: caption_formats(lang) for lang in ("pl", "en", "de")})
+        formats = [{"format_id": "140-0", "language": "pl", "language_preference": 10},
+                   {"format_id": "140-1", "language": "en-US", "language_preference": -1}]
+        info = {"automatic_captions": auto, "formats": formats,
+                yt2html.CAPTION_KEY: {"language": "en-US", "kind": "asr"}}
+        assert yt2html.transcript_language(info) == "pl"
+        assert yt2html.choose_caption_track(info)[:2] == ("auto", "pl")
+        # the author's Polish subtitles first: the dub's kind (asr) does not decide
+        info["subtitles"] = {"pl": caption_formats("Polish")}
+        assert yt2html.choose_caption_track(info)[:2] == ("manual", "pl")
+        # marked only by YouTube's kind in the address (no language preference)
+        del info["subtitles"]
+        address = "https://x/videoplayback?xtags=acont%3D"
+        info["formats"] = [{"language": "pl", "url": address + "original%3Alang%3Dpl&n=1"},
+                           {"language": "en-US", "url": address + "dubbed-auto%3Alang%3Den-US"}]
+        assert yt2html.choose_caption_track(info)[:2] == ("auto", "pl")
+
+    def test_the_pages_default_stands_when_it_agrees_or_nothing_is_marked(self):
+        auto = {f"{lang}-orig": caption_formats(lang) for lang in ("en", "pl")}
+        default = {yt2html.CAPTION_KEY: {"language": "en", "kind": "asr"}}
+        # the same language in another variant (en-US original, "en" captions)
+        info = {"automatic_captions": auto, **default,
+                "formats": [{"language": "en-US", "language_preference": 10}]}
+        assert yt2html.transcript_language(info) == "en"
+        # one audio language, nothing marked (the video's "language" is a guess)
+        info = {"automatic_captions": auto, **default, "language": "pl",
+                "formats": [{"language": "pl", "language_preference": -1}]}
+        assert yt2html.transcript_language(info) == "en"
+        # no default: a mark without a language is passed over; else the video's language
+        info = {"automatic_captions": auto, "language": "pl",
+                "formats": [{"language_preference": 10},
+                            {"language": "en-US", "language_preference": 10}]}
+        assert yt2html.transcript_language(info) == "en-US"
+        info["formats"] = []
+        assert yt2html.transcript_language(info) == "pl"
+
 
 def test_json3_to_srt():
     data = {"events": [

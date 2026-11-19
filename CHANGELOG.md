@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Fixed
+
+- The transcript of a video with an automatic dub could be the dub's captions instead of the original's (a Polish video got an English transcript labelled as its original language), because YouTube named the dub's captions the default for yt-dlp's English request. The audio marked as the original now decides. A page that already has the dub's transcript gets the right one when made again with the transcript downloaded again (`--overwrite --transcript`); saved data keep the transcript they hold.
+
 ### Changed
 
 - `--video` with `audio:` or `sub:` no longer asks YouTube for the list of formats, nor waits before the next video, when the page is left as it is and every file asked for is already next to it, so running the same command again to fill the gaps of a playlist asks only about what is missing. Subtitles of a kind the video got later are then not looked for (`again` or `sub:CODE.KIND` asks).

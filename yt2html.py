@@ -1018,20 +1018,38 @@ def base_language(code: str | None) -> str:
     return (code or "").removesuffix("-orig").split("-")[0].lower()
 
 
-def original_audio_language(info: dict) -> str | None:
-    """Original audio language as yt-dlp knows it (formats marked "original")."""
+def marked_original_language(info: dict) -> str | None:
+    """The language of the audio marked as the original: yt-dlp's language
+    preference 10, or YouTube's kind in the format's address (audio_kind());
+    a video with one audio language has no such mark."""
     for fmt in info.get("formats") or []:
-        if fmt.get("language_preference") == 10 and fmt.get("language"):
+        if fmt.get("language") and (fmt.get("language_preference") == 10
+                                    or audio_kind(fmt) == "original"):
             return fmt["language"]
-    return info.get("language")
+    return None
+
+
+def original_audio_language(info: dict) -> str | None:
+    """Original audio language as yt-dlp knows it (formats marked "original",
+    else the video's language)."""
+    return marked_original_language(info) or info.get("language")
 
 
 def transcript_language(info: dict) -> str | None:
     """The video's original language for the transcript: the watch page's
-    default track, else yt-dlp's original audio, else a single "-orig" track."""
+    default track, else yt-dlp's original audio, else a single "-orig" track.
+    The page's default follows the audio it starts with, which for a viewer
+    in another language can be a dub (8etkFuBLGZ0, 20.11.2026: Polish
+    original, an English auto-dub, the English one's captions as default for
+    yt-dlp's English request); so an audio marked as the original in another
+    language wins."""
     auto = [lang for lang, fmts in (info.get("automatic_captions") or {}).items() if fmts]
     origs = [lang for lang in auto if lang.endswith("-orig")]
-    return ((info.get(CAPTION_KEY) or {}).get("language") or original_audio_language(info)
+    default = (info.get(CAPTION_KEY) or {}).get("language")
+    marked = marked_original_language(info)
+    if marked and base_language(default) != base_language(marked):
+        return marked
+    return (default or original_audio_language(info)
             or (origs[0].removesuffix("-orig") if len(origs) == 1 else None))
 
 
@@ -1068,7 +1086,10 @@ def choose_caption_track(info: dict) -> tuple[str, str, list[dict]] | None:
     default = info.get(CAPTION_KEY) or {}
     language = transcript_language(info)
     if language:
-        if default.get("kind") == "asr":
+        # the page's kind of track only for the language it names (not when
+        # the original wins over a dub's default, transcript_language())
+        if (default.get("kind") == "asr"
+                and base_language(default.get("language")) == base_language(language)):
             order = (find_auto, find_manual)
         else:
             order = (find_manual, find_auto)
