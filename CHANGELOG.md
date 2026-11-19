@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-11-19
+
 ### Added
 
 - The index has its own **player**: a panel on the left, always there, built like the player of a video's page. A thumbnail (or the round button with `!no-thumbnails`) plays its file; one row of eight equal buttons (previous file, to the start, 10 s back, play/pause, 10 s forward, to the end, next file, *Autoplay*), the speeds and the title of the file playing; greyed until the first play. The previous and next file (also `Shift`+`P` / `Shift`+`N`) skip rows without a file and keep playing, or wait at the start when the player was stopped; *Autoplay* plays the next file when one ends. A row out of sight scrolls into view. A file that cannot be played says so on the screen, its thumbnail dims and it is skipped until the page is reloaded. Without JavaScript the index stays a plain list.
@@ -189,7 +191,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.0...v0.9.1
