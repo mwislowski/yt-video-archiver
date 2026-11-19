@@ -1077,3 +1077,75 @@ def test_interrupted_writes_leave_no_cut_files(tmp_path, subtitles, monkeypatch)
                                                         "sub:de"]), page(tmp_path), set())
     assert not list(tmp_path.glob("*.de.auto-generated.srt"))
     assert list(tmp_path.glob("*.de.auto-generated.srt.part"))
+
+
+def test_files_all_there_ask_youtube_nothing(tmp_path, subtitles, monkeypatch, capsys):
+    """A page left as it is, with the video and every track and subtitles asked
+    for next to it: no list of formats, so no pause before the next video
+    either (the user, 20.11.2026: a run that only fills gaps in a playlist)."""
+    subtitles["fresh"] = DUBS
+    playlist = "https://www.youtube.com/playlist?list=PLtest1234567890"
+    entries = [{"_type": "url", "id": f"TESTVIDEO0{n}", "title": f"Episode {n}",
+                "url": f"https://www.youtube.com/watch?v=TESTVIDEO0{n}"} for n in (1, 2)]
+    monkeypatch.setattr(yt2html, "fetch_playlist", lambda source, args: {"title": "Test playlist",
+                                                                  "entries": entries})
+    command = [playlist, "-o", str(tmp_path), "--video", "audio:de,sub:pt,sub:de"]
+    assert yt2html.main(command) == 0
+    fetches, downloads = subtitles["fetches"], len(subtitles["downloads"])
+    subs = len(subtitles["subs"])
+    subtitles["sleeps"].clear()
+    capsys.readouterr()
+    assert yt2html.main(command) == 0
+    out = capsys.readouterr().out
+    assert subtitles["fetches"] == fetches and subtitles["sleeps"] == []
+    assert "fetching the current list of formats" not in out
+    assert out.count("Audio skipped (file exists): ") == 2
+    assert out.count("Subtitles skipped (file exists): ") == 4
+    assert "Videos: 0 downloaded, 2 skipped, 0 failed." in out
+    assert len(subtitles["downloads"]) == downloads and len(subtitles["subs"]) == subs
+    # one file missing: that video asks for the list and takes only that file
+    next(tmp_path.glob("*TESTVIDEO02*.pt-BR.author.srt")).unlink()
+    assert yt2html.main(command) == 0
+    assert subtitles["fetches"] == fetches + 1 and len(subtitles["subs"]) == subs + 1
+    assert len(subtitles["downloads"]) == downloads
+    # a page made again takes the fresh list (it tells which formats the files came from)
+    assert yt2html.main(command + ["--overwrite"]) == 0
+    assert subtitles["fetches"] == fetches + 3
+
+
+def test_files_at_hand_rules(tmp_path):
+    def found(value):
+        at_hand = yt2html.files_at_hand(tmp_path, "TESTVIDEO01", yt2html.video_spec(value))
+        return None if at_hand is None else [(key, path.name) for part in at_hand
+                                             for key, path in part]
+
+    def make(*names):
+        for name in names:
+            (tmp_path / name).write_bytes(b"x")
+
+    assert found("720p") == []                                       # nothing asked
+    make("Title [TESTVIDEO01].mp4", "Title [TESTVIDEO01].f140.m4a")   # not an extra track
+    assert found("audio:de") is None
+    make("Title [TESTVIDEO01].de.descriptive.m4a")
+    assert found("audio:de") is None                    # an audio description only if asked
+    assert found("audio:de.descriptive") == [(("de", "descriptive"),
+                                              "Title [TESTVIDEO01].de.descriptive.m4a")]
+    make("04 Title [TESTVIDEO01] (copy).es-US.dubbed.m4a")           # renamed, regional
+    assert found("audio:es") == [(("es-US", "dubbed"),
+                                  "04 Title [TESTVIDEO01] (copy).es-US.dubbed.m4a")]
+    assert found("audio:es-ES") is None                 # a code with a region: exactly
+    make("Title [TESTVIDEO01].de-DE.dubbed.m4a")        # as resolve_audio(): an exact code
+    assert found("audio:de") is None                    # ("de") hides the regional ones
+    make("Title [TESTVIDEO01].pt-BR.auto-generated.srt")
+    assert found("sub:pt") == [(("pt-BR", "auto-generated"),
+                                "Title [TESTVIDEO01].pt-BR.auto-generated.srt")]
+    assert found("sub:pt.author") is None               # a kind asked: exactly that one
+    make("Title [TESTVIDEO01].pt-BR.author.srt")
+    assert found("sub:pt,sub:pt-BR") == [(("pt-BR", "author"),       # the author's first,
+                                          "Title [TESTVIDEO01].pt-BR.author.srt")]   # once
+    assert found("sub:pt,sub:en") is None               # one of them missing: the list decides
+    make("Title [TESTVIDEO01].en.translated.srt", "Other [TESTVIDEO02].fr.author.srt")
+    assert found("sub:en,audio:de.descriptive") == [
+        (("de", "descriptive"), "Title [TESTVIDEO01].de.descriptive.m4a"),
+        (("en", "translated"), "Title [TESTVIDEO01].en.translated.srt")]
+    assert found("sub:fr") is None                      # another video's file

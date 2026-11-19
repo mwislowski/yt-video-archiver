@@ -5097,6 +5097,32 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                                     [old] if old else [])
         if not spec["audio"] and not spec["subs"]:
             return result, None, False
+        # a page left as it is (page_info None: not made now) with every track
+        # and subtitles asked for already here too: nothing to ask YouTube, so
+        # the next video need not wait either (a page made now takes the fresh
+        # list, which tells which formats the files came from)
+        at_hand = files_at_hand(folder, ident, spec) if page_info is None else None
+        if at_hand is not None:
+            audio_files, sub_files = at_hand
+            for (code, role), path in audio_files:
+                log(f'Audio skipped (file exists): {path}. Add "again" to --video to download '
+                    'it again.')
+            for (code, kind), path in sub_files:
+                log(f'Subtitles skipped (file exists): {path}. Add "again" to --video to '
+                    'download them again.')
+            if audio_files:
+                result["extra_audio"] = [
+                    described({"audio": code, "role": role, "file": path.name,
+                               "size": path.stat().st_size},
+                              previous.get("extra_audio") or [], "audio", "role")
+                    for (code, role), path in audio_files]
+            if sub_files:
+                result["subtitles"] = [
+                    described({"code": code, "kind": kind, "file": path.name,
+                               "size": path.stat().st_size},
+                              previous.get("subtitles") or [], "code", "kind")
+                    for (code, kind), path in sub_files]
+            return result, None, False
     # ffmpeg joins image and sound and fixes m4a; subtitles need none
     if (take_image or spec["audio"]) and not shutil.which("ffmpeg"):
         raise VideoSkipped(f"ffmpeg not found (it joins image and sound). "
@@ -5366,6 +5392,53 @@ def fetch_subtitles(url: str, args: argparse.Namespace) -> bytes:
     with yt_dlp.YoutubeDL(opts) as ydl:
         with ydl.urlopen(url) as response:
             return response.read()
+
+
+def files_at_hand(folder: Path, ident: str | None, spec: dict) -> tuple[list, list] | None:
+    """The files next to the page for every audio: and sub: parameter, found
+    without the list of formats: ([((code, role), path)], [((code, kind),
+    path)]), or None when one is missing (then the list decides). A file
+    counts by its ending after "[id]" ("[id].pl.dubbed.m4a",
+    "[id].pl.auto-generated.srt"): its code as resolve_audio() and
+    resolve_subs() match it (exact, else a bare language finds a regional
+    code), its role or kind as asked; without one, any kind of subtitles and
+    any track but an audio description. So subtitles of a kind the video got
+    later (the author's, after automatic ones) are not looked for: "again"
+    or sub:CODE.KIND asks YouTube (the user, 20.11.2026)."""
+    def endings(extension: str) -> list[tuple[str, str | None, Path]]:
+        found = []
+        for path in files_with_id(folder, ident, (extension,)):
+            if FORMAT_PART_RE.search(path.name):   # a format of an unfinished download
+                continue
+            parts = path.name[path.name.rindex(f"[{ident}]") + len(ident) + 2:].split(".")
+            if len(parts) in (3, 4) and LANGUAGE_CODE.fullmatch(parts[1]):
+                found.append((parts[1], parts[2] if len(parts) == 4 else None, path))
+        return found
+
+    def first(found, code, fits):
+        same = ([f for f in found if f[0] == code]
+                or [f for f in found if base_language(f[0]) == code])
+        same = [f for f in same if fits(f[1])]
+        return same[0] if same else None
+
+    audio, subs = [], []
+    tracks = endings(".m4a")
+    for code, role, _ in spec["audio"]:
+        hit = first(tracks, code, (lambda r: r == role) if role else
+                    (lambda r: r != "descriptive"))
+        if not hit:
+            return None
+        if hit[2] not in [path for _, path in audio]:
+            audio.append(((hit[0], hit[1]), hit[2]))
+    texts = sorted(endings(".srt"), key=lambda f: SUB_KINDS.index(f[1])
+                   if f[1] in SUB_KINDS else len(SUB_KINDS))
+    for code, kind, _ in spec["subs"]:
+        hit = first(texts, code, (lambda k: k == kind) if kind else (lambda k: k in SUB_KINDS))
+        if not hit:
+            return None
+        if hit[2] not in [path for _, path in subs]:
+            subs.append(((hit[0], hit[1]), hit[2]))
+    return audio, subs
 
 
 def sub_name(page: Path, code: str, kind: str) -> Path:
