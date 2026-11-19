@@ -191,7 +191,7 @@ def test_a_skipped_level_is_shown_as_written(tmp_path):
 
 
 def test_no_numbers(tmp_path):
-    result = html(tmp_path, "!no-numbers\n## A\nTESTVIDEO01\n")
+    result = html(tmp_path, "!numbers: no\n## A\nTESTVIDEO01\n")
     assert blocks(result) == ["h2 d0 - A", "row d1 -"]          # the indents stay
     assert 'class="num"' not in result
 
@@ -350,7 +350,7 @@ def test_no_thumbnails(tmp_path):
     page(tmp_path, "TESTVIDEO01", cover=COVER)
     (tmp_path / "x [TESTVIDEO01].mp4").write_bytes(b"")
     page(tmp_path, "TESTVIDEO02")
-    result = html(tmp_path, "!no-thumbnails\nTESTVIDEO01\nTESTVIDEO02\nTESTVIDEO03\n")
+    result = html(tmp_path, "!thumbnails: no\nTESTVIDEO01\nTESTVIDEO02\nTESTVIDEO03\n")
     first, second, third = rows(result)
     assert COVER not in result and 'class="thumb' not in result
     assert (f'<span class="play" data-file="x%20%5BTESTVIDEO01%5D.mp4">{index.PLAY_ICON}</span>'
@@ -363,7 +363,7 @@ def test_no_thumbnails(tmp_path):
 
 def test_no_thumbnails_and_no_duration(tmp_path):
     page(tmp_path, "TESTVIDEO01", duration=None)
-    row, = rows(html(tmp_path, "!no-thumbnails\nTESTVIDEO01\n"))
+    row, = rows(html(tmp_path, "!thumbnails: no\nTESTVIDEO01\n"))
     assert '<div class="line">pl · <span class="miss">' in row
 
 
@@ -500,6 +500,12 @@ def test_all_player_buttons_are_equal():
     """Eight buttons of 50 px, Play too; the row wraps, they never scale."""
     assert ".player.ix-player .ix-controls button{width:50px}" in index.INDEX_CSS
     assert ".player .buttons{display:flex;flex-wrap:wrap;gap:8px}" in yt2html.CSS
+
+
+def test_the_playing_row_lights_only_its_thumbnail_and_title():
+    assert ".index .row.now .name{color:var(--accent-text)}" in index.INDEX_CSS
+    assert ".index .row.now .thumb{box-shadow:0 0 0 2px var(--accent)}" in index.INDEX_CSS
+    assert ".row.now{" not in index.INDEX_CSS          # no background for the whole row
 
 
 def test_no_weight_windows_shows_as_regular():

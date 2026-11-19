@@ -4,7 +4,7 @@ A list file is plain UTF-8 text, close to Markdown: videos (address, id or
 a page name with "[VIDEO_ID]"), playlists, video files of the user's own,
 an optional title ("# Title"), chapters ("##" to "####"), notes ("> text"),
 a title of the user's own for the next video or playlist ("= Title"),
-comments ("// text") and settings ("!no-numbers", "!no-thumbnails"). The
+comments ("// text") and settings ("!numbers: no", "!thumbnails: no"). The
 whole file is checked before anything is downloaded; a line that is not
 understood stops the run with its number.
 
@@ -35,7 +35,9 @@ import yt2html as core
 # The list file
 # --------------------------------------------------------------------------
 
-SETTINGS = ("no-numbers", "no-thumbnails")
+# Settings ("!key: value", at the top of the file): the allowed values, the
+# first one the default.
+SETTINGS = {"numbers": ("yes", "no"), "thumbnails": ("yes", "no")}
 LEVELS = 3   # chapters: "##" (1) to "####" (3)
 HEADING = re.compile(r"(#+)(?:\s+(.*))?")
 YOUTUBE_HOSTS = ("www.youtube.", "youtube.", "m.youtube.", "music.youtube.", "youtu.be/")
@@ -69,7 +71,7 @@ class Chapter:
 class ListFile:
     path: Path
     title: str                     # "" without "#" or with an empty "#"
-    settings: set[str]
+    settings: dict[str, str]       # every key of SETTINGS, with the default if not given
     children: list                 # Item, Chapter and str (a note: one paragraph)
 
     def items(self, children: list | None = None):
@@ -131,7 +133,8 @@ def read_list_file(name: str) -> ListFile:
         raise ListFileError(f"{name}, line {number}: {message}")
 
     title = None                   # (text, line) of the "#" line
-    settings: set[str] = set()
+    settings = {key: values[0] for key, values in SETTINGS.items()}
+    given: set[str] = set()        # the settings written in the file
     root = Chapter(0, "", 0)
     open_chapters = [root]
     header = True                  # before the first chapter, video or playlist
@@ -153,17 +156,22 @@ def read_list_file(name: str) -> ListFile:
                              "file" + (" (two '=' lines in a row)" if line.startswith("=") else ""))
         if not line or line.startswith("//"):
             continue
-        if line.startswith("!"):
-            setting = line[1:].strip().lower()
-            if setting not in SETTINGS:
+        if line.startswith("!"):                  # "!key: value", any case and spacing
+            key, _, value = line[1:].partition(":")
+            key, value = key.strip().lower(), value.strip().lower()
+            if key not in SETTINGS:
                 fail(number, f"unknown setting: {line} (known: "
-                             + ", ".join(f"!{s}" for s in SETTINGS) + ")")
+                             + ", ".join(f"!{k}" for k in SETTINGS) + ")")
+            if value not in SETTINGS[key]:
+                fail(number, f"{line}: !{key} is one of: " + ", ".join(SETTINGS[key])
+                             + f" (e.g. !{key}: {SETTINGS[key][-1]})")
             if not header:
                 fail(number, f"{line}: settings go at the top of the file, before the "
                              "first chapter, video or playlist")
-            if setting in settings:
-                fail(number, f"{line} is given twice")
-            settings.add(setting)
+            if key in given:
+                fail(number, f"!{key} is given twice")
+            given.add(key)
+            settings[key] = value
             continue
         if line.startswith("#"):
             heading = HEADING.fullmatch(line)
@@ -530,10 +538,10 @@ PLAY_ICON = ('<svg viewBox="0 0 10 12" aria-hidden="true"><path d="M1.6 1v10l8-5
 class Builder:
     """Renders the blocks; reads the folder once per video."""
 
-    def __init__(self, output_dir: Path, settings: set[str]):
+    def __init__(self, output_dir: Path, settings: dict[str, str]):
         self.output_dir = output_dir
-        self.numbers = "no-numbers" not in settings
-        self.thumbnails = "no-thumbnails" not in settings
+        self.numbers = settings["numbers"] == "yes"
+        self.thumbnails = settings["thumbnails"] == "yes"
         self.notes: list[tuple[int, str, str]] = []   # (line, note, advice) for the console
         self.old_pages: set[str] = set()
         self.missing: dict[int, list[str]] = {}   # line -> videos not downloaded
@@ -557,7 +565,7 @@ class Builder:
 
     def thumb(self, duration: float | None, cover: str | None = None, label: str = "",
               file: Path | None = None) -> str:
-        """The image (or, with !no-thumbnails, the round play button); with
+        """The image (or, with !thumbnails: no, the round play button); with
         a video file it plays the file in the player (data-file: its address
         relative to the index)."""
         play = f' data-file="{core.esc(urllib.parse.quote(file.name))}"' if file else ""
@@ -778,7 +786,7 @@ INDEX_CSS = """
 .ix-player .ix-playing{font-size:16px;line-height:22px;font-weight:600;overflow-wrap:anywhere}
 .player-open .index [data-file]{cursor:pointer}
 .player-open .index [data-file]:hover{filter:var(--hover)}
-.index .row.now{background:var(--accent-soft)}
+.index .row.now .name{color:var(--accent-text)}
 .index .row.now .thumb{box-shadow:0 0 0 2px var(--accent)}
 .index .row.now .play{background:var(--accent);color:var(--on-accent)}
 .index .row.failed .thumb,.index .row.failed .play{opacity:.45}

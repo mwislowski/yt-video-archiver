@@ -201,7 +201,7 @@ PLeBgIYTbh-CwGJwFnluRTgBkvcM2q6jOO
 A list can also be organised, in a way close to Markdown (a `.md` list looks like its index in a Markdown preview):
 
 ```text
-!no-numbers
+!numbers: no
 # Railways of the world
 > My collection. **Japan** first, then _the rest_; sources: https://example.org
 ## Japan
@@ -226,7 +226,7 @@ PLeBgIYTbh-CwGJwFnluRTgBkvcM2q6jOO
 | `> text` | a note: each such line is one paragraph; `**bold**`, `*italic*` or `_italic_`, `http(s)://` addresses are links, anything else stays as written. Notes after a video belong to it (shown under its title), notes after a heading introduce the chapter, notes after a playlist follow all its videos |
 | `= Title` | a title of your own for the video, playlist or file on the very next line (instead of the title from the page, from YouTube or the file's name) |
 | `// text` | a comment, ignored |
-| `!no-numbers`, `!no-thumbnails` | settings for the whole list, at the top (before the first chapter, video or playlist): no numbers; no images (a small round play button instead, the duration in the line) |
+| `!numbers: no`, `!thumbnails: no` | settings for the whole list, at the top (before the first chapter, video or playlist), each at most once: no numbers; no images (a small round play button instead, the duration in the line). Both are `yes` by default; any case, the space after `:` optional |
 
 Blank lines do not matter. Every other line is an error: the run stops before anything is downloaded and names the line (`series.txt, line 7: not a video, playlist or video file: …`). Note that `#` now starts the title and chapters: comments start with `//`.
 

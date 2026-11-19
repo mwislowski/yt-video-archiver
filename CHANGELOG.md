@@ -4,6 +4,11 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- The settings of a list file are written `!key: value`: `!numbers: no` and `!thumbnails: no` instead of `!no-numbers` and `!no-thumbnails` (both `yes` by default; any case, the space after `:` optional). An unknown setting or value stops the run and names the allowed ones; the old forms are now unknown settings.
+- The row playing in the index is marked by a ring round its thumbnail and its title in the accent colour, no longer by a background over the whole row (which also lit up its notes).
+
 ## [0.10.0] - 2026-11-19
 
 ### Changed

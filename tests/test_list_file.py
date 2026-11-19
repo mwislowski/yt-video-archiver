@@ -31,7 +31,8 @@ def kinds(children) -> list:
 def test_the_simplest_list_has_no_syntax(tmp_path):
     listing = read(tmp_path, "TESTVIDEO01\n\n  https://youtu.be/TESTVIDEO02  \n\t\n")
     assert kinds(listing.children) == [("video", "TESTVIDEO01"), ("video", "TESTVIDEO02")]
-    assert listing.title == "" and listing.settings == set()
+    assert listing.title == ""
+    assert listing.settings == {"numbers": "yes", "thumbnails": "yes"}   # the defaults
     assert [i.line for i in listing.items()] == [1, 3]
 
 
@@ -170,16 +171,23 @@ def test_no_fourth_level(tmp_path):
 # Settings -----------------------------------------------------------------------
 
 def test_settings_in_the_header(tmp_path):
-    listing = read(tmp_path, "!no-numbers\n# Title\n> An introduction.\n// comment\n\n"
-                             "!No-Thumbnails\nTESTVIDEO01\n")
-    assert listing.settings == {"no-numbers", "no-thumbnails"}
+    """"!key: value"; any case, the space after ":" optional."""
+    listing = read(tmp_path, "!numbers:no\n# Title\n> An introduction.\n// comment\n\n"
+                             "! Thumbnails : No\nTESTVIDEO01\n")
+    assert listing.settings == {"numbers": "no", "thumbnails": "no"}
+    listing = read(tmp_path, "!numbers: yes\nTESTVIDEO01\n")       # the default, written out
+    assert listing.settings == {"numbers": "yes", "thumbnails": "yes"}
 
 
 @pytest.mark.parametrize("text, message", [
-    ("!numbers\n", "line 1: unknown setting: !numbers (known: !no-numbers, !no-thumbnails)"),
-    ("!no-numbers\n!no-numbers\n", "line 2: !no-numbers is given twice"),
-    ("TESTVIDEO01\n!no-numbers\n", "line 2: !no-numbers: settings go at the top of the file"),
-    ("## Part\n!no-thumbnails\n", "line 2: !no-thumbnails: settings go at the top"),
+    ("!tumbnails: no\n", "line 1: unknown setting: !tumbnails: no (known: !numbers, !thumbnails)"),
+    ("!no-numbers\n", "line 1: unknown setting: !no-numbers (known: !numbers, !thumbnails)"),
+    ("!numbers: maybe\n", "line 1: !numbers: maybe: !numbers is one of: yes, no "
+                          "(e.g. !numbers: no)"),
+    ("!numbers\n", "line 1: !numbers: !numbers is one of: yes, no"),
+    ("!numbers: no\n!Numbers: yes\n", "line 2: !numbers is given twice"),
+    ("TESTVIDEO01\n!numbers: no\n", "line 2: !numbers: no: settings go at the top of the file"),
+    ("## Part\n!thumbnails: no\n", "line 2: !thumbnails: no: settings go at the top"),
 ])
 def test_setting_errors(tmp_path, text, message):
     assert message in error(tmp_path, text)

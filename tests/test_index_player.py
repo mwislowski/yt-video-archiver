@@ -130,6 +130,19 @@ def test_a_thumbnail_plays_its_file(open_index):
     assert not any(state[k] for k in ("start", "back", "toggle", "forward", "end",
                                       "autoplay", "seek", "1"))
     assert button(page, "toggle").get_attribute("aria-label") == "Pause"
+    # the highlight: the frame round the thumbnail and the title in the accent
+    # colour, never the whole row (its notes would light up too; user, 19.11.2026)
+    looks = page.evaluate("""() => { const row = document.querySelector('.index .row.now');
+        const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent-text');
+        const probe = document.createElement('span'); probe.style.color = accent;
+        document.body.appendChild(probe);
+        const out = {row: getComputedStyle(row).backgroundColor,
+                     title: getComputedStyle(row.querySelector('.name')).color,
+                     accent: getComputedStyle(probe).color,
+                     ring: getComputedStyle(row.querySelector('.thumb')).boxShadow};
+        probe.remove(); return out; }""")
+    assert looks["row"] == "rgba(0, 0, 0, 0)" and looks["title"] == looks["accent"]
+    assert looks["ring"] != "none"
 
 
 def test_the_file_in_the_player_again_does_nothing(open_index):
