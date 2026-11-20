@@ -21,22 +21,6 @@ PLAYING = ("() => { const v = document.querySelector('video');"
            " return !v.paused && v.currentTime > 0; }")
 
 
-@pytest.fixture(scope="module")
-def chromium():
-    sync_api = pytest.importorskip("playwright.sync_api")
-    with sync_api.sync_playwright() as playwright:
-        try:
-            browser = playwright.chromium.launch()
-        except sync_api.Error:
-            try:   # without Playwright's own Chromium: an installed Chrome
-                browser = playwright.chromium.launch(channel="chrome")
-            except sync_api.Error as error:
-                pytest.skip(f"no Chromium for Playwright ({error.message.splitlines()[0]}); "
-                            "run: uv run --group browser playwright install chromium")
-        yield browser
-        browser.close()
-
-
 @pytest.fixture
 def open_index(chromium, tmp_path):
     """open_index(list text, files=("a.webm", ...), broken=(...)) -> the page:

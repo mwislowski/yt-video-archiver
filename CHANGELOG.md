@@ -6,6 +6,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ### Fixed
 
+- The cover in *Explore this course* (and other sections of that kind) is no longer cut to a square: 160 px wide, as tall as its shape (a course's 16:9, a podcast's square).
+
 - The transcript of a video with an automatic dub could be the dub's captions instead of the original's (a Polish video got an English transcript labelled as its original language), because YouTube named the dub's captions the default for yt-dlp's English request. The audio marked as the original now decides. A page that already has the dub's transcript gets the right one when made again with the transcript downloaded again (`--overwrite --transcript`); saved data keep the transcript they hold.
 
 ### Changed

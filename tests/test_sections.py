@@ -1,10 +1,13 @@
 """Description extras (summary, People mentioned, podcast), license, comment
 count, facts, themes and the channel avatar."""
 
+import base64
 import datetime as dt
 import re
 import json
 from pathlib import Path
+
+import pytest
 
 import yt2html
 from conftest import (comments_panel, license_contents, people_item, podcast_item,
@@ -461,3 +464,34 @@ def test_an_unknown_channel_or_author_gets_a_placeholder_without_a_letter(info):
                      r'aria-hidden="true"></span>', html)
     assert re.search(r'<article class="comment" id="comment-c1">\n<span class="avatar" '
                      r'style="--hue:\d+" aria-hidden="true"></span>', html)
+
+
+def svg(width, height):
+    """An image of that size, as a data address."""
+    text = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">'
+            f'<rect width="{width}" height="{height}" fill="#468"/></svg>')
+    return "data:image/svg+xml;base64," + base64.b64encode(text.encode()).decode()
+
+
+@pytest.mark.browser
+def test_explore_covers_keep_their_shape(info, chromium, tmp_path):
+    """A course's 16:9 cover is not cut to a square (the user, 20.11.2026):
+    160 px wide like the info cards' images, as tall as its shape makes it."""
+    items = [{"title": t, "url": None, "byline": "Channel", "count": "16 lessons",
+              "image": image} for t, image in (("Course " + "with a long title " * 8, "https://i.test/wide.jpg"),
+                                               ("Podcast", "https://i.test/square.jpg"),
+                                               ("Not downloaded " * 12, "https://i.test/none.jpg"))]
+    info[yt2html.EXTRAS_KEY] = [{"type": "playlists", "title": "Explore this course",
+                                 "items": items}]
+    html = yt2html.render_page(info, None, {}, DAY, extra_images={
+        "https://i.test/wide.jpg": svg(320, 180), "https://i.test/square.jpg": svg(240, 240)})
+    path = tmp_path / "page.html"
+    path.write_text(html, encoding="utf-8")
+    sizes = []
+    for width in (1280, 360):        # narrow, with a long title: the cover is not squeezed
+        page = chromium.new_page(viewport={"width": width, "height": 800})
+        page.goto(path.as_uri())
+        sizes.append(page.evaluate("""() => [...document.querySelectorAll('.playlist .cover')]
+            .map(c => { const r = c.getBoundingClientRect(); return [r.width, r.height]; })"""))
+        page.close()
+    assert sizes == [[[160, 90], [160, 160], [160, 90]]] * 2

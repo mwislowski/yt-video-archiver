@@ -1731,8 +1731,12 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
   color:var(--muted);font-size:40px;font-weight:500;user-select:none}
 .playlist{display:flex;gap:16px;align-items:flex-start;margin-top:4px}
 .playlist + .playlist{margin-top:12px}
-.playlist .cover{display:flex;width:120px;height:120px;flex:none;object-fit:cover;
+/* the cover as wide as the info cards' images, as tall as its shape makes
+   it: a podcast's square 160x160, a course's 16:9 160x90 (YouTube uses
+   both); none downloaded: 16:9, the most common shape */
+.playlist .cover{display:flex;width:160px;height:auto;flex:none;
   border-radius:8px;background:var(--chip)}
+.playlist .cover.img-placeholder{height:90px}
 .playlist .name{font-size:14px;line-height:20px;font-weight:700;overflow-wrap:anywhere}
 .playlist .name a{color:var(--text)}
 .playlist .meta{color:var(--muted);font-size:12px;line-height:18px}
