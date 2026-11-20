@@ -10,11 +10,23 @@ def ids(comments):
     return [c["id"] for c in comments]
 
 
-def test_top_level_oldest_first_with_pinned_in_its_place():
+def test_top_level_oldest_first_with_the_pinned_one_first():
     roots, _ = yt2html.build_comment_tree(make_comments())
-    # yt-dlp order is pinned, newest ... oldest; the page shows oldest first,
-    # and the pinned comment (1 year old) moves to its estimated place.
-    assert ids(roots) == ["N3", "P", "N2", "N1"]
+    # yt-dlp order is pinned, newest ... oldest; the page shows the pinned
+    # comment first, as YouTube does (the user, 20.11.2026), then oldest first
+    assert ids(roots) == ["P", "N3", "N2", "N1"]
+
+
+def test_a_pinned_comment_youtube_no_longer_sends_keeps_its_place(info):
+    # after --refresh-json: the old pinned one gone, another one pinned now
+    comments = make_comments()
+    comments[0] = {**comments[0], yt2html.MISSING_SINCE_KEY: "2026-11-20"}
+    comments[2] = {**comments[2], "is_pinned": True}               # N2
+    roots, _ = yt2html.build_comment_tree(comments)
+    assert ids(roots) == ["N2", "N3", "P", "N1"]
+    html = yt2html.render_page({**info, "comments": comments}, None, {},
+                               yt2html.dt.date(2026, 11, 20))
+    assert html.count("📌 Pinned by Channel") == 2               # its mark stays
 
 
 def test_equal_estimated_times_keep_youtube_order_reversed():
@@ -45,7 +57,7 @@ def test_orphan_reply_is_shown_at_top_level():
 def test_page_renders_threads_in_order(info):
     html = yt2html.render_page(info, None, {}, yt2html.dt.date(2026, 11, 5))
     order = re.findall(r'id="comment-([^"]+)"', html)
-    assert order == ["N3", "P", "N2", "N2r1", "N2r2", "N2r2a", "N1"]
+    assert order == ["P", "N3", "N2", "N2r1", "N2r2", "N2r2a", "N1"]
     assert "📌 Pinned by Channel" in html
     assert "nested reply &lt;b&gt;&amp;&lt;/b&gt;" in html
 

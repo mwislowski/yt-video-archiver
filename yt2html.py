@@ -1633,7 +1633,8 @@ def chronological(items: list[dict]) -> list[dict]:
 
     YouTube only provides relative times ("2 years ago"), so timestamps are
     coarse. The input order is already correct in most cases; the sort only
-    moves items whose coarse time clearly disagrees (e.g. a pinned comment).
+    moves items whose coarse time clearly disagrees (e.g. a pinned comment,
+    which build_comment_tree() then puts first).
     Missing timestamps inherit the previous item's value.
     """
     keyed = []
@@ -1648,7 +1649,10 @@ def chronological(items: list[dict]) -> list[dict]:
 
 
 def build_comment_tree(comments: list[dict]) -> tuple[list[dict], dict[str, list[dict]]]:
-    """Return (top-level comments oldest first, {parent_id: replies oldest first})."""
+    """Return (top-level comments oldest first, the pinned one first, as on
+    YouTube; {parent_id: replies oldest first}). A pinned comment YouTube no
+    longer sends (MISSING_SINCE_KEY, after --refresh-json) stays in its place
+    in time, its mark a trace of the past (the user, 20.11.2026)."""
     ids = {c.get("id") for c in comments}
     roots, children = [], defaultdict(list)
     for c in comments:
@@ -1659,6 +1663,7 @@ def build_comment_tree(comments: list[dict]) -> tuple[list[dict], dict[str, list
             children[parent].append(c)
     # Top level arrives newest first (comment_sort=new): reverse it.
     roots = chronological(list(reversed(roots)))
+    roots.sort(key=lambda c: not (c.get("is_pinned") and not c.get(MISSING_SINCE_KEY)))
     # Replies arrive in YouTube's thread order, which is oldest first.
     children = {pid: chronological(items) for pid, items in children.items()}
     return roots, children

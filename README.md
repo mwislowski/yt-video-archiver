@@ -17,7 +17,7 @@ A **list file** of videos, playlists and video files of your own gets an **index
 - **People mentioned** (photos, names, descriptions) and **Explore the podcast**, if YouTube shows them.
 - **Transcript** with `--transcript`, already open, split by chapters; as continuous text, with timestamps, or side by side with a translation.
 - **License**, if it is not the standard YouTube one (e.g. Creative Commons).
-- **All comments**, oldest first, every thread fully expanded, with likes, pinned and creator marks.
+- **All comments**, the pinned one first (as on YouTube), then oldest first, every thread fully expanded, with likes, pinned and creator marks.
 - **A player for your downloaded copy of the video**, if it lies next to the page (downloaded with `--video` or separately; see below).
 - **Video formats**, folded near the bottom: the qualities, codecs and approximate sizes YouTube offers for the video, its audio tracks (original, dubbed, auto-dubbed, audio description) and subtitles (see below).
 - **About this copy**, folded at the bottom: how this copy was made and what it lacks (see below).

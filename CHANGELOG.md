@@ -10,6 +10,7 @@ All notable changes to this project. Versions: the second number for new feature
 
 ### Changed
 
+- The pinned comment stands first, as on YouTube, instead of in its place in time (often last); the rest stay oldest first. A pinned comment YouTube no longer sends (after `--refresh-json`) keeps its place in time and its mark. Pages made again (also from saved data, `--load-json`) get the new order.
 - `--video` with `audio:` or `sub:` no longer asks YouTube for the list of formats, nor waits before the next video, when the page is left as it is and every file asked for is already next to it, so running the same command again to fill the gaps of a playlist asks only about what is missing. Subtitles of a kind the video got later are then not looked for (`again` or `sub:CODE.KIND` asks).
 
 ## [0.10.2] - 2026-11-19
