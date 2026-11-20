@@ -204,7 +204,7 @@ A list can also be organised, in a way close to Markdown (a `.md` list looks lik
 !numbers: no
 !layout: cards
 # Railways of the world
-> My collection. **Japan** first, then _the rest_; sources: https://example.org
+> My collection. **Japan** first, then _the rest_; sources: [example.org](https://example.org)
 ## Japan
 Z8lf5oWKfj0
 > The best introduction, start here.
@@ -224,7 +224,7 @@ PLeBgIYTbh-CwGJwFnluRTgBkvcM2q6jOO
 | `Holiday.mp4` | a video file of your own in the output folder (`mp4`, `webm`, `m4v`, `mkv`; the name only, no folder) |
 | `# Title` | the title of the index, at most once; without it, the file's name (`series`), or the playlist's title when the list has exactly one playlist |
 | `## Chapter`, `### …`, `#### …` | chapters on three levels, shown as written (a skipped level or an empty chapter stays) |
-| `> text` | a note: each such line is one paragraph; `**bold**`, `*italic*` or `_italic_`, `http(s)://` addresses are links, anything else stays as written. Notes after a video belong to it (shown with it, where `!layout` puts them), notes after a heading introduce the chapter, notes after a playlist follow all its videos; notes of a chapter stand at its indent, its videos and chapters one step in |
+| `> text` | a note: each such line is one paragraph; `**bold**`, `*italic*` or `_italic_`; a link is `[text](https://address)` (an `http(s)://` address, up to the first `)`; with empty brackets, `[](https://address)`, the address itself shows); anything else stays as written, a bare address too. Notes after a video belong to it (shown with it, where `!layout` puts them), notes after a heading introduce the chapter, notes after a playlist follow all its videos; notes of a chapter stand at its indent, its videos and chapters one step in |
 | `= Title` | a title of your own for the video, playlist or file on the very next line (instead of the title from the page, from YouTube or the file's name) |
 | `// text` | a comment, ignored |
 | `!numbers: no`, `!thumbnails: no` | settings for the whole list, at the top (before the first chapter, video or playlist), each at most once: no numbers (otherwise grey, before each title, numbered per level; the index looks the same without them); no images (a small round play button instead, the duration in the line). Both are `yes` by default; any case, the space after `:` optional |

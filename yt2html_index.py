@@ -514,24 +514,39 @@ ITALIC_RE = re.compile(r"(?<![*\w])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![*\w])"
                        r"|(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 
 
-def links_only(text: str, emphasis: bool = False) -> str:
-    """Escaped text with http(s) addresses as links (punctuation at the end
-    stays outside); with `emphasis`, **bold** and *italic* / _italic_ too.
-    Anything else stays as written, tags included."""
-    def plain(part: str) -> str:
-        part = core.esc(part)
-        if emphasis:
-            part = BOLD_RE.sub(r"<strong>\1</strong>", part)
-            part = ITALIC_RE.sub(lambda m: f"<em>{m.group(1) or m.group(2)}</em>", part)
-        return part
+# A link in a note of a list file, simplified Markdown (the user, 20.11.2026):
+# [text](https://address), an http(s) address up to the first ")"; empty
+# brackets show the address; a bare address is text
+NOTE_LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^\s)]+)\)")
 
+
+def note_html(text: str) -> str:
+    """A paragraph of a note: escaped, [text](https://address) links,
+    **bold** and *italic* / _italic_ (also round a link). Anything else stays
+    as written, tags and bare addresses included."""
+    links = []
+
+    def hold(found: re.Match) -> str:   # a mark the escaping and emphasis leave alone
+        links.append(core.link(found.group(2), found.group(1) or found.group(2)))
+        return f"\0{len(links) - 1}\0"
+
+    part = core.esc(NOTE_LINK_RE.sub(hold, text.replace("\0", "")))
+    part = BOLD_RE.sub(r"<strong>\1</strong>", part)
+    part = ITALIC_RE.sub(lambda m: f"<em>{m.group(1) or m.group(2)}</em>", part)
+    return re.sub(r"\0(\d+)\0", lambda m: links[int(m.group(1))], part)
+
+
+def links_only(text: str) -> str:
+    """Escaped text with http(s) addresses as links (punctuation at the end
+    stays outside): YouTube's own texts, such as a playlist's description.
+    Anything else stays as written, tags included."""
     out, position = [], 0
     for found in URL_RE.finditer(text):
         url, tail = core.trim_url(found.group(0))
-        out.append(plain(text[position:found.start()]))
+        out.append(core.esc(text[position:found.start()]))
         out.append(core.link(url, url))
         position = found.start() + len(url)
-    out.append(plain(text[position:]))
+    out.append(core.esc(text[position:]))
     return "".join(out)
 
 
@@ -560,7 +575,7 @@ class Builder:
         else:
             parts = self.video(row)
         thumb, title, line, missing = parts
-        notes = (f'<div class="note">{"".join(f"<p>{links_only(p, True)}</p>" for p in row.notes)}'
+        notes = (f'<div class="note">{"".join(f"<p>{note_html(p)}</p>" for p in row.notes)}'
                  f'</div>' if row.notes else "")
         # the number goes before the title, beside it: a long title wraps under its
         # own first letter; the layout is the same without the number
@@ -679,7 +694,7 @@ class Builder:
         for block in blocks:
             if isinstance(block, Notes):
                 out.append(f'<div class="note d{level}">'
-                           + "".join(f"<p>{links_only(p, True)}</p>" for p in block.paragraphs)
+                           + "".join(f"<p>{note_html(p)}</p>" for p in block.paragraphs)
                            + "</div>")
             elif isinstance(block, PlaylistNotes):
                 out.append(playlist_notes(block, level))

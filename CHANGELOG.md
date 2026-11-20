@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- Links in the notes of a list file are written in simplified Markdown, `[text](https://address)`, and `[](https://address)` shows the address itself; a bare address is now plain text. A playlist's description from YouTube keeps its addresses as links.
+
 ## [0.10.3] - 2026-11-20
 
 ### Fixed

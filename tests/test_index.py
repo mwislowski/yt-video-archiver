@@ -404,9 +404,28 @@ def test_an_unreadable_playlist_keeps_its_place(tmp_path):
     ("snake_case_name and 2*3*4", "snake_case_name and 2*3*4"),
     ("**not closed and * alone", "**not closed and * alone"),
     ("<b>tags</b> & such", "&lt;b&gt;tags&lt;/b&gt; &amp; such"),
-    ("See https://example.org/a_b_c.", 'See <a href="https://example.org/a_b_c" target="_blank" '
-                                       'rel="noopener noreferrer">https://example.org/a_b_c</a>.'),
     ("www.example.org #tag @channel 1:23", "www.example.org #tag @channel 1:23"),
+    # links: simplified Markdown (the user, 20.11.2026); a bare address is text
+    ("See https://example.org/a_b_c.", "See https://example.org/a_b_c."),
+    ("See [the docs](https://example.org/a_b_c).",
+     'See <a href="https://example.org/a_b_c" target="_blank" rel="noopener noreferrer">'
+     'the docs</a>.'),
+    ("[](http://example.org/x?a=1&b=2)",       # empty brackets: the address shows
+     '<a href="http://example.org/x?a=1&amp;b=2" target="_blank" rel="noopener noreferrer">'
+     'http://example.org/x?a=1&amp;b=2</a>'),
+    ("**[bold](https://e.org)** [a_b *c*](https://e.org/d_e_f)",   # emphasis round, not in
+     '<strong><a href="https://e.org" target="_blank" rel="noopener noreferrer">bold</a></strong>'
+     ' <a href="https://e.org/d_e_f" target="_blank" rel="noopener noreferrer">a_b *c*</a>'),
+    ("[<b>](https://e.org) [x](https://e.org/a(b)c)",   # text escaped; ")" ends the address
+     '<a href="https://e.org" target="_blank" rel="noopener noreferrer">&lt;b&gt;</a> '
+     '<a href="https://e.org/a(b" target="_blank" rel="noopener noreferrer">x</a>c)'),
+    ("[x] (https://e.org) [x](e.org) [x](ftp://e.org) [x](https://e.org [x](https://e .org)",
+     "[x] (https://e.org) [x](e.org) [x](ftp://e.org) [x](https://e.org [x](https://e .org)"),
+    ("two [a](https://a.org) and [b](https://b.org)",
+     'two <a href="https://a.org" target="_blank" rel="noopener noreferrer">a</a> and '
+     '<a href="https://b.org" target="_blank" rel="noopener noreferrer">b</a>'),
+    ("[a](https://a.org) \x000\x00",          # text like the inner mark is no link
+     '<a href="https://a.org" target="_blank" rel="noopener noreferrer">a</a> 0'),
 ])
 def test_note_formatting(tmp_path, note, shown):
     assert f'<div class="note d0"><p>{shown}</p></div>' in html(tmp_path, f"> {note}\n")
@@ -483,6 +502,13 @@ def test_the_description_of_a_playlist_is_not_formatted(tmp_path):
     data = {PLAYLIST_ID: playlist("TESTVIDEO01", description="*not italic* and **not bold**")}
     assert '<p class="about">*not italic* and **not bold**</p>' in html(tmp_path, f"{PLAYLIST_ID}\n",
                                                                       data)
+    # YouTube's text, not the user's: bare addresses stay links, [text](address) is not ours
+    data = {PLAYLIST_ID: playlist("TESTVIDEO01",
+                                  description="<b> & https://e.org [x](https://f.org)")}
+    assert ('<p class="about">&lt;b&gt; &amp; <a href="https://e.org" target="_blank" '
+            'rel="noopener noreferrer">https://e.org</a> [x](<a href="https://f.org" '
+            'target="_blank" rel="noopener noreferrer">https://f.org</a>)</p>') in html(
+        tmp_path, f"{PLAYLIST_ID}\n", data)
 
 
 def test_a_playlist_without_a_description_or_count(tmp_path):
