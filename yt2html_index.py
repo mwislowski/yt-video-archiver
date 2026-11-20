@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html
 import json
 import re
 import struct
@@ -1114,3 +1115,78 @@ def write_index(args: argparse.Namespace, playlists: dict[str, dict | None]) -> 
     for note in builder.console_notes(advice=not args.index):
         core.log(f"  {note}")
     return True
+
+
+# --------------------------------------------------------------------------
+# --reverse INDEX LIST: an unofficial option (the user's, 20.11.2026; not in
+# --help, the README, DEVELOPMENT or the CHANGELOG; described in his notes):
+# the videos of an index page, one line each, written to a list file.
+# --------------------------------------------------------------------------
+
+ROW_LINE = re.compile(r'<div class="line">(.*?)</div>')
+
+
+def reverse_lines(page_html: str) -> list[str]:
+    """The videos of an index page in its order, one per row: the YouTube id
+    (from the row's YouTube link, else from its page's name, for a video no
+    longer on YouTube), else the user's own file by its name; a playlist that
+    could not be read stays a playlist id. Each row is one line of the page
+    (Builder), its own line of details first, before any notes."""
+    found = []
+    for row in page_html.split("\n"):
+        if not row.startswith('<div class="row '):
+            continue
+        line = ROW_LINE.search(row).group(1)
+        youtube = re.search(r'href="https://www\.youtube\.com/watch\?v=([^"&]+)"', line)
+        page = re.search(r'<a class="name" href="([^"]+)"', row)
+        file = re.search(r' data-file="([^"]+)"', row)
+        lost = re.search(r'<span class="miss" title="([^"]*)">file not found', line)
+        playlist = re.search(r'href="https://www\.youtube\.com/playlist\?list=([^"&]+)"', line)
+        if youtube:
+            found.append(youtube.group(1))
+        elif page:
+            found.append(core.id_in_name(urllib.parse.unquote(page.group(1)), playlists=False))
+        elif file:
+            found.append(urllib.parse.unquote(file.group(1)))   # quoted: no "&amp;" in it
+        elif lost:
+            found.append(html.unescape(lost.group(1)))
+        elif playlist:
+            found.append(playlist.group(1))
+    return found
+
+
+def reverse_index(page_name: str, list_name: str) -> tuple[list[str], Path, Path | None]:
+    """--reverse: the lines and where they go: the list's name, or, when that
+    file exists, the name with "-1" before its extension (then the taken
+    name is returned too); both taken is an error, as are a page that is not
+    an index made by yt2html and an index without videos."""
+    if not page_name.lower().endswith(".html"):
+        raise ListFileError(f"--reverse takes the index page itself, e.g. index.html "
+                            f"(not {page_name})")
+    path = Path(page_name)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ListFileError(f"cannot read index page '{page_name}': "
+                            f"{getattr(error, 'strerror', None) or error}") from None
+    if '<main class="page index' not in text:
+        raise ListFileError(f"'{page_name}' is not an index page made by yt2html")
+    lines = reverse_lines(text)
+    if not lines:
+        raise ListFileError(f"no videos in '{page_name}'; nothing was written")
+    target = Path(list_name)
+    if not target.exists():
+        return lines, target, None
+    other = target.with_name(f"{target.stem}-1{target.suffix}")
+    if other.exists():
+        raise ListFileError(f"'{target}' and '{other}' exist; give another name")
+    return lines, other, target
+
+
+def write_reverse(lines: list[str], target: Path, taken: Path | None) -> None:
+    # as every file the program writes: bytes, the same line ends on every system
+    # (as text, Windows would turn each "\n" into "\r\n")
+    core.write_atomically(target, "".join(f"{line}\n" for line in lines))
+    if taken:
+        core.log(f"Note: {taken} exists, so the list went to {target}.")
+    core.log(f"Saved list: {target} ({len(lines)} video{'' if len(lines) == 1 else 's'})")

@@ -2,6 +2,7 @@
 
 import json
 import re
+import shutil
 import struct
 from pathlib import Path
 
@@ -853,3 +854,86 @@ def test_index_works_with_the_json_options(tmp_path, youtube):
     listing = write_list(tmp_path, "TESTVIDEO01\n")
     for option in ("--write-json", "--update-json", "--refresh-json", "--load-json"):
         assert yt2html.parse_args(["--index", listing, option]).list.children
+
+
+# --reverse (unofficial, the user's 20.11.2026: not in --help or the README) ----------
+
+REVERSE_LIST = (f"# Series\n> Intro, see https://www.youtube.com/watch?v=OTHERVIDE01\n"
+                f"## Part\n= My title\nTESTVIDEO01\n"
+                f"> A note naming https://www.youtube.com/watch?v=OTHERVIDE02\n"
+                f"{PLAYLIST_ID}\n### Sub\nMój klip & co.webm\n"
+                f"> see https://www.youtube.com/watch?v=OTHERVIDE03\n"
+                f"Missing & lost.mkv\nTESTVIDEO04\n"
+                f"TESTVIDEO05\nTESTVIDEO01\nPLtest0987654321\n")
+REVERSED = ["TESTVIDEO01", "TESTVIDEO02", "TESTVIDEO03", "Mój klip & co.webm",
+            "Missing & lost.mkv", "TESTVIDEO04", "TESTVIDEO05", "TESTVIDEO01", "PLtest0987654321"]
+
+
+def reverse_folder(tmp_path):
+    page(tmp_path, "TESTVIDEO01")
+    page(tmp_path, "TESTVIDEO02")
+    page(tmp_path, "TESTVIDEO04", unavailable="removed")   # no YouTube link: its page's name
+    (tmp_path / "Clip [TESTVIDEO03].mp4").write_bytes(b"x")  # a file, no page
+    shutil.copy(Path(__file__).parent / "data" / "short.webm", tmp_path / "Mój klip & co.webm")
+    return {PLAYLIST_ID: playlist("TESTVIDEO02", "TESTVIDEO03"), "PLtest0987654321": None}
+
+
+@pytest.mark.parametrize("settings", ["", "!numbers: no\n!layout: cards\n",
+                                      "!thumbnails: no\n!layout: compact\n"])
+def test_reverse_lines_are_the_videos_in_order(tmp_path, settings):
+    playlists = reverse_folder(tmp_path)
+    result = html(tmp_path, settings + REVERSE_LIST, playlists)
+    assert index.reverse_lines(result) == REVERSED      # links in notes are not videos
+    assert "no longer on YouTube" in result and "file not found" in result
+    assert "playlist could not be read" in result
+
+
+def test_reverse_writes_a_list_file_that_reads_back(tmp_path, capsys):
+    playlists = reverse_folder(tmp_path)
+    (tmp_path / "series.html").write_text(html(tmp_path, REVERSE_LIST, playlists), "utf-8")
+    target = tmp_path / "back.txt"
+    assert yt2html.main(["--reverse", str(tmp_path / "series.html"), str(target)]) == 0
+    assert target.read_bytes() == ("\n".join(REVERSED) + "\n").encode("utf-8")   # no BOM
+    assert f"Saved list: {target} (9 videos)" in capsys.readouterr().out
+    listing = index.read_list_file(str(target))
+    assert [row.ref for row in listing.children] == [
+        "TESTVIDEO01", "TESTVIDEO02", "TESTVIDEO03", "Mój klip & co.webm", "Missing & lost.mkv",
+        "TESTVIDEO04", "TESTVIDEO05", "TESTVIDEO01", "PLtest0987654321"]
+    # the name taken: "-1" before the extension; both taken: an error, nothing written
+    assert yt2html.main(["--reverse", str(tmp_path / "series.html"), str(target)]) == 0
+    other = tmp_path / "back-1.txt"
+    assert other.read_text("utf-8") == target.read_text("utf-8")
+    assert f"Note: {target} exists, so the list went to {other}." in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        yt2html.main(["--reverse", str(tmp_path / "series.html"), str(target)])
+    assert f"'{target}' and '{other}' exist; give another name" in capsys.readouterr().err
+    assert sorted(p.name for p in tmp_path.glob("back*")) == ["back-1.txt", "back.txt"]
+
+
+@pytest.mark.parametrize("make, args, message", [
+    (None, ["series.htm", "x.txt"], "--reverse takes the index page itself, e.g. index.html"),
+    (None, ["none.html", "x.txt"], "cannot read index page"),
+    ("<html><main class=\"page\">a video page</main>", ["page.html", "x.txt"],
+     "'{page}' is not an index page made by yt2html"),
+    ('<main class="page index layout-plain">\n<h1 class="title">T</h1>\n</main>',
+     ["page.html", "x.txt"], "no videos in"),
+])
+def test_reverse_errors(tmp_path, capsys, make, args, message):
+    if make:
+        (tmp_path / args[0]).write_text(make, "utf-8")
+    with pytest.raises(SystemExit):
+        yt2html.main(["--reverse", *(str(tmp_path / a) for a in args)])
+    assert message.format(page=tmp_path / args[0]) in capsys.readouterr().err   # "\\" on Windows
+    assert not (tmp_path / "x.txt").exists()
+
+
+@pytest.mark.parametrize("extra, named", [(["URL"], "a URL"), (["-o", "out"], "-o"),
+                                          (["--theme", "dark"], "--theme"),
+                                          (["--max-comments", "0"], "--max-comments")])
+def test_reverse_takes_nothing_else_and_is_not_in_help(capsys, extra, named):
+    with pytest.raises(SystemExit):
+        yt2html.main(["--reverse", "a.html", "b.txt", *extra])
+    assert f"so it cannot be used with {named}" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        yt2html.main(["--help"])
+    assert "--reverse" not in capsys.readouterr().out

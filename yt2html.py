@@ -5807,6 +5807,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "and again (download again the files "
                              "that are already there). "
                              "Write the address first: yt2html URL --video 720p30")
+    # unofficial (the user's, 20.11.2026): the videos of an index page written
+    # to a list file; not in --help (yt2html_index.reverse_index())
+    parser.add_argument("--reverse", nargs=2, metavar=("INDEX", "LIST"), help=argparse.SUPPRESS)
     parser.add_argument("--video-formats", action="store_true",
                         help="only list, for each video, the qualities a download can take "
                              "(with the parameter that chooses each, the codec and the size) "
@@ -5831,6 +5834,20 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "looked up in -o), without YouTube; existing pages are always "
                              "replaced; a missing file fails that video, nothing is downloaded")
     args = parser.parse_args(argv)
+    if args.reverse is not None:
+        used = [action.option_strings[0] if action.option_strings else "a URL"
+                for action in parser._actions
+                if action.dest not in ("help", "version", "reverse")
+                and getattr(args, action.dest) not in (action.default, [])]
+        if used:
+            parser.error(f"--reverse only writes the list of an index page, so it cannot be "
+                         f"used with {', '.join(used)}")
+        import yt2html_index   # (here: that module imports this one)
+        try:
+            args.reversed = yt2html_index.reverse_index(*args.reverse)
+        except yt2html_index.ListFileError as error:
+            parser.error(str(error))
+        return args
     if args.video_formats:
         used = [name for name, on in (
             ("--overwrite", args.overwrite), ("--index", args.index is not None),
@@ -5893,6 +5910,10 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if args.reverse is not None:
+        import yt2html_index
+        yt2html_index.write_reverse(*args.reversed)
+        return 0
     counts = {"saved": 0, "skipped": 0, "failed": 0}
     without_data = []   # --load-json --index: videos of the list without saved data
     videos = {"downloaded": 0, "skipped": 0, "failed": 0}
