@@ -4,10 +4,11 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-11-20
+
 ### Fixed
 
 - The cover in *Explore this course* (and other sections of that kind) is no longer cut to a square: 160 px wide, as tall as its shape (a course's 16:9, a podcast's square).
-
 - The transcript of a video with an automatic dub could be the dub's captions instead of the original's (a Polish video got an English transcript labelled as its original language), because YouTube named the dub's captions the default for yt-dlp's English request. The audio marked as the original now decides. A page that already has the dub's transcript gets the right one when made again with the transcript downloaded again (`--overwrite --transcript`); saved data keep the transcript they hold.
 
 ### Changed
@@ -225,7 +226,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.9.4...v0.10.0
