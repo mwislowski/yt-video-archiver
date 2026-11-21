@@ -25,7 +25,7 @@ uv tool install --editable PATH\TO\yt-video-archiver
 An editable install changes the everyday command with every edit, experiments included. For a stable everyday command, install a release instead and work on the code with `uv run yt2html` in the project folder:
 
 ```powershell
-uv tool install git+https://github.com/mwislowski/yt-video-archiver@v0.10.5         # a tested release
+uv tool install git+https://github.com/mwislowski/yt-video-archiver@v0.10.6         # a tested release
 uv tool install --force git+https://github.com/mwislowski/yt-video-archiver@v1.0.0  # later: switch to a newer one
 ```
 

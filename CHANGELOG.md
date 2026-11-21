@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-11-21
+
 ### Added
 
 - In the index of a list file, a video's publication date opens the line under its title (`03.05.2024 · pl · MP4 · YouTube`), when its page is downloaded. A new setting, `!dates: no`, leaves out the dates, in the rows and in the playlists' notes.
@@ -247,7 +249,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.5...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.6...HEAD
+[0.10.6]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.2...v0.10.3
