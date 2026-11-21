@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-11-21
+
 ### Fixed
 
 - A video nobody has liked yet shows `0` likes instead of `—` (yt-dlp gives no count then; the program takes it from the video page). `—` stays for a like count the author hid (and when the video page could not be read). Pages get it when made again with a download (`--overwrite`) or after `--refresh-json`.
@@ -237,7 +239,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.4...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.5...HEAD
+[0.10.5]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.1...v0.10.2
