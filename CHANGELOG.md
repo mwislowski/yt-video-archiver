@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- The first line of a playlist's notes in the index reads *Playlist* and its title, the number of videos, *Channel* and its name (was: title · Playlist · channel · count). After the number, in grey, the span of the videos' publication dates, oldest to newest, as the downloaded pages tell them: `(03.05.2024–12.11.2026)`, one date for one day, `(known range …)` or `(known …)` when some videos are not downloaded. Make existing indexes again with `--index-only`.
+
 ## [0.10.5] - 2026-11-21
 
 ### Fixed

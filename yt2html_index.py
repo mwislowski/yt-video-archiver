@@ -564,6 +564,7 @@ class Builder:
         self.notes: list[tuple[int, str, str]] = []   # (line, note, advice) for the console
         self.old_pages: set[str] = set()
         self.missing: dict[int, list[str]] = {}   # line -> videos not downloaded
+        self.pages: dict[str, tuple[Path | None, dict]] = {}   # video id -> (page, metadata)
 
     # -- one row ---------------------------------------------------------------
 
@@ -611,10 +612,27 @@ class Builder:
             return ""
         return core.format_duration(duration)
 
+    def page_of(self, video_id: str) -> tuple[Path | None, dict]:
+        """The video's page in the folder and its metadata, read once."""
+        if video_id not in self.pages:
+            page = core.existing_page(self.output_dir, video_id)
+            self.pages[video_id] = (page, core.read_page_metadata(page) if page else {})
+        return self.pages[video_id]
+
+    def published(self, video_ids: list[str]) -> list[dt.date | None]:
+        """The publication day of each video (its page's yt2html:published),
+        None for a video without a page or without the tag."""
+        days = []
+        for video_id in video_ids:
+            try:
+                days.append(dt.date.fromisoformat(self.page_of(video_id)[1]["yt2html:published"]))
+            except (KeyError, ValueError):
+                days.append(None)
+        return days
+
     def video(self, row: Row) -> tuple[str, str, list[str], bool]:
         video_id = row.ref
-        page = core.existing_page(self.output_dir, video_id)
-        meta = core.read_page_metadata(page) if page else {}
+        page, meta = self.page_of(video_id)
         if page and "yt2html:metadata" not in meta:
             self.old_pages.add(page.name)
         file = core.first_of(core.video_files(self.output_dir, video_id), self.output_dir,
@@ -697,7 +715,8 @@ class Builder:
                            + "".join(f"<p>{note_html(p)}</p>" for p in block.paragraphs)
                            + "</div>")
             elif isinstance(block, PlaylistNotes):
-                out.append(playlist_notes(block, level))
+                out.append(playlist_notes(block, level,
+                                          self.published(block.data.get("entries") or [])))
             elif isinstance(block, Heading):
                 number += 1
                 tag = f"h{block.level + 1}"
@@ -737,17 +756,39 @@ def format_label(path: Path) -> str:
     return path.suffix.lstrip(".").upper()
 
 
-def playlist_notes(block: PlaylistNotes, depth: int) -> str:
-    """The notes the program adds to a playlist, as on its page on YouTube:
-    title · Playlist · channel · count; then its description, as written."""
+def published_range(days: list[dt.date | None]) -> str:
+    """The span of the videos' publication days, oldest to newest (not first to
+    last: a playlist need not be in order): "03.05.2024–12.11.2026", one day
+    alone; "known range …" / "known …" when some days are not known (videos not
+    downloaded, pages without the tag); "" when none is."""
+    known = sorted(day for day in days if day)
+    if not known:
+        return ""
+    oldest, newest = (day.strftime(core.DATE_FORMAT) for day in (known[0], known[-1]))
+    span = oldest if oldest == newest else f"{oldest}–{newest}"
+    if len(known) < len(days):
+        return f"known {'range ' if oldest != newest else ''}{span}"
+    return span
+
+
+def playlist_notes(block: PlaylistNotes, depth: int, days: list[dt.date | None]) -> str:
+    """The notes the program adds to a playlist: "Playlist" and its title,
+    its count as YouTube gives it with the span of its videos' publication
+    days in grey (the program puts it together from the pages in the folder;
+    the user, 21.11.2026), "Channel" and its name; then its description, as
+    written."""
     data = block.data
     url = f"{core.YOUTUBE}/playlist?list={block.playlist_id}"
     channel = data.get("channel")
-    first = [core.link(url, data.get("title") or block.playlist_id), "Playlist",
-             (core.link(data["channel_url"], channel) if channel and data.get("channel_url")
-              else core.esc(channel or "")),
-             core.esc(f'{core.format_int(data["count"])} video{"" if data["count"] == 1 else "s"}')
-             if data.get("count") is not None else ""]
+    span = published_range(days)
+    span = f'<span class="days">({core.esc(span)})</span>' if span else ""
+    count = (core.esc(f'{core.format_int(data["count"])} video{"" if data["count"] == 1 else "s"}')
+             if data.get("count") is not None else "")
+    first = ["Playlist " + core.link(url, data.get("title") or block.playlist_id)
+             + (f" {span}" if span and not count else ""),
+             f"{count} {span}".rstrip() if count else "",
+             ("Channel " + (core.link(data["channel_url"], channel) if data.get("channel_url")
+                            else core.esc(channel))) if channel else ""]
     description = data.get("description") or ""
     return (f'<div class="note d{depth} playlist-note"><p>{" · ".join(p for p in first if p)}</p>'
             + (f'<p class="about">{links_only(description)}</p>' if description else "")
@@ -794,6 +835,7 @@ INDEX_CSS = """
 .index .note p{margin:0 0 6px}
 .index .note p:last-child{margin-bottom:0}
 .index .note .about{white-space:pre-wrap}
+.index .playlist-note .days{color:var(--muted)}
 /* The layouts (!layout). plain: the note of a row under its thumbnail (or
    round button), from its left edge to the right; compact: beside it, under
    the title and the line; both without frames, the notes of chapters too.

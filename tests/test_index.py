@@ -485,12 +485,12 @@ def test_the_notes_of_a_playlist(tmp_path):
     result = html(tmp_path, f"# Course\n> Mine before.\n{COURSE['id']}\n> Mine after.\n", data)
     notes = re.findall(r'<div class="note[^"]*">.*?</div>', body(result), re.S)
     assert notes[0] == '<div class="note d0"><p>Mine before.</p></div>'
-    assert notes[1].startswith(
-        '<div class="note d0 playlist-note"><p><a href="https://www.youtube.com/playlist?list='
-        f'{COURSE["id"]}" target="_blank" rel="noopener noreferrer">Python podstawy podstaw</a>'
-        ' · Playlist · <a href="https://www.youtube.com/channel/UCw3L8lysSdQpNaeGLBqnr5A" '
-        'target="_blank" '
-        'rel="noopener noreferrer">getitjob</a> · 16 videos</p><p class="about">💡 Masz')
+    assert notes[1].startswith(          # the user's order, 21.11.2026: what, how many, whose
+        '<div class="note d0 playlist-note"><p>Playlist <a href="https://www.youtube.com/'
+        f'playlist?list={COURSE["id"]}" target="_blank" rel="noopener noreferrer">Python '
+        'podstawy podstaw</a> · 16 videos · Channel <a href="https://www.youtube.com/channel/'
+        'UCw3L8lysSdQpNaeGLBqnr5A" target="_blank" rel="noopener noreferrer">getitjob</a></p>'
+        '<p class="about">💡 Masz')
     # the description as written: lines kept, addresses clickable
     assert ('Twoim kodzie.\n\n🔗 Przetestuj AIdama: <a href="https://aidam.pl" target="_blank" '
             'rel="noopener noreferrer">https://aidam.pl</a></p></div>') in notes[1]
@@ -514,12 +514,75 @@ def test_the_description_of_a_playlist_is_not_formatted(tmp_path):
 def test_a_playlist_without_a_description_or_count(tmp_path):
     result = html(tmp_path, f"{PLAYLIST_ID}\n",
                   {PLAYLIST_ID: playlist("TESTVIDEO01", count=None, channel=None)})
-    assert ('<div class="note d0 playlist-note"><p><a href="' + PLAYLIST
-            + '" target="_blank" rel="noopener noreferrer">Test playlist</a> · Playlist</p></div>'
+    assert ('<div class="note d0 playlist-note"><p>Playlist <a href="' + PLAYLIST
+            + '" target="_blank" rel="noopener noreferrer">Test playlist</a></p></div>'
             ) in result
     one = html(tmp_path, f"{PLAYLIST_ID}\n", {PLAYLIST_ID: playlist("TESTVIDEO01",
                                                                     channel_url=None)})
-    assert "· Playlist · Channel · 1 video</p>" in one
+    assert "</a> · 1 video · Channel Channel</p>" in one        # a name without its link
+
+
+def playlist_line(tmp_path, days: dict, count="same", entries=None) -> str:
+    """The first line of a playlist's notes over pages published on `days`
+    ({video id: "YYYY-MM-DD" or None for a page without the tag}); videos in
+    `entries` but not in `days` have no page."""
+    ids = entries or list(days)
+    for video_id, day in days.items():
+        page(tmp_path, video_id, published=day)
+    data = playlist(*ids) | ({} if count == "same" else {"count": count})
+    found = html(tmp_path, f"{PLAYLIST_ID}\n", {PLAYLIST_ID: data})
+    return re.search(r'playlist-note"><p>(.*?)</p>', found).group(1)
+
+
+def days_of(line: str) -> str | None:
+    found = re.search(r'<span class="days">\((.*?)\)</span>', line)
+    return found and found.group(1)
+
+
+@pytest.mark.parametrize("days, entries, expected", [
+    # oldest to newest, not first to last: the playlist is not in order
+    ({"TESTVIDEO01": "2025-02-01", "TESTVIDEO02": "2024-05-03", "TESTVIDEO03": "2026-11-12"},
+     None, "03.05.2024–12.11.2026"),
+    ({"TESTVIDEO01": "2025-02-01"}, None, "01.02.2025"),                     # one video
+    ({"TESTVIDEO01": "2025-02-01", "TESTVIDEO02": "2025-02-01"}, None, "01.02.2025"),  # one day
+    # some days unknown: not downloaded, or a page without the tag
+    ({"TESTVIDEO01": "2025-02-01", "TESTVIDEO02": "2024-05-03"},
+     ["TESTVIDEO01", "TESTVIDEO02", "TESTVIDEO03"], "known range 03.05.2024–01.02.2025"),
+    ({"TESTVIDEO01": "2025-02-01", "TESTVIDEO02": None}, None, "known 01.02.2025"),
+    ({"TESTVIDEO01": "2025-02-01", "TESTVIDEO02": "13.11.2026"}, None, "known 01.02.2025"),
+    ({"TESTVIDEO01": "2025-02-01"}, ["TESTVIDEO01", "TESTVIDEO02"], "known 01.02.2025"),
+    ({"TESTVIDEO01": None}, ["TESTVIDEO01", "TESTVIDEO02"], None),          # none known
+    # a video listed twice changes nothing
+    ({"TESTVIDEO01": "2025-02-01"}, ["TESTVIDEO01", "TESTVIDEO01"], "01.02.2025"),
+])
+def test_the_span_of_a_playlists_publication_days(tmp_path, days, entries, expected):
+    assert days_of(playlist_line(tmp_path, days, entries=entries)) == expected
+
+
+def test_each_page_is_read_once_for_the_span_and_the_row(tmp_path, monkeypatch):
+    read = []
+    original = yt2html.read_page_metadata
+    monkeypatch.setattr(yt2html, "read_page_metadata",
+                        lambda path: read.append(path.name) or original(path))
+    line = playlist_line(tmp_path, {"TESTVIDEO01": "2024-05-03", "TESTVIDEO02": "2026-11-12"})
+    assert days_of(line) == "03.05.2024–12.11.2026"
+    assert sorted(read) == ["Page TESTVIDEO01 [TESTVIDEO01].html",
+                            "Page TESTVIDEO02 [TESTVIDEO02].html"]
+
+
+def test_the_span_follows_the_count_in_grey(tmp_path):
+    line = playlist_line(tmp_path, {"TESTVIDEO01": "2024-05-03", "TESTVIDEO02": "2026-11-12"})
+    assert line.endswith('</a> · 2 videos <span class="days">(03.05.2024–12.11.2026)</span>'
+                         ' · Channel <a href="https://www.youtube.com/@Channel" target="_blank" '
+                         'rel="noopener noreferrer">Channel</a>')
+    assert ".index .playlist-note .days{color:var(--muted)}" in index.INDEX_CSS
+    # "known" against the videos YouTube listed, not its count (hidden videos count there)
+    hidden = playlist_line(tmp_path, {"TESTVIDEO01": "2024-05-03"}, count=5)
+    assert "· 5 videos <span class=\"days\">(03.05.2024)</span>" in hidden
+    # no count: the span after the title
+    alone = playlist_line(tmp_path, {"TESTVIDEO01": "2024-05-03"}, count=None)
+    assert alone.startswith('Playlist <a href="') and alone.split(" · ")[0].endswith(
+        '</a> <span class="days">(03.05.2024)</span>')
 
 
 # The page -----------------------------------------------------------------------
