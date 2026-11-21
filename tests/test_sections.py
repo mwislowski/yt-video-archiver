@@ -11,7 +11,7 @@ import pytest
 
 import yt2html
 from conftest import (comments_panel, license_contents, people_item, podcast_item,
-                      structured_description, summary_item)
+                      structured_description, summary_item, watch_page)
 
 DAY = dt.date(2026, 11, 5)
 
@@ -141,6 +141,50 @@ def test_the_channel_link_is_by_id_not_by_handle(info):
     assert name(yt2html.render_page(info, None, {}, DAY)).startswith(
         '<a href="https://www.youtube.com/@Channel" target="_blank" '
         'rel="noopener noreferrer">Channel</a>')
+
+
+# The like count as YouTube's player data give it (seen 20.11.2026): "0" on a
+# video nobody liked yet (vNCutsX1MgQ, allowRatings true); no field at all
+# when the author hides the count (KmcZktECUYQ, allowRatings false).
+def player_likes(count=None, allow_ratings=True):
+    renderer = {"title": {"simpleText": "Title"}, "viewCount": "4"}
+    if count is not None:
+        renderer["likeCount"] = count
+    return {"videoDetails": {"videoId": "x", "allowRatings": allow_ratings},
+            "microformat": {"playerMicroformatRenderer": renderer}}
+
+
+@pytest.mark.parametrize("count, expected", [
+    ("0", 0), ("1234", 1234), (None, None), ("1.2K", None), ("", None), (5, None)])
+def test_like_count_from_the_player_data(count, expected):
+    assert yt2html.like_count(player_likes(count)) == expected
+    assert yt2html.like_count({}) is None
+    assert yt2html.like_count({"microformat": {}}) is None
+
+
+def likes_tile(info):
+    return re.search(r'<div class="value">([^<]*)</div><div class="label">Likes',
+                     yt2html.render_page(info, None, {}, DAY)).group(1)
+
+
+def test_zero_likes_shown_as_zero_and_hidden_ones_as_a_dash(info, fake_ydl):
+    # yt-dlp gives None in both cases; the watch page tells them apart
+    info["like_count"] = None
+    yt2html.add_watch_page_data(fake_ydl(webpage=watch_page({}, player_likes("0"))), info)
+    assert info["like_count"] == 0 and likes_tile(info) == "0"
+    info["like_count"] = None
+    yt2html.add_watch_page_data(
+        fake_ydl(webpage=watch_page({}, player_likes(None, allow_ratings=False))), info)
+    assert info["like_count"] is None and likes_tile(info) == "—"
+
+
+def test_like_count_of_yt_dlp_wins_and_is_kept_without_the_page(info, fake_ydl):
+    info["like_count"] = 7
+    yt2html.add_watch_page_data(fake_ydl(webpage=watch_page({}, player_likes("9"))), info)
+    assert info["like_count"] == 7
+    info["like_count"] = None
+    yt2html.add_watch_page_data(fake_ydl(webpage=watch_page({})), info)   # no player data
+    assert info["like_count"] is None
 
 
 def test_facts_and_snapshot(info):
@@ -427,7 +471,6 @@ def test_channel_avatar_prefers_the_watch_page_and_falls_back_to_a_comment(info)
 
 
 def test_watch_page_gives_the_channel_avatar(info, fake_ydl):
-    from conftest import watch_page
     yt2html.add_watch_page_data(fake_ydl(webpage=watch_page(
         owner_data("https://yt3.ggpht.test/o=s48"), {})), info)
     assert info[yt2html.CHANNEL_AVATAR_KEY] == "https://yt3.ggpht.test/o=s48"

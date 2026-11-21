@@ -279,6 +279,15 @@ def test_merge_comments():
     assert stats["gone"] == 0 and not any(c.get(yt2html.MISSING_SINCE_KEY) == DAY for c in merged)
 
 
+def test_refresh_takes_zero_likes(info):
+    # zero likes come from the watch page (like_count()); 0 is a count, not "none"
+    info["like_count"] = 5
+    yt2html.refresh_saved(info, {"like_count": 0})
+    assert info["like_count"] == 0
+    yt2html.refresh_saved(info, {"like_count": None})   # hidden now, or not read: kept
+    assert info["like_count"] == 0
+
+
 def test_refresh_saved_counts_and_comments(info):
     fresh = {"view_count": 99, "like_count": None, yt2html.YT_COUNT_KEY: "12",
              "channel_follower_count": 5, "comments": None}

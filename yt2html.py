@@ -344,6 +344,8 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
         refusal = playability_refusal(player_response)
         info[CAPTION_KEY] = default_caption_track(player_response)
         info[TRANSLATIONS_KEY] = translation_languages(player_response)
+        if info.get("like_count") is None:
+            info["like_count"] = like_count(player_response)
         info[WATCH_PAGE_KEY] = "read"
     except Exception:
         info[CAPTION_KEY] = info[TRANSLATIONS_KEY] = None
@@ -515,6 +517,21 @@ def translation_languages(player_response: dict) -> dict[str, str]:
     tracklist = (player_response.get("captions") or {}).get("playerCaptionsTracklistRenderer") or {}
     return {lang["languageCode"]: text_of(lang.get("languageName")) or lang["languageCode"]
             for lang in tracklist.get("translationLanguages") or [] if lang.get("languageCode")}
+
+
+def like_count(player_response: dict) -> int | None:
+    """The like count in the player data, for when yt-dlp has none.
+
+    yt-dlp reads the count only from the like button's spoken label ("like
+    this video along with 1,234 other people"), which has no number when
+    nobody liked the video yet, so it gives None for zero likes. The player
+    data's microformat has `likeCount` "0" then; when the author hides the
+    count the field is not there (and `allowRatings` is false), so None
+    stays and the Likes tile shows "—" as before.
+    """
+    renderer = (player_response.get("microformat") or {}).get("playerMicroformatRenderer") or {}
+    count = renderer.get("likeCount")
+    return int(count) if isinstance(count, str) and count.isdecimal() else None
 
 
 def default_caption_track(player_response: dict) -> dict | None:
