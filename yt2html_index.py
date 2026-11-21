@@ -766,8 +766,7 @@ INDEX_CSS = """
 .index .d1{margin-left:var(--indent)}
 .index .d2{margin-left:calc(2 * var(--indent))}
 .index .d3{margin-left:calc(3 * var(--indent))}
-.index .row{display:flex;gap:12px;align-items:flex-start;padding:6px 8px;margin-right:-8px;
-  border-radius:8px}
+.index .row{display:flex;gap:12px;align-items:flex-start;padding:6px 0}
 .index .row .title{display:flex;gap:.5em}
 .index .row .num{font-weight:600}
 .index .thumb{position:relative;display:flex;flex:none;width:128px;height:var(--thumb-h);

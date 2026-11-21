@@ -7,6 +7,7 @@ All notable changes to this project. Versions: the second number for new feature
 ### Fixed
 
 - A video nobody has liked yet shows `0` likes instead of `—` (yt-dlp gives no count then; the program takes it from the video page). `—` stays for a like count the author hid (and when the video page could not be read). Pages get it when made again with a download (`--overwrite`) or after `--refresh-json`.
+- In the index of a list file, videos right under the title start at the title's edge, and a chapter's videos are indented by exactly the indent (20 px); a leftover 8 px padding pushed every row to the right. Make existing indexes again with `--index-only`.
 
 ## [0.10.4] - 2026-11-20
 

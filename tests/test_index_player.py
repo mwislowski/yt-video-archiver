@@ -486,18 +486,50 @@ def test_without_thumbnails_the_round_button_takes_their_place(open_index):
     assert cards["infoMin"] == "28px"                               # the button's height
 
 
+def title_height(row):
+    return row["titleLines"][-1]["bottom"] - row["titleLines"][0]["top"]
+
+
 @pytest.mark.parametrize("layout", ["plain", "compact", "cards"])
 @pytest.mark.parametrize("thumbnails", ["yes", "no"])
-def test_the_number_changes_nothing_but_the_title(open_index, layout, thumbnails):
+@pytest.mark.parametrize("width", [1280, 1240, 1200])
+def test_the_number_changes_nothing_but_the_title(open_index, layout, thumbnails, width):
     """The user, 19.11.2026: with numbers every layout looks as without them;
-    the number stands before the title, which wraps under its own first letter."""
+    the number stands before the title, which wraps under its own first letter.
+    The number takes room on each line of the title, so a long title may need
+    one line more: then the row is taller by that line and by nothing else
+    (21.11.2026: Segoe UI on Windows hit such a width at 1280 px and 1240 px;
+    with the cloud's Roboto 1240 px gives the extra line in a frame taller than
+    the thumbnail, 1200 px in plain one shorter, so every case is tested here)."""
     head = f"!layout: {layout}\n!thumbnails: {thumbnails}\n"
-    found = open_index(head + LAYOUT_LIST, files=["a.webm", "b.webm"]).evaluate(MEASURE)
-    plain = open_index(head + "!numbers: no\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
+    found = open_index(head + LAYOUT_LIST, files=["a.webm", "b.webm"], width=width
                        ).evaluate(MEASURE)
+    plain = open_index(head + "!numbers: no\n" + LAYOUT_LIST, files=["a.webm", "b.webm"],
+                       width=width).evaluate(MEASURE)
+    shift = 0                                    # what the title lines above added
     for row, without in zip(found["rows"], plain["rows"]):
-        for part in ("thumb", "info", "note"):
-            assert row[part] == without[part]                    # the same place and size
+        extra = title_height(row) - title_height(without)        # 0 or the title's lines more
+        moved = lambda box: {**box, "y": box["y"] - shift, "top": box["top"] - shift,
+                             "bottom": box["bottom"] - shift}
+        assert moved(row["thumb"]) == without["thumb"]           # the same place and size
+        info = moved(row["info"])
+        assert info == {**without["info"], "height": without["info"]["height"] + extra,
+                        "bottom": without["info"]["bottom"] + extra}
+        if layout == "plain":                                    # the note under the row
+            moved_note = moved(row["note"]) if row["note"] else None
+            if moved_note:
+                assert moved_note["top"] - without["note"]["top"] == max(
+                    info["bottom"], row["thumb"]["bottom"] - shift) - max(
+                    without["info"]["bottom"], without["thumb"]["bottom"])
+        elif row["note"]:                                        # the note under the title
+            assert moved(row["note"])["top"] - without["note"]["top"] == extra
+        if row["note"]:
+            assert (row["note"]["left"], row["note"]["width"], row["note"]["height"]) == (
+                without["note"]["left"], without["note"]["width"], without["note"]["height"])
+        # The rows below move by what the taller of thumbnail and frame gained: all of
+        # the extra line, or less when the frame was shorter than the thumbnail
+        shift += (max(row["info"]["height"], row["thumb"]["height"])
+                  - max(without["info"]["height"], without["thumb"]["height"]))
         assert row["numText"]["left"] == row["info"]["left"] + row["infoPad"]
         assert row["numText"]["top"] == row["title"]["top"]      # on the title's first line
         assert row["title"]["left"] - row["numText"]["right"] == 7      # .5em: about two spaces
@@ -518,10 +550,37 @@ def test_a_chapter_number_hangs_out_and_its_note_stays_at_its_indent(open_index)
     assert text[0]["left"] - heading["num"]["right"] == 8.5         # .5em of 17 px
     assert len(text) > 1 and {r["left"] for r in text} == {text[0]["left"]}
     assert found["chapterNote"]["left"] == heading["box"]["left"]    # not indented
-    assert found["rows"][0]["thumb"]["left"] - heading["box"]["left"] == 20 + 8   # indent, padding
+    assert found["rows"][0]["thumb"]["left"] - heading["box"]["left"] == 20   # the indent only
     without = open_index("!numbers: no\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
                          ).evaluate(MEASURE)["heading"]["text"]
     assert without[0]["left"] == heading["box"]["left"]
+
+
+EDGES = """() => {
+    const box = sel => document.querySelector(sel).getBoundingClientRect().toJSON();
+    const rows = [...document.querySelectorAll('.index .row')].map(row => ({
+        thumb: row.querySelector('.thumb, .play').getBoundingClientRect().toJSON(),
+        info: row.querySelector('.info').getBoundingClientRect().toJSON()}));
+    return {title: box('.index h1.title'), intro: box('.index>.note'),
+            chapter: box('.index .chapter'), rows}; }"""
+
+
+@pytest.mark.parametrize("layout", ["plain", "compact", "cards"])
+@pytest.mark.parametrize("thumbnails", ["yes", "no"])
+@pytest.mark.parametrize("width, indent", [(1280, 20), (500, 12)])
+def test_rows_line_up_with_the_title_and_indent_exactly(open_index, layout, thumbnails,
+                                                        width, indent):
+    """The user, 21.11.2026: videos right under the title start where the title
+    and its note start (the rows' old 8 px padding pushed them right), and a
+    chapter's videos are indented by the indent alone."""
+    found = open_index(f"!layout: {layout}\n!thumbnails: {thumbnails}\n# Series\n> Intro.\n"
+                       "a.webm\n## Part\nb.webm\n", files=["a.webm", "b.webm"],
+                       width=width).evaluate(EDGES)
+    top, part = found["rows"]
+    assert top["thumb"]["left"] == found["title"]["left"] == found["intro"]["left"]
+    assert top["info"]["right"] == found["intro"]["right"]          # to the same right edge
+    assert part["thumb"]["left"] - found["chapter"]["left"] == indent
+    assert part["info"]["right"] == found["intro"]["right"]
 
 
 def test_plain_without_numbers_keeps_the_note_under_the_thumbnail(open_index):
