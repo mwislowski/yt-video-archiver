@@ -33,7 +33,7 @@ def test_the_simplest_list_has_no_syntax(tmp_path):
     assert kinds(listing.children) == [("video", "TESTVIDEO01"), ("video", "TESTVIDEO02")]
     assert listing.title == ""
     assert listing.settings == {"numbers": "yes", "thumbnails": "yes",
-                                "layout": "plain"}                     # the defaults
+                                "layout": "plain", "dates": "yes"}     # the defaults
     assert [i.line for i in listing.items()] == [1, 3]
 
 
@@ -174,17 +174,20 @@ def test_no_fourth_level(tmp_path):
 def test_settings_in_the_header(tmp_path):
     """"!key: value"; any case, the space after ":" optional."""
     listing = read(tmp_path, "!numbers:no\n# Title\n> An introduction.\n// comment\n\n"
-                             "! Thumbnails : No\n!LAYOUT: Cards\nTESTVIDEO01\n")
-    assert listing.settings == {"numbers": "no", "thumbnails": "no", "layout": "cards"}
+                             "! Thumbnails : No\n!LAYOUT: Cards\n!Dates: NO\nTESTVIDEO01\n")
+    assert listing.settings == {"numbers": "no", "thumbnails": "no", "layout": "cards",
+                                "dates": "no"}
     listing = read(tmp_path, "!numbers: yes\n!layout: compact\nTESTVIDEO01\n")
-    assert listing.settings == {"numbers": "yes", "thumbnails": "yes", "layout": "compact"}
+    assert listing.settings == {"numbers": "yes", "thumbnails": "yes", "layout": "compact",
+                                "dates": "yes"}
 
 
 @pytest.mark.parametrize("text, message", [
     ("!tumbnails: no\n", "line 1: unknown setting: !tumbnails: no "
-                         "(known: !numbers, !thumbnails, !layout)"),
+                         "(known: !numbers, !thumbnails, !layout, !dates)"),
     ("!no-numbers\n", "line 1: unknown setting: !no-numbers (known: !numbers, !thumbnails, "
-                      "!layout)"),
+                      "!layout, !dates)"),
+    ("!dates: maybe\n", "line 1: !dates: maybe: !dates is one of: yes, no (e.g. !dates: no)"),
     ("!layout: boxes\n", "line 1: !layout: boxes: !layout is one of: plain, compact, cards "
                          "(e.g. !layout: cards)"),
     ("!numbers: maybe\n", "line 1: !numbers: maybe: !numbers is one of: yes, no "

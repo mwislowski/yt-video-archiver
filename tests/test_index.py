@@ -559,6 +559,43 @@ def test_the_span_of_a_playlists_publication_days(tmp_path, days, entries, expec
     assert days_of(playlist_line(tmp_path, days, entries=entries)) == expected
 
 
+def line_of(row_html: str) -> str:
+    return re.search(r'<div class="line">(.*?)</div>', row_html).group(1)
+
+
+def test_a_rows_line_starts_with_its_publication_day(tmp_path):
+    """The user, 21.11.2026: the day first in the line, so the rest stays
+    together; a row whose page does not tell it simply has none."""
+    page(tmp_path, "TESTVIDEO01", published="2024-05-03")
+    page(tmp_path, "TESTVIDEO02")                                    # no tag
+    page(tmp_path, "TESTVIDEO03", published="03.05.2024")            # not readable
+    video = tmp_path / "Page TESTVIDEO01 [TESTVIDEO01].webm"
+    video.write_bytes(b"")
+    (tmp_path / "own.webm").write_bytes(b"")
+    found = rows(html(tmp_path, "TESTVIDEO01\nTESTVIDEO02\nTESTVIDEO03\nTESTVIDEO04\nown.webm\n"))
+    assert line_of(found[0]).startswith("03.05.2024 · pl · <span title=")   # with its file
+    without = rows(html(tmp_path, "!thumbnails: no\nTESTVIDEO01\n"))[0]
+    assert line_of(without).startswith("03.05.2024 · 21:48 · pl · <span title=")  # duration
+    assert line_of(found[1]).startswith("pl · ")
+    assert line_of(found[2]).startswith("pl · ")
+    assert "not downloaded" in line_of(found[3]) and "2024" not in found[3]
+    assert not re.search(r"\d\d\.\d\d\.\d{4}", line_of(found[4]))  # own file: no page
+    # only the page downloaded: the day too
+    video.unlink()
+    alone = rows(html(tmp_path, "!thumbnails: no\nTESTVIDEO01\n"))[0]
+    assert line_of(alone).startswith("03.05.2024 · 21:48 · pl · <span class=\"miss\">only")
+
+
+def test_no_dates(tmp_path):
+    """!dates: no: neither the rows' days nor a playlist's span."""
+    page(tmp_path, "TESTVIDEO01", published="2024-05-03")
+    data = {PLAYLIST_ID: playlist("TESTVIDEO01")}
+    found = html(tmp_path, f"!dates: no\n{PLAYLIST_ID}\n", data)
+    assert "03.05.2024" not in found and 'class="days"' not in found
+    assert line_of(rows(found)[0]).startswith("pl · ")
+    assert "03.05.2024" in html(tmp_path, f"!dates: yes\n{PLAYLIST_ID}\n", data)
+
+
 def test_each_page_is_read_once_for_the_span_and_the_row(tmp_path, monkeypatch):
     read = []
     original = yt2html.read_page_metadata

@@ -40,7 +40,7 @@ import yt2html as core
 # Settings ("!key: value", at the top of the file): the allowed values, the
 # first one the default.
 SETTINGS = {"numbers": ("yes", "no"), "thumbnails": ("yes", "no"),
-            "layout": ("plain", "compact", "cards")}
+            "layout": ("plain", "compact", "cards"), "dates": ("yes", "no")}
 LEVELS = 3   # chapters: "##" (1) to "####" (3)
 HEADING = re.compile(r"(#+)(?:\s+(.*))?")
 YOUTUBE_HOSTS = ("www.youtube.", "youtube.", "m.youtube.", "music.youtube.", "youtu.be/")
@@ -561,6 +561,7 @@ class Builder:
         self.numbers = settings["numbers"] == "yes"
         self.thumbnails = settings["thumbnails"] == "yes"
         self.layout = settings["layout"]   # plain: the note under the thumbnail; else beside it
+        self.dates = settings["dates"] == "yes"   # publication days in rows and playlists
         self.notes: list[tuple[int, str, str]] = []   # (line, note, advice) for the console
         self.old_pages: set[str] = set()
         self.missing: dict[int, list[str]] = {}   # line -> videos not downloaded
@@ -621,14 +622,15 @@ class Builder:
 
     def published(self, video_ids: list[str]) -> list[dt.date | None]:
         """The publication day of each video (its page's yt2html:published),
-        None for a video without a page or without the tag."""
-        days = []
-        for video_id in video_ids:
-            try:
-                days.append(dt.date.fromisoformat(self.page_of(video_id)[1]["yt2html:published"]))
-            except (KeyError, ValueError):
-                days.append(None)
-        return days
+        None for a video without a page or without the tag; with !dates: no,
+        no days at all."""
+        return [day_of(self.page_of(video_id)[1]) for video_id in video_ids] if self.dates else []
+
+    def day_in_line(self, meta: dict) -> str:
+        """The publication day first in a row's line (the user, 21.11.2026);
+        nothing when the page does not tell it or with !dates: no."""
+        day = day_of(meta) if self.dates else None
+        return day.strftime(core.DATE_FORMAT) if day else ""
 
     def video(self, row: Row) -> tuple[str, str, list[str], bool]:
         video_id = row.ref
@@ -659,11 +661,11 @@ class Builder:
             if file:
                 kind = format_label(file)
                 return (self.thumb(duration, meta.get("yt2html:cover"), kind, file),
-                        name, [self.time_in_line(duration), language,
+                        name, [self.day_in_line(meta), self.time_in_line(duration), language,
                                f'<span title="{core.esc(file.name)}">{kind}</span>', youtube],
                         False)
             return (self.thumb(duration, meta.get("yt2html:cover")), name,
-                    [self.time_in_line(duration), language,
+                    [self.day_in_line(meta), self.time_in_line(duration), language,
                      '<span class="miss">only the page downloaded</span>', youtube], True)
         name = f'<span class="name">{shown}</span>'
         if file:
@@ -743,6 +745,14 @@ class Builder:
         lines += [f"Made by an older version, without the data the index needs (make it "
                   f"again): {name}" for name in sorted(self.old_pages)]
         return lines
+
+
+def day_of(meta: dict) -> dt.date | None:
+    """A page's publication day (yt2html:published), None without a readable one."""
+    try:
+        return dt.date.fromisoformat(meta["yt2html:published"])
+    except (KeyError, ValueError):
+        return None
 
 
 def name_without_id(name: str | None, video_id: str) -> str | None:
