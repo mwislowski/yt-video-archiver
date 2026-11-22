@@ -426,9 +426,25 @@ def test_an_unreadable_playlist_keeps_its_place(tmp_path):
      '<a href="https://b.org" target="_blank" rel="noopener noreferrer">b</a>'),
     ("[a](https://a.org) \x000\x00",          # text like the inner mark is no link
      '<a href="https://a.org" target="_blank" rel="noopener noreferrer">a</a> 0'),
+    # ((grey)): the colour of what the program adds (the user, 22.11.2026)
+    ("Three parts ((the last one from 2024))",
+     'Three parts <span class="aside">the last one from 2024</span>'),
+    ("((**note:** see [this](https://e.org))) and **bold ((grey))**",   # with the others
+     '<span class="aside"><strong>note:</strong> see <a href="https://e.org" target="_blank" '
+     'rel="noopener noreferrer">this</a></span> and <strong>bold <span class="aside">grey'
+     '</span></strong>'),
+    ("((one)) and ((two))", '<span class="aside">one</span> and <span class="aside">two</span>'),
+    ("(( spaced )) and ((end ))", "(( spaced )) and ((end ))"),   # as written
+    ("(()), f(x) and ((not closed", "(()), f(x) and ((not closed"),
 ])
 def test_note_formatting(tmp_path, note, shown):
     assert f'<div class="note d0"><p>{shown}</p></div>' in html(tmp_path, f"> {note}\n")
+
+
+def test_grey_in_notes_of_rows_and_in_the_style(tmp_path):
+    row, = rows(html(tmp_path, "TESTVIDEO01\n> Of the video ((aside))\n"))
+    assert '<p>Of the video <span class="aside">aside</span></p>' in row
+    assert ".index .note .aside{color:var(--muted)}" in index.INDEX_CSS
 
 
 def test_notes_in_a_row_are_paragraphs_of_one_note(tmp_path):

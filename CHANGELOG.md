@@ -7,6 +7,7 @@ All notable changes to this project. Versions: the second number for new feature
 ### Added
 
 - In a list file, details of your own for the video or file below, on `=` lines like its title: `= !date: 03.08.2019` and `= !lang: pl`, also together (`= !date: 2019 !lang: pl`). They replace the publication date and language from the page and give your own files, and videos without a page, a date and a language in the index. Dates: `DD.MM.YYYY`, `DD.MM.YY`, `MM.YYYY` or `YYYY`.
+- In the notes of a list file, `((text))` shows the text in grey, the grey the index uses for what the program adds; it goes with bold, italic and links.
 
 ### Fixed
 

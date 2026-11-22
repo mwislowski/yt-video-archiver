@@ -586,6 +586,8 @@ def file_duration(path: Path) -> float | None:
 
 URL_RE = re.compile(r"\bhttps?://[^\s<>\"]+")
 BOLD_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+# ((text)): grey, the colour of what the program adds (the user, 22.11.2026)
+ASIDE_RE = re.compile(r"\(\((?=\S)(.+?)(?<=\S)\)\)")
 ITALIC_RE = re.compile(r"(?<![*\w])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![*\w])"
                        r"|(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 
@@ -598,8 +600,8 @@ NOTE_LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^\s)]+)\)")
 
 def note_html(text: str) -> str:
     """A paragraph of a note: escaped, [text](https://address) links,
-    **bold** and *italic* / _italic_ (also round a link). Anything else stays
-    as written, tags and bare addresses included."""
+    **bold**, *italic* / _italic_ and ((grey)) (also round a link). Anything
+    else stays as written, tags and bare addresses included."""
     links = []
 
     def hold(found: re.Match) -> str:   # a mark the escaping and emphasis leave alone
@@ -607,6 +609,7 @@ def note_html(text: str) -> str:
         return f"\0{len(links) - 1}\0"
 
     part = core.esc(NOTE_LINK_RE.sub(hold, text.replace("\0", "")))
+    part = ASIDE_RE.sub(r'<span class="aside">\1</span>', part)
     part = BOLD_RE.sub(r"<strong>\1</strong>", part)
     part = ITALIC_RE.sub(lambda m: f"<em>{m.group(1) or m.group(2)}</em>", part)
     return re.sub(r"\0(\d+)\0", lambda m: links[int(m.group(1))], part)
@@ -929,6 +932,7 @@ INDEX_CSS = """
 .index .note p:last-child{margin-bottom:0}
 .index .note .about{white-space:pre-wrap}
 .index .playlist-note .days{color:var(--muted)}
+.index .note .aside{color:var(--muted)}
 /* The layouts (!layout). plain: the note of a row under its thumbnail (or
    round button), from its left edge to the right; compact: beside it, under
    the title and the line; both without frames, the notes of chapters too.
