@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-11-22
+
 ### Added
 
 - In a list file, details of your own for the video or file below, on `=` lines like its title: `= !date: 03.08.2019` and `= !lang: pl`, also together (`= !date: 2019 !lang: pl`). They replace the publication date and language from the page and give your own files, and videos without a page, a date and a language in the index. Dates: `DD.MM.YYYY`, `DD.MM.YY`, `MM.YYYY` or `YYYY`.
@@ -262,7 +264,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.6...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.7...HEAD
+[0.10.7]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.6...v0.10.7
 [0.10.6]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.3...v0.10.4
