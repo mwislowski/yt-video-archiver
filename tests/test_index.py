@@ -513,9 +513,11 @@ def test_the_notes_of_a_playlist(tmp_path):
         'podstawy podstaw</a> · 16 videos · Channel <a href="https://www.youtube.com/channel/'
         'UCw3L8lysSdQpNaeGLBqnr5A" target="_blank" rel="noopener noreferrer">getitjob</a></p>'
         '<p class="about">💡 Masz')
-    # the description as written: lines kept, addresses clickable
-    assert ('Twoim kodzie.\n\n🔗 Przetestuj AIdama: <a href="https://aidam.pl" target="_blank" '
-            'rel="noopener noreferrer">https://aidam.pl</a></p></div>') in notes[1]
+    # the description: each line a paragraph, blank lines left out (the user, 22.11.2026);
+    # addresses clickable
+    assert ('Twoim kodzie.</p><p class="about">🔗 Przetestuj AIdama: <a href="https://aidam.pl" '
+            'target="_blank" rel="noopener noreferrer">https://aidam.pl</a></p></div>') in notes[1]
+    assert notes[1].count('<p class="about">') == 3
     assert notes[2] == '<div class="note d0"><p>Mine after.</p></div>'   # after its videos
     assert body(result).index("Mine after.") > body(result).index('class="row')
 
@@ -531,6 +533,18 @@ def test_the_description_of_a_playlist_is_not_formatted(tmp_path):
             'rel="noopener noreferrer">https://e.org</a> [x](<a href="https://f.org" '
             'target="_blank" rel="noopener noreferrer">https://f.org</a>)</p>') in html(
         tmp_path, f"{PLAYLIST_ID}\n", data)
+
+
+def test_the_description_of_a_playlist_without_blank_lines(tmp_path):
+    # lines trimmed, empty ones and those of spaces left out, line ends of any kind
+    data = {PLAYLIST_ID: playlist("TESTVIDEO01", description="  First  line \n\n \t \r\n"
+                                                             "Second\r\n\n\nThird   x  \rFourth\n")}
+    result = html(tmp_path, f"{PLAYLIST_ID}\n", data)
+    assert ('<p class="about">First  line</p><p class="about">Second</p>'
+            '<p class="about">Third   x</p><p class="about">Fourth</p></div>') in result
+    assert "pre-wrap" not in index.INDEX_CSS               # no longer needed
+    data = {PLAYLIST_ID: playlist("TESTVIDEO01", description=" \n\n ")}   # nothing left
+    assert 'class="about"' not in html(tmp_path, f"{PLAYLIST_ID}\n", data)
 
 
 def test_a_playlist_without_a_description_or_count(tmp_path):

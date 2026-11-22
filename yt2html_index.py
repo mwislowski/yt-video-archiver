@@ -872,8 +872,9 @@ def playlist_notes(block: PlaylistNotes, depth: int, days: list[dt.date | None])
     """The notes the program adds to a playlist: "Playlist" and its title,
     its count as YouTube gives it with the span of its videos' publication
     days in grey (the program puts it together from the pages in the folder;
-    the user, 21.11.2026), "Channel" and its name; then its description, as
-    written."""
+    the user, 21.11.2026), "Channel" and its name; then its description, each
+    line a paragraph as in the user's notes, trimmed, blank lines left out
+    (the user, 22.11.2026: the notes' paragraphs are the spacing)."""
     data = block.data
     url = f"{core.YOUTUBE}/playlist?list={block.playlist_id}"
     channel = data.get("channel")
@@ -886,9 +887,9 @@ def playlist_notes(block: PlaylistNotes, depth: int, days: list[dt.date | None])
              f"{count} {span}".rstrip() if count else "",
              ("Channel " + (core.link(data["channel_url"], channel) if data.get("channel_url")
                             else core.esc(channel))) if channel else ""]
-    description = data.get("description") or ""
+    paragraphs = [line.strip() for line in (data.get("description") or "").splitlines()]
     return (f'<div class="note d{depth} playlist-note"><p>{" · ".join(p for p in first if p)}</p>'
-            + (f'<p class="about">{links_only(description)}</p>' if description else "")
+            + "".join(f'<p class="about">{links_only(line)}</p>' for line in paragraphs if line)
             + "</div>")
 
 
@@ -931,7 +932,6 @@ INDEX_CSS = """
 .index .row .note{margin-bottom:0}
 .index .note p{margin:0 0 6px}
 .index .note p:last-child{margin-bottom:0}
-.index .note .about{white-space:pre-wrap}
 .index .playlist-note .days{color:var(--muted)}
 .index .note .aside{color:var(--muted)}
 /* The layouts (!layout). plain: the note of a row under its thumbnail (or

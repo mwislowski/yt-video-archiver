@@ -9,6 +9,10 @@ All notable changes to this project. Versions: the second number for new feature
 - In a list file, details of your own for the video or file below, on `=` lines like its title: `= !date: 03.08.2019` and `= !lang: pl`, also together (`= !date: 2019 !lang: pl`). They replace the publication date and language from the page and give your own files, and videos without a page, a date and a language in the index. Dates: `DD.MM.YYYY`, `DD.MM.YY`, `MM.YYYY` or `YYYY`.
 - In the notes of a list file, `((text))` shows the text in grey, the grey the index uses for what the program adds; it goes with bold, italic and links.
 
+### Changed
+
+- In the index of a list file, a playlist's description from YouTube shows each of its lines as a paragraph, as the notes do, without its blank lines and the spaces at the ends of lines (it was one block with the blank lines kept). Make existing indexes again with `--index-only`.
+
 ### Fixed
 
 - On Windows, with the output sent to a file or a pipe (`> log.txt`, `| Tee-Object`), a title with a character the system's code page lacks (often `｜` or `：`, which yt-dlp puts in file names for `|` and `:`) stopped the video after saving its page (`'charmap' codec can't encode …`), so `--video` was not reached. Such characters now show as `?` in the output; the files keep their names.
