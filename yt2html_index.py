@@ -586,8 +586,9 @@ def file_duration(path: Path) -> float | None:
 
 URL_RE = re.compile(r"\bhttps?://[^\s<>\"]+")
 BOLD_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
-# ((text)): grey, the colour of what the program adds (the user, 22.11.2026)
-ASIDE_RE = re.compile(r"\(\((?=\S)(.+?)(?<=\S)\)\)")
+# ((text)): grey, the colour of what the program adds (the user, 22.11.2026);
+# brackets inside only in pairs, so (((dates))) greys "(dates)" with its brackets
+ASIDE_RE = re.compile(r"\(\((?=\S)((?:[^()]|\([^()]*\))+?)(?<=\S)\)\)")
 ITALIC_RE = re.compile(r"(?<![*\w])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![*\w])"
                        r"|(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 

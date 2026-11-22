@@ -434,6 +434,12 @@ def test_an_unreadable_playlist_keeps_its_place(tmp_path):
      'rel="noopener noreferrer">this</a></span> and <strong>bold <span class="aside">grey'
      '</span></strong>'),
     ("((one)) and ((two))", '<span class="aside">one</span> and <span class="aside">two</span>'),
+    # brackets inside in pairs (the user's playlist line, 22.11.2026)
+    ("16 videos (((06.07.2020–16.06.2025))) · Channel",
+     '16 videos <span class="aside">(06.07.2020–16.06.2025)</span> · Channel'),
+    ("((see (x) and (y)))", '<span class="aside">see (x) and (y)</span>'),
+    ("((a) b)) and ((c (d))", "((a) b)) and ((c (d))"),         # a bracket without its pair
+    ("((x (y (z)) w))", "((x (y (z)) w))"),                     # pairs inside pairs: as written
     ("(( spaced )) and ((end ))", "(( spaced )) and ((end ))"),   # as written
     ("(()), f(x) and ((not closed", "(()), f(x) and ((not closed"),
 ])
