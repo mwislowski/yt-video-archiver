@@ -157,7 +157,9 @@ def test_the_newest_n(tmp_path, capsys, channel):
     assert text == (f"# Some Body\n// {CHANNEL}, last:2: made by yt2html --channel-list on "
                     f"{dt.date.today().strftime('%d.%m.%Y')}; titles as YouTube lists them "
                     "(may be translated), so in comments\n"
-                    "\n// Video 2\nCHANNELVI02\n\n// Video 3\nCHANNELVI03\n")
+                    f"\n// Video 2\n// ~{(TODAY - dt.timedelta(days=1)).strftime('%d.%m.%Y')}\n"
+                    f"CHANNELVI02\n\n// Video 3\n// ~{(TODAY - dt.timedelta(days=40)).strftime('%m.%Y')}"
+                    "\nCHANNELVI03\n")
     assert channel["read"] == 4 and channel["asked"] == []      # stops there; no dates asked
     assert f"Saved list: {target} (2 videos)" in out
     assert index.read_list_file(str(target)).title == "Some Body"   # a list file as it is
@@ -194,9 +196,14 @@ def test_a_period_in_two_steps(tmp_path, capsys, channel):
     assert f"  3/5 CHANNELVI04: 07.07.{year}" in out
     assert "  5/5 CHANNELVI06: date not read (Video unavailable); kept in the list" in out
     text = target.read_text("utf-8").split("\n", 2)[2]
-    assert text == (f"\n// Video 3 (01.06.{year})\nCHANNELVI03\n\n// Video 4 (07.07.{year})\n"
-                    "CHANNELVI04\n\n// Video 5 (date not read)\nCHANNELVI05\n\n"
-                    "// Video 6 (date not read)\nCHANNELVI06\n")   # 2: after the period
+    assert text == (f"\n// Video 3\n= !date: 01.06.{year}\nCHANNELVI03\n\n"
+                    f"// Video 4\n= !date: 07.07.{year}\nCHANNELVI04\n\n"
+                    "// Video 5\n// date not read\nCHANNELVI05\n\n"
+                    "// Video 6\n// date not read\nCHANNELVI06\n")   # 2: after the period
+    listing = index.read_list_file(str(target))                       # a list file as it is
+    assert [(i.ref, i.date) for i in listing.items()] == [
+        ("CHANNELVI03", f"01.06.{year}"), ("CHANNELVI04", f"07.07.{year}"),
+        ("CHANNELVI05", None), ("CHANNELVI06", None)]
     assert f", {year}: made by yt2html --channel-list on " in target.read_text("utf-8")
     assert period == index.channel_choice(str(year))
 
@@ -320,3 +327,19 @@ def test_fetch_channel_reads_lazily_with_approximate_dates(monkeypatch):
     assert calls[1:] == [("extract", CHANNEL, False, None),
                          ("extract", "https://real/videos", False, "YoutubeTab"),
                          ("entry", 1), ("closed",)]           # the rest never read
+
+
+@pytest.mark.parametrize("days, shown", [
+    (0, TODAY.strftime("%d.%m.%Y")), (10, (TODAY - dt.timedelta(days=10)).strftime("%d.%m.%Y")),
+    (40, (TODAY - dt.timedelta(days=40)).strftime("%m.%Y")),
+    (400, (TODAY - dt.timedelta(days=400)).strftime("%Y"))])
+def test_approximate_comments(days, shown):
+    """last:N: "// ~" and the list's date, as precise as the list tells it."""
+    assert index.approximate_comment(entry(1, days)) == f"// ~{shown}"
+    assert index.approximate_comment(entry(1, None)) is None
+
+
+def test_the_newest_n_without_a_date(tmp_path, capsys, channel):
+    channel["entries"] = [entry(1, None)]
+    run(capsys, "@somebody", str(tmp_path / "list.txt"), "last:1")
+    assert (tmp_path / "list.txt").read_text("utf-8").endswith("\n\n// Video 1\nCHANNELVI01\n")

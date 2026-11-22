@@ -1473,17 +1473,42 @@ def channel_choice(text: str, today: dt.date | None = None) -> int | tuple[dt.da
     return start, end
 
 
+def approximate_day(entry: dict) -> tuple[dt.date, int] | None:
+    """yt-dlp's approximate date of a video of the channel's list and the
+    unit of the list's "N … ago" behind it, in days (a year from a year on,
+    a month from four weeks, a week from seven days, else a day). None
+    without a date."""
+    if entry.get("timestamp") is None:
+        return None
+    approximate = dt.datetime.fromtimestamp(entry["timestamp"], dt.timezone.utc).date()
+    age = (dt.datetime.now(dt.timezone.utc).date() - approximate).days
+    return approximate, 366 if age >= 365 else 31 if age >= 28 else 7 if age >= 7 else 1
+
+
 def possible_days(entry: dict) -> tuple[dt.date, dt.date] | None:
     """The days a video of the channel's list may have been published on, from
     yt-dlp's approximate date (the list says only "5 months ago", "6 years
     ago": the moment is "now" less that, so the video is from up to one unit
     earlier; a day more on both sides for time zones). None without a date."""
-    if entry.get("timestamp") is None:
+    found = approximate_day(entry)
+    if not found:
         return None
-    approximate = dt.datetime.fromtimestamp(entry["timestamp"], dt.timezone.utc).date()
-    age = (dt.datetime.now(dt.timezone.utc).date() - approximate).days
-    unit = 366 if age >= 365 else 31 if age >= 28 else 7 if age >= 7 else 1
+    approximate, unit = found
     return approximate - dt.timedelta(days=unit + 1), approximate + dt.timedelta(days=1)
+
+
+def approximate_comment(entry: dict) -> str | None:
+    """last:N: the list's approximate date as a comment line, "// ~" and the
+    date as precise as the list tells it: YYYY, MM.YYYY or DD.MM.YYYY (the
+    user, 22.11.2026: a comment, as "= !date:" would hide the page's real
+    date; on a line of its own, for processing). None without a date."""
+    found = approximate_day(entry)
+    if not found:
+        return None
+    approximate, unit = found
+    shown = approximate.strftime("%Y" if unit == 366 else "%m.%Y" if unit == 31
+                                 else core.DATE_FORMAT)
+    return f"// ~{shown}"
 
 
 def fetch_channel(url: str, args: argparse.Namespace):
@@ -1516,7 +1541,7 @@ def channel_list(args: argparse.Namespace) -> int:
     the exit code."""
     url, choice, target, taken = args.channel
     period = None if isinstance(choice, int) else choice
-    chosen, read, stopped = [], 0, False   # chosen: [id, title, day or None]
+    chosen, read, stopped = [], 0, False   # [id, title, day (last:N: its comment) or None]
     core.log(f"Reading the videos of {url} (newest first)...")
     try:
         entries = fetch_channel(url, args)
@@ -1527,7 +1552,7 @@ def channel_list(args: argparse.Namespace) -> int:
                 continue
             read += 1
             if period is None:
-                chosen.append([video_id, entry.get("title"), None])
+                chosen.append([video_id, entry.get("title"), approximate_comment(entry)])
                 if len(chosen) == choice:
                     break
                 continue
@@ -1585,9 +1610,16 @@ def channel_list(args: argparse.Namespace) -> int:
              "(may be translated), so in comments"]
     if stopped:
         lines.append(f"// stopped after {READ_MAX} videos of the list; older ones were not read")
+    # the date on a line of its own under the title (the user, 22.11.2026): an exact
+    # one as "= !date:" (the page's own date: nothing changes, and a row not yet
+    # downloaded shows it), the list's approximate one as a comment
     for video_id, title, day in chosen:
-        note = (f" ({day.strftime(core.DATE_FORMAT)})" if day
-                else " (date not read)" if period else "")
-        lines += ["", f"// {title or video_id}{note}", video_id]
+        lines += ["", f"// {title or video_id}"]
+        if period:
+            lines.append(f"= !date: {day.strftime(core.DATE_FORMAT)}" if day
+                         else "// date not read")
+        elif day:
+            lines.append(day)
+        lines.append(video_id)
     write_reverse(lines, len(chosen), target, taken)
     return 0

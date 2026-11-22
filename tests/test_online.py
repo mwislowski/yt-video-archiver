@@ -150,4 +150,5 @@ def test_channel_list_newest_and_a_day(tmp_path):
     assert yt2html.main(["--channel-list", channel, str(period),
                          day.strftime("%d.%m.%Y")]) == 0
     text = period.read_text(encoding="utf-8")
-    assert ids[2] in text and f"({day.strftime('%d.%m.%Y')})" in text
+    assert f"= !date: {day.strftime('%d.%m.%Y')}\n{ids[2]}\n" in text
+    assert "// ~" in newest.read_text(encoding="utf-8")           # last:N: approximate dates
