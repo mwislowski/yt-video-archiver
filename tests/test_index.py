@@ -1081,6 +1081,83 @@ def test_reverse_writes_a_list_file_that_reads_back(tmp_path, capsys):
     assert sorted(p.name for p in tmp_path.glob("back*")) == ["back-1.txt", "back.txt"]
 
 
+def test_reverse_makes_a_missing_folder(tmp_path, capsys):
+    playlists = reverse_folder(tmp_path)
+    (tmp_path / "series.html").write_text(html(tmp_path, REVERSE_LIST, playlists), "utf-8")
+    target = tmp_path / "new" / "deeper" / "back.txt"
+    assert yt2html.main(["--reverse", str(tmp_path / "series.html"), str(target)]) == 0
+    assert target.read_text("utf-8").splitlines() == REVERSED
+
+
+REVERSED_DETAILS = """\
+= Mine
+= !date: 03.08.2019 !lang: en
+Mój klip & co.webm
+
+= My title
+= !date: 03.05.2024 !lang: pl
+TESTVIDEO01
+
+= Title of TESTVIDEO02
+= !lang: pl
+TESTVIDEO02
+
+= Clip
+TESTVIDEO03
+
+= Mój klip & co
+Mój klip & co.webm
+
+= Missing & lost
+Missing & lost.mkv
+
+= Title of TESTVIDEO04
+= !lang: pl
+TESTVIDEO04
+
+TESTVIDEO05
+
+= Title of TESTVIDEO01
+= !date: 03.05.2024 !lang: pl
+TESTVIDEO01
+
+PLtest0987654321
+"""
+
+
+def test_reverse_details_write_what_the_rows_show(tmp_path, capsys):
+    """The user, 22.11.2026: each video under "= title" and "= !date: … !lang: …"
+    with what its row shows (the user knows which were his own); nothing for
+    what a row does not show; a row showing only the id has no title."""
+    playlists = reverse_folder(tmp_path)
+    page(tmp_path, "TESTVIDEO01", published="2024-05-03")
+    text = "= Mine\n= !date: 3.8.19 !lang: EN\nMój klip & co.webm\n" + REVERSE_LIST
+    (tmp_path / "series.html").write_text(html(tmp_path, text, playlists), "utf-8")
+    target = tmp_path / "back.txt"
+    assert yt2html.main(["--reverse-details", str(tmp_path / "series.html"), str(target)]) == 0
+    assert target.read_bytes() == REVERSED_DETAILS.encode("utf-8")       # no BOM, LF
+    assert f"Saved list: {target} (10 videos)" in capsys.readouterr().out
+    # it reads back, and the index made from it shows the same
+    again = html(tmp_path, target.read_text("utf-8"), playlists)
+    assert index.reverse_details(again) == REVERSED_DETAILS.splitlines()
+    # !dates: no: the index shows no dates, so none are written
+    (tmp_path / "plain.html").write_text(html(tmp_path, "!dates: no\n" + text, playlists), "utf-8")
+    assert yt2html.main(["--reverse-details", str(tmp_path / "plain.html"),
+                         str(tmp_path / "plain.txt")]) == 0
+    written = (tmp_path / "plain.txt").read_text("utf-8")
+    assert "!date" not in written and "= !lang: en\nMój klip" in written
+
+
+@pytest.mark.parametrize("settings", ["!numbers: no\n!layout: cards\n",
+                                      "!thumbnails: no\n!layout: compact\n"])
+def test_reverse_details_in_every_layout(tmp_path, settings):
+    playlists = reverse_folder(tmp_path)
+    page(tmp_path, "TESTVIDEO01", published="2024-05-03")
+    text = "= Mine\n= !date: 3.8.19 !lang: EN\nMój klip & co.webm\n" + REVERSE_LIST
+    assert (index.reverse_details(html(tmp_path, settings + text, playlists))
+            == REVERSED_DETAILS.splitlines())
+
+
 @pytest.mark.parametrize("make, args, message", [
     (None, ["series.htm", "x.txt"], "--reverse takes the index page itself, e.g. index.html"),
     (None, ["none.html", "x.txt"], "cannot read index page"),
@@ -1102,9 +1179,21 @@ def test_reverse_errors(tmp_path, capsys, make, args, message):
                                           (["--theme", "dark"], "--theme"),
                                           (["--max-comments", "0"], "--max-comments")])
 def test_reverse_takes_nothing_else_and_is_not_in_help(capsys, extra, named):
-    with pytest.raises(SystemExit):
-        yt2html.main(["--reverse", "a.html", "b.txt", *extra])
-    assert f"so it cannot be used with {named}" in capsys.readouterr().err
+    for option in ("--reverse", "--reverse-details"):
+        with pytest.raises(SystemExit):
+            yt2html.main([option, "a.html", "b.txt", *extra])
+        assert (f"{option} only writes the list of an index page, so it cannot be used with "
+                f"{named}") in capsys.readouterr().err
     with pytest.raises(SystemExit):
         yt2html.main(["--help"])
     assert "--reverse" not in capsys.readouterr().out
+
+
+def test_the_two_reverses_do_not_go_together(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        yt2html.main(["--reverse", "a.html", "b.txt", "--reverse-details", "a.html", "c.txt"])
+    assert "--reverse only writes the list of an index page, so it cannot be used with " \
+           "--reverse-details" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        yt2html.main(["--reverse-details", "a.htm", "b.txt"])
+    assert "--reverse-details takes the index page itself" in capsys.readouterr().err

@@ -1274,17 +1274,26 @@ def write_index(args: argparse.Namespace, playlists: dict[str, dict | None]) -> 
 # --reverse INDEX LIST: an unofficial option (the user's, 20.11.2026; not in
 # --help, the README, DEVELOPMENT or the CHANGELOG; described in his notes):
 # the videos of an index page, one line each, written to a list file.
+# --reverse-details INDEX LIST (22.11.2026): the same, each video under "="
+# lines with what its row shows: title, date and language.
 # --------------------------------------------------------------------------
 
 ROW_LINE = re.compile(r'<div class="line">(.*?)</div>')
 
 
-def reverse_lines(page_html: str) -> list[str]:
-    """The videos of an index page in its order, one per row: the YouTube id
-    (from the row's YouTube link, else from its page's name, for a video no
-    longer on YouTube), else the user's own file by its name; a playlist that
-    could not be read stays a playlist id. Each row is one line of the page
-    (Builder), its own line of details first, before any notes."""
+NAME = re.compile(r'class="name"[^>]*>(.*?)</(?:a|span)>')
+SHOWN_DATE = re.compile(r"\d\d\.\d\d\.\d{4}|\d\d\.\d{4}|\d{4}")
+
+
+def reverse_rows(page_html: str) -> list[tuple[str, str | None, str | None, str | None]]:
+    """The videos of an index page in its order, one per row, with what the row
+    shows: (line, title, date, language). The line: the YouTube id (from the
+    row's YouTube link, else from its page's name, for a video no longer on
+    YouTube), else the user's own file by its name; a playlist that could not
+    be read stays a playlist id. The title: the row's (none when it shows only
+    the id); the date and the language: from its line, when it has them. Each
+    row is one line of the page (Builder), its own line of details first,
+    before any notes."""
     found = []
     for row in page_html.split("\n"):
         if not row.startswith('<div class="row '):
@@ -1296,25 +1305,55 @@ def reverse_lines(page_html: str) -> list[str]:
         lost = re.search(r'<span class="miss" title="([^"]*)">file not found', line)
         playlist = re.search(r'href="https://www\.youtube\.com/playlist\?list=([^"&]+)"', line)
         if youtube:
-            found.append(youtube.group(1))
+            ref = youtube.group(1)
         elif page:
-            found.append(core.id_in_name(urllib.parse.unquote(page.group(1)), playlists=False))
+            ref = core.id_in_name(urllib.parse.unquote(page.group(1)), playlists=False)
         elif file:
-            found.append(urllib.parse.unquote(file.group(1)))   # quoted: no "&amp;" in it
+            ref = urllib.parse.unquote(file.group(1))   # quoted: no "&amp;" in it
         elif lost:
-            found.append(html.unescape(lost.group(1)))
+            ref = html.unescape(lost.group(1))
         elif playlist:
-            found.append(playlist.group(1))
+            ref = playlist.group(1)
+        else:
+            continue
+        name = NAME.search(row).group(1)
+        title = None if name.startswith('<span class="id">') else html.unescape(name)
+        parts = line.split(" · ")
+        date = parts[0] if SHOWN_DATE.fullmatch(parts[0]) else None
+        language = next((part for part in parts if LANGUAGE_CODE.fullmatch(part)), None)
+        found.append((ref, title, date, language))
     return found
 
 
-def reverse_index(page_name: str, list_name: str) -> tuple[list[str], Path, Path | None]:
-    """--reverse: the lines and where they go: the list's name, or, when that
-    file exists, the name with "-1" before its extension (then the taken
-    name is returned too); both taken is an error, as are a page that is not
-    an index made by yt2html and an index without videos."""
+def reverse_lines(page_html: str) -> list[str]:
+    """--reverse: the line of each video of an index page (reverse_rows())."""
+    return [ref for ref, *_ in reverse_rows(page_html)]
+
+
+def reverse_details(page_html: str) -> list[str]:
+    """--reverse-details: each video's line under its "= title" and its
+    "= !date: … !lang: …" line (each only when the row shows something for
+    it), the videos apart by a blank line."""
+    out = []
+    for ref, title, date, language in reverse_rows(page_html):
+        details = " ".join(f"!{key}: {value}" for key, value in (("date", date), ("lang", language))
+                           if value)
+        out += [""] if out else []
+        out += [f"= {title}"] if title else []
+        out += [f"= {details}"] if details else []
+        out.append(ref)
+    return out
+
+
+def reverse_index(page_name: str, list_name: str, option: str = "--reverse"
+                  ) -> tuple[list[str], int, Path, Path | None]:
+    """--reverse / --reverse-details: the lines, the number of videos and
+    where they go: the list's name, or, when that file exists, the name with
+    "-1" before its extension (then the taken name is returned too); both
+    taken is an error, as are a page that is not an index made by yt2html
+    and an index without videos."""
     if not page_name.lower().endswith(".html"):
-        raise ListFileError(f"--reverse takes the index page itself, e.g. index.html "
+        raise ListFileError(f"{option} takes the index page itself, e.g. index.html "
                             f"(not {page_name})")
     path = Path(page_name)
     try:
@@ -1324,22 +1363,24 @@ def reverse_index(page_name: str, list_name: str) -> tuple[list[str], Path, Path
                             f"{getattr(error, 'strerror', None) or error}") from None
     if '<main class="page index' not in text:
         raise ListFileError(f"'{page_name}' is not an index page made by yt2html")
-    lines = reverse_lines(text)
-    if not lines:
+    count = len(reverse_lines(text))
+    if not count:
         raise ListFileError(f"no videos in '{page_name}'; nothing was written")
+    lines = reverse_details(text) if option == "--reverse-details" else reverse_lines(text)
     target = Path(list_name)
     if not target.exists():
-        return lines, target, None
+        return lines, count, target, None
     other = target.with_name(f"{target.stem}-1{target.suffix}")
     if other.exists():
         raise ListFileError(f"'{target}' and '{other}' exist; give another name")
-    return lines, other, target
+    return lines, count, other, target
 
 
-def write_reverse(lines: list[str], target: Path, taken: Path | None) -> None:
+def write_reverse(lines: list[str], count: int, target: Path, taken: Path | None) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)   # as -o makes its folder
     # as every file the program writes: bytes, the same line ends on every system
     # (as text, Windows would turn each "\n" into "\r\n")
     core.write_atomically(target, "".join(f"{line}\n" for line in lines))
     if taken:
         core.log(f"Note: {taken} exists, so the list went to {target}.")
-    core.log(f"Saved list: {target} ({len(lines)} video{'' if len(lines) == 1 else 's'})")
+    core.log(f"Saved list: {target} ({count} video{'' if count == 1 else 's'})")
