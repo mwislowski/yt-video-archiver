@@ -1,6 +1,8 @@
 """The command line: options, --version, --load-json and what gets saved."""
 
+import io
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -57,6 +59,27 @@ def test_load_json_saves_in_current_folder(capsys, info_file, tmp_path, monkeypa
     assert len(pages) == 1 and pages[0].name.endswith("[TESTVIDEO01].html")
     html = pages[0].read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in html and "05.11.2026" in html  # snapshot date from the file
+
+
+def test_output_the_code_page_cannot_show(info, tmp_path, monkeypatch):
+    # On Windows, output sent to a file or a pipe (> log.txt, | Tee-Object) uses the
+    # code page, which has no "｜" (yt-dlp's stand-in for "|" in file names); on
+    # 22.11.2026 such a run stopped at "Saved page:" and never reached --video
+    info["title"] = "War ｜｜ Ring"
+    data = tmp_path / "test.info.json"
+    data.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252"))
+    code = yt2html.main(["--load-json", str(data), "-o", str(tmp_path / "pages")])
+    sys.stdout.flush()
+    out = raw.getvalue().decode("cp1252")
+    assert code == 0 and "Saved page: " in out and "War ?? Ring" in out
+    assert [p.name for p in (tmp_path / "pages").glob("*.html")] == ["War ｜｜ Ring [TESTVIDEO01].html"]
+
+
+def test_no_output_stream(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", None)        # pythonw and other windowless starts
+    yt2html.readable_output()
 
 
 def test_output_folder_option(capsys, info_file, tmp_path):

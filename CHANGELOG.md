@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, with the output sent to a file or a pipe (`> log.txt`, `| Tee-Object`), a title with a character the system's code page lacks (often `｜` or `：`, which yt-dlp puts in file names for `|` and `:`) stopped the video after saving its page (`'charmap' codec can't encode …`), so `--video` was not reached. Such characters now show as `?` in the output; the files keep their names.
+
 ## [0.10.6] - 2026-11-21
 
 ### Added

@@ -5925,7 +5925,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     return args
 
 
+def readable_output() -> None:
+    """Characters the output cannot encode become "?" instead of stopping
+    the run. On Windows, output sent to a file or a pipe (`> log.txt`,
+    `| Tee-Object`) uses the system's code page, which lacks e.g. the
+    full-width `｜` and `：` that yt-dlp puts in file names for `|` and `:`."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure:
+        reconfigure(errors="replace")
+
+
 def main(argv=None) -> int:
+    readable_output()
     args = parse_args(argv)
     if args.reverse is not None:
         import yt2html_index
