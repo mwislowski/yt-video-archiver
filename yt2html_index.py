@@ -42,6 +42,13 @@ import yt2html as core
 SETTINGS = {"numbers": ("yes", "no"), "thumbnails": ("yes", "no"),
             "layout": ("plain", "compact", "cards"), "dates": ("yes", "no")}
 LEVELS = 3   # chapters: "##" (1) to "####" (3)
+# Details of one video or file, on "=" lines above it: "!key: value", several
+# on a line (a value ends at the next "!" or at the end of the line). A "="
+# line starting with one of these keys holds details; any other is the title.
+DETAILS = ("date", "lang")
+DETAILS_LINE = re.compile(r"!\s*(?:" + "|".join(DETAILS) + r")\s*:", re.I)
+DATE_FORMS = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})|(\d{1,2})\.(\d{4})|(\d{4})", re.A)
+LANGUAGE_CODE = re.compile(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})*", re.I | re.A)
 HEADING = re.compile(r"(#+)(?:\s+(.*))?")
 YOUTUBE_HOSTS = ("www.youtube.", "youtube.", "m.youtube.", "music.youtube.", "youtu.be/")
 
@@ -60,6 +67,8 @@ class Item:
     text: str                      # the line as written
     title: str | None = None       # from a "=" line above it
     notes: list[str] = field(default_factory=list)   # notes under a video or file
+    date: str | None = None        # from "= !date:", as shown (DD.MM.YYYY, MM.YYYY, YYYY)
+    lang: str | None = None        # from "= !lang:", lower case
 
 
 @dataclass
@@ -118,6 +127,47 @@ def link_line(text: str) -> tuple[str, str] | None:
     return None
 
 
+def forced_date(value: str, today: dt.date | None = None) -> str:
+    """The date of a "= !date:" line as the row shows it: DD.MM.YYYY,
+    DD.MM.YY, MM.YYYY or YYYY, leading zeros optional, from 1900 to this
+    year; a two-digit year is the latest such year up to this one (in 2026:
+    26 is 2026, 27 is 1927). Raises ValueError."""
+    this_year = (today or dt.date.today()).year
+    problem = f"not a date (DD.MM.YYYY, DD.MM.YY, MM.YYYY or YYYY, from 1900 to {this_year})"
+    found = DATE_FORMS.fullmatch(value)
+    if not found:
+        raise ValueError(problem)
+    day, month, year, alone_month, month_year, year_alone = found.groups()
+    if year_alone:
+        year, shown = int(year_alone), year_alone
+    elif month_year:
+        year, month = int(month_year), int(alone_month)
+        shown = f"{month:02}.{year}"
+    else:
+        year = int(year)
+        if len(found.group(3)) == 2:
+            year = this_year - (this_year - year) % 100
+        try:
+            dt.date(year, int(month), int(day))
+        except ValueError:
+            raise ValueError(problem) from None
+        shown = f"{int(day):02}.{int(month):02}.{year}"
+    if not 1900 <= year <= this_year or (month_year and not 1 <= month <= 12):
+        raise ValueError(problem)
+    return shown
+
+
+def forced_language(value: str) -> str:
+    """The language code of a "= !lang:" line, lower case as the rows show
+    languages (pl, en-us, zh-hans, es-419). Raises ValueError."""
+    if not LANGUAGE_CODE.fullmatch(value):
+        raise ValueError("not a language code (e.g. pl, en-US)")
+    return value.lower()
+
+
+DETAIL_CHECKS = {"date": forced_date, "lang": forced_language}
+
+
 def read_list_file(name: str) -> ListFile:
     """Read and check a list file. Raises ListFileError, naming the line."""
     path = Path(name)
@@ -141,7 +191,7 @@ def read_list_file(name: str) -> ListFile:
     root = Chapter(0, "", 0)
     open_chapters = [root]
     header = True                  # before the first chapter, video or playlist
-    pending = None                 # (title, line) of a "=" line
+    pending = None                 # the "=" lines above the next element: first line, title, details
     owner = None                   # the video or file the next notes belong to
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
@@ -154,9 +204,8 @@ def read_list_file(name: str) -> ListFile:
             if not found:
                 fail(number, f"not a video, playlist or video file: {line} "
                              "(comments start with //)")
-        if pending and not found:
-            fail(pending[1], "a '=' title must stand directly above a video, playlist or "
-                             "file" + (" (two '=' lines in a row)" if line.startswith("=") else ""))
+        if pending and not found and not line.startswith("="):
+            fail(pending["line"], "a '=' line must stand directly above a video, playlist or file")
         if not line or line.startswith("//"):
             continue
         if line.startswith("!"):                  # "!key: value", any case and spacing
@@ -206,16 +255,41 @@ def read_list_file(name: str) -> ListFile:
         if line.startswith("="):
             words = line[1:].strip()
             if not words:
-                fail(number, "an empty '=' title")
-            pending = (words, number)
+                fail(number, "an empty '=' line")
+            pending = pending or {"line": number, "title": None, "details": {}}
+            if DETAILS_LINE.match(words):
+                for part in words.split("!")[1:]:
+                    key, colon, value = part.partition(":")
+                    key = key.strip().lower()
+                    if not colon or key not in DETAILS:
+                        fail(number, f"not a detail: !{part.strip()} (details: "
+                                     + ", ".join(f"!{k}: …" for k in DETAILS)
+                                     + "; a value ends at the next !)")
+                    if key in pending["details"]:
+                        fail(number, f"!{key} is given twice for one element")
+                    try:
+                        pending["details"][key] = DETAIL_CHECKS[key](value.strip())
+                    except ValueError as problem:
+                        fail(number, f"!{key}: {value.strip()}: {problem}")
+            elif pending["title"]:
+                fail(number, f"a second '=' title (the first is on line {pending['title'][1]}); "
+                             "details start with " + " or ".join(f"!{k}:" for k in DETAILS))
+            else:
+                pending["title"] = (words, number)
             continue
         kind, ref = found
-        item = Item(kind, ref, number, line, pending[0] if pending else None)
+        details = pending["details"] if pending else {}
+        if details and kind == "playlist":
+            fail(pending["line"], ", ".join(f"!{k}" for k in details) + ": only for a video "
+                                  "or a file, not a playlist (its dates come from its videos)")
+        named = pending["title"][0] if pending and pending["title"] else None
+        item = Item(kind, ref, number, line, named,
+                    date=details.get("date"), lang=details.get("lang"))
         open_chapters[-1].children.append(item)
         pending, header = None, False
         owner = item if kind != "playlist" else None   # notes after a playlist follow it
     if pending:
-        fail(pending[1], "a '=' title must stand directly above a video, playlist or file")
+        fail(pending["line"], "a '=' line must stand directly above a video, playlist or file")
     return ListFile(path, title[0] if title else "", settings, root.children)
 
 
@@ -317,6 +391,8 @@ class Row:
     title: str | None = None       # from "="
     name: str | None = None        # the line, when it is a page or file name
     notes: list[str] = field(default_factory=list)
+    date: str | None = None        # from "= !date:"
+    lang: str | None = None        # from "= !lang:"
 
 
 @dataclass
@@ -340,7 +416,7 @@ class PlaylistNotes:
 def item_row(item: Item) -> Row:
     named = item.kind == "file" or ("[" in item.text and "://" not in item.text)
     return Row(item.kind, item.ref, item.line, item.title, item.text if named else None,
-               item.notes)
+               item.notes, item.date, item.lang)
 
 
 def lone_playlist(children: list) -> Item | None:
@@ -626,10 +702,15 @@ class Builder:
         no days at all."""
         return [day_of(self.page_of(video_id)[1]) for video_id in video_ids] if self.dates else []
 
-    def day_in_line(self, meta: dict) -> str:
-        """The publication day first in a row's line (the user, 21.11.2026);
-        nothing when the page does not tell it or with !dates: no."""
-        day = day_of(meta) if self.dates else None
+    def day_in_line(self, meta: dict, row: Row | None = None) -> str:
+        """The publication day first in a row's line (the user, 21.11.2026):
+        the row's "= !date:", else the page's; nothing when neither tells it
+        or with !dates: no."""
+        if not self.dates:
+            return ""
+        if row and row.date:
+            return row.date
+        day = day_of(meta)
         return day.strftime(core.DATE_FORMAT) if day else ""
 
     def video(self, row: Row) -> tuple[str, str, list[str], bool]:
@@ -657,15 +738,15 @@ class Builder:
                 duration = float(meta["yt2html:duration"])
             except (KeyError, ValueError):
                 duration = None
-            language = (meta.get("yt2html:language") or "").lower()
+            language = row.lang or (meta.get("yt2html:language") or "").lower()
             if file:
                 kind = format_label(file)
                 return (self.thumb(duration, meta.get("yt2html:cover"), kind, file),
-                        name, [self.day_in_line(meta), self.time_in_line(duration), language,
+                        name, [self.day_in_line(meta, row), self.time_in_line(duration), language,
                                f'<span title="{core.esc(file.name)}">{kind}</span>', youtube],
                         False)
             return (self.thumb(duration, meta.get("yt2html:cover")), name,
-                    [self.day_in_line(meta), self.time_in_line(duration), language,
+                    [self.day_in_line(meta, row), self.time_in_line(duration), language,
                      '<span class="miss">only the page downloaded</span>', youtube], True)
         name = f'<span class="name">{shown}</span>'
         if file:
@@ -674,12 +755,13 @@ class Builder:
             self.notes.append((row.line, f"line {row.line}: {video_id} has a video file but "
                                          f"no page ({file.name})", " (--index makes it)"))
             return (self.thumb(duration, label=kind, file=file), name,
-                    [self.time_in_line(duration),
+                    [self.day_in_line(meta, row), self.time_in_line(duration), row.lang,
                      f'<span title="{core.esc(file.name)}">{kind}</span>', youtube], False)
         self.missing.setdefault(row.line, []).append(video_id)
         youtube = f'<a href="{core.esc(url)}" target="_blank" rel="noopener noreferrer">YouTube</a>'
         return (self.thumb(None), name,
-                ['<span class="miss">not downloaded</span>', youtube], True)
+                [self.day_in_line(meta, row), row.lang,
+                 '<span class="miss">not downloaded</span>', youtube], True)
 
     def own_file(self, row: Row) -> tuple[str, str, list[str], bool]:
         path = self.output_dir / row.ref
@@ -689,12 +771,13 @@ class Builder:
             self.notes.append((row.line, f"line {row.line}: file not found: {row.ref} (looked "
                                          f"for in {self.output_dir}; check the name)", ""))
             return (self.thumb(None), name,
-                    [f'<span class="miss" title="{core.esc(row.ref)}">file not found</span>'], True)
+                    [self.day_in_line({}, row), row.lang,
+                     f'<span class="miss" title="{core.esc(row.ref)}">file not found</span>'], True)
         duration = file_duration(path)
         kind = format_label(path)
         return (self.thumb(duration, label=kind, file=path), name,
-                [self.time_in_line(duration), f'<span title="{core.esc(path.name)}">{kind}</span>'],
-                False)
+                [self.day_in_line({}, row), self.time_in_line(duration), row.lang,
+                 f'<span title="{core.esc(path.name)}">{kind}</span>'], False)
 
     def unread_playlist(self, row: Row) -> tuple[str, str, list[str], bool]:
         url = f"{core.YOUTUBE}/playlist?list={row.ref}"

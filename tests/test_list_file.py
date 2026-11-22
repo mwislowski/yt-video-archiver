@@ -1,5 +1,6 @@
 """The list file of --index FILE / --index-only FILE: its format and checks."""
 
+import datetime as dt
 from pathlib import Path
 
 import pytest
@@ -234,17 +235,102 @@ def test_a_title_above_a_line(tmp_path):
 
 
 @pytest.mark.parametrize("text, message", [
-    ("= Title\n\nTESTVIDEO01\n", "line 1: a '=' title must stand directly above"),
-    ("= Title\n// comment\nTESTVIDEO01\n", "line 1: a '=' title must stand directly above"),
-    ("= Title\n> note\nTESTVIDEO01\n", "line 1: a '=' title must stand directly above"),
-    ("= Title\n## Part\n", "line 1: a '=' title must stand directly above"),
-    ("= One\n= Two\nTESTVIDEO01\n", "line 1: a '=' title must stand directly above a video, "
-                                    "playlist or file (two '=' lines in a row)"),
-    ("TESTVIDEO01\n= At the end\n", "line 2: a '=' title must stand directly above"),
-    ("=\nTESTVIDEO01\n", "line 1: an empty '=' title"),
+    ("= Title\n\nTESTVIDEO01\n", "line 1: a '=' line must stand directly above"),
+    ("= Title\n// comment\nTESTVIDEO01\n", "line 1: a '=' line must stand directly above"),
+    ("= Title\n> note\nTESTVIDEO01\n", "line 1: a '=' line must stand directly above"),
+    ("= Title\n## Part\n", "line 1: a '=' line must stand directly above"),
+    ("= One\n= Two\nTESTVIDEO01\n", "line 2: a second '=' title (the first is on line 1); "
+                                    "details start with !date: or !lang:"),
+    ("TESTVIDEO01\n= At the end\n", "line 2: a '=' line must stand directly above"),
+    ("= !date: 2019\n\nclip.mp4\n", "line 1: a '=' line must stand directly above"),
+    ("TESTVIDEO01\n= !lang: pl\n", "line 2: a '=' line must stand directly above"),
+    ("=\nTESTVIDEO01\n", "line 1: an empty '=' line"),
 ])
 def test_title_errors(tmp_path, text, message):
     assert message in error(tmp_path, text)
+
+
+# Details of one's own: "= !key: value" ------------------------------------------------
+
+def test_details_above_a_line(tmp_path):
+    # with or without a title, in any order, several lines or several on a line
+    listing = read(tmp_path, "= Holiday\n= !date: 03.08.2019\nclip.mp4\n"
+                             "= !lang: PL\n= My title\nTESTVIDEO01\n"
+                             "=!Date:3.8.19 ! LANG :en-US\nTESTVIDEO02\n"
+                             "= !date: 2019\nother.mp4\n=! date : 2020\nthird.mp4\n")
+    assert [(i.title, i.date, i.lang) for i in listing.items()] == [
+        ("Holiday", "03.08.2019", None), ("My title", None, "pl"),
+        (None, "03.08.2019", "en-us"), (None, "2019", None), (None, "2020", None)]
+
+
+def test_a_title_may_start_with_an_exclamation_mark(tmp_path):
+    # only our keys make details; nothing else is guessed
+    listing = read(tmp_path, "= !!! Best part\nTESTVIDEO01\n= !dat: 2019\nTESTVIDEO02\n"
+                             "= !Note: date: 2019\nTESTVIDEO03\n")
+    assert [(i.title, i.date) for i in listing.items()] == [
+        ("!!! Best part", None), ("!dat: 2019", None), ("!Note: date: 2019", None)]
+
+
+@pytest.mark.parametrize("text, message", [
+    ("= !date: 2019 !dat: 1\nclip.mp4\n", "line 1: not a detail: !dat: 1 (details: !date: …, "
+                                           "!lang: …; a value ends at the next !)"),
+    ("= !date: 2019 !lang pl\nclip.mp4\n", "line 1: not a detail: !lang pl"),
+    ("= !date: 2019 !lang\nclip.mp4\n", "line 1: not a detail: !lang ("),
+    ("= !date: 2019\n= !date: 2020\nclip.mp4\n", "line 2: !date is given twice for one element"),
+    ("= !lang: pl !lang: en\nclip.mp4\n", "line 1: !lang is given twice for one element"),
+    ("= !date: 31.02.2019\nclip.mp4\n", "line 1: !date: 31.02.2019: not a date (DD.MM.YYYY, "
+                                         "DD.MM.YY, MM.YYYY or YYYY, from 1900 to "),
+    ("= !lang: polski\nclip.mp4\n", "line 1: !lang: polski: not a language code (e.g. pl, en-US)"),
+    ("= !date:\nclip.mp4\n", "line 1: !date: : not a date"),
+    (f"= !date: 2019\n= !lang: pl\n{PLAYLIST_ID}\n",
+     "line 1: !date, !lang: only for a video or a file, not a playlist (its dates come from its "
+     "videos)"),
+])
+def test_detail_errors(tmp_path, text, message):
+    assert message in error(tmp_path, text)
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("03.08.2019", "03.08.2019"), ("3.8.2019", "03.08.2019"), ("29.02.2024", "29.02.2024"),
+    ("03.08.19", "03.08.2019"), ("1.1.00", "01.01.2000"),
+    ("31.12.26", "31.12.2026"), ("01.01.27", "01.01.1927"), ("1.1.99", "01.01.1999"),
+    ("8.2019", "08.2019"), ("12.1900", "12.1900"), ("2019", "2019"), ("1900", "1900"),
+    ("2026", "2026"),
+])
+def test_forced_dates(value, shown):
+    assert index.forced_date(value, dt.date(2026, 11, 22)) == shown
+
+
+@pytest.mark.parametrize("value", [
+    "2027", "1899", "1.2027", "13.2019", "0.2019", "29.02.2023", "32.01.2019", "1.13.2019",
+    "00.01.2019", "1.1.1899", "1.1.2027", "19", "2019.08.03", "3/8/2019", "03.08.019", "",
+    "٢٠١٩", "03.08.2019 ", "about 2019",
+])
+def test_not_dates(value):
+    with pytest.raises(ValueError, match=r"not a date .* from 1900 to 2026\)"):
+        index.forced_date(value, dt.date(2026, 11, 22))
+
+
+def test_a_two_digit_year_follows_the_current_year():
+    # the latest year with those two digits, up to this one
+    assert index.forced_date("1.1.30", dt.date(2031, 1, 1)) == "01.01.2030"
+    assert index.forced_date("1.1.32", dt.date(2031, 1, 1)) == "01.01.1932"
+    assert index.forced_date("1.1.00", dt.date(2101, 1, 1)) == "01.01.2100"
+    assert index.forced_date("1.1.02", dt.date(2101, 1, 1)) == "01.01.2002"
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("pl", "pl"), ("PL", "pl"), ("en-US", "en-us"), ("zh-Hans", "zh-hans"), ("es-419", "es-419"),
+    ("fil", "fil"),
+])
+def test_forced_languages(value, shown):
+    assert index.forced_language(value) == shown
+
+
+@pytest.mark.parametrize("value", ["", "p", "polski", "en_US", "en-", "en-U", "pl pl", "ąę"])
+def test_not_language_codes(value):
+    with pytest.raises(ValueError, match="not a language code"):
+        index.forced_language(value)
 
 
 def test_the_list_file_is_not_changed(tmp_path):

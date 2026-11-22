@@ -596,6 +596,35 @@ def test_no_dates(tmp_path):
     assert "03.05.2024" in html(tmp_path, f"!dates: yes\n{PLAYLIST_ID}\n", data)
 
 
+def test_details_of_ones_own_in_the_rows(tmp_path):
+    """"= !date:" and "= !lang:" (the user, 22.11.2026): they win over the page's
+    and give rows without a page what they lack, at the same places in the line."""
+    page(tmp_path, "TESTVIDEO01", published="2024-05-03")             # page and file
+    (tmp_path / "Page TESTVIDEO01 [TESTVIDEO01].webm").write_bytes(b"")
+    page(tmp_path, "TESTVIDEO02")                                    # page only, no day
+    (tmp_path / "Clip [TESTVIDEO03].webm").write_bytes(b"")           # file, no page
+    (tmp_path / "own.webm").write_bytes(b"")
+    text = ("= !date: 1.2.2020 !lang: en\nTESTVIDEO01\n= !date: 2021\nTESTVIDEO02\n"
+            "= !date: 7.2022\n= !lang: de\nClip [TESTVIDEO03].webm\n"
+            "= !date: 24.12.99\n= !lang: PL\nTESTVIDEO04\n"
+            "= Holiday\n= !date: 03.08.2019 !lang: pl\nown.webm\n"
+            "= !date: 2018\nmissing.mp4\nTESTVIDEO01\nown.webm\n")
+    found = [line_of(row) for row in rows(html(tmp_path, text))]
+    assert found[0].startswith("01.02.2020 · en · <span title=")
+    assert found[1].startswith('2021 · pl · <span class="miss">only the page downloaded')
+    assert found[2].startswith("07.2022 · de · <span title=")
+    assert found[3].startswith('24.12.1999 · pl · <span class="miss">not downloaded')
+    assert found[4].startswith("03.08.2019 · pl · <span title=")
+    assert found[5].startswith('2018 · <span class="miss" title="missing.mp4">file not found')
+    assert found[6].startswith("03.05.2024 · pl · ")                   # the same video, no details
+    assert found[7].startswith("<span title=")                         # the same file, no details
+    without = [line_of(row) for row in rows(html(tmp_path, "!thumbnails: no\n" + text))]
+    assert without[0].startswith("01.02.2020 · 21:48 · en · ")        # the day before the duration
+    hidden = [line_of(row) for row in rows(html(tmp_path, "!dates: no\n" + text))]
+    assert hidden[0].startswith("en · ") and hidden[4].startswith("pl · ")
+    assert not any(re.search(r"\d{4}", line) for line in hidden[:6])
+
+
 def test_each_page_is_read_once_for_the_span_and_the_row(tmp_path, monkeypatch):
     read = []
     original = yt2html.read_page_metadata
