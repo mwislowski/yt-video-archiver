@@ -131,3 +131,23 @@ def test_a_removed_video_fails_and_saves_nothing(tmp_path, capsys):
     assert ("FAILED: r671hNQtok0: This video has been removed for violating YouTube's "
             "Terms of Service") in out
     assert not list(tmp_path.iterdir())
+
+
+def test_channel_list_newest_and_a_day(tmp_path):
+    """--channel-list (unofficial): the newest videos of a channel, then the day of
+    the third of them as the period: the two steps must find it (the list gives
+    only approximate dates, so this checks the margin on real data)."""
+    import yt2html_index as index
+    channel = "UCw3L8lysSdQpNaeGLBqnr5A"     # getitjob, the Python course's channel
+    newest = tmp_path / "newest.txt"
+    assert yt2html.main(["--channel-list", channel, str(newest), "last:3"]) == 0
+    ids = [item.ref for item in index.read_list_file(str(newest)).items()]
+    assert len(ids) == 3
+    args = yt2html.parse_args(["--channel-list", channel, str(tmp_path / "x.txt"), "last:1"])
+    day = index.exact_day(ids[2], args)
+    assert day is not None
+    period = tmp_path / "day.txt"
+    assert yt2html.main(["--channel-list", channel, str(period),
+                         day.strftime("%d.%m.%Y")]) == 0
+    text = period.read_text(encoding="utf-8")
+    assert ids[2] in text and f"({day.strftime('%d.%m.%Y')})" in text

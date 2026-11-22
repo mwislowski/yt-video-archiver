@@ -24,11 +24,15 @@ import argparse
 import datetime as dt
 import html
 import json
+import random
 import re
 import struct
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import yt_dlp
 
 import yt2html as core
 
@@ -1368,13 +1372,20 @@ def reverse_index(page_name: str, list_name: str, option: str = "--reverse"
     if not count:
         raise ListFileError(f"no videos in '{page_name}'; nothing was written")
     lines = reverse_details(text) if option == "--reverse-details" else reverse_lines(text)
+    return (lines, count, *list_target(list_name))
+
+
+def list_target(list_name: str) -> tuple[Path, Path | None]:
+    """Where a list the program writes goes: the name given, or, when that
+    file exists, the name with "-1" before its extension (then the taken
+    name too); both taken is an error. The user's list is never replaced."""
     target = Path(list_name)
     if not target.exists():
-        return lines, count, target, None
+        return target, None
     other = target.with_name(f"{target.stem}-1{target.suffix}")
     if other.exists():
         raise ListFileError(f"'{target}' and '{other}' exist; give another name")
-    return lines, count, other, target
+    return other, target
 
 
 def write_reverse(lines: list[str], count: int, target: Path, taken: Path | None) -> None:
@@ -1385,3 +1396,198 @@ def write_reverse(lines: list[str], count: int, target: Path, taken: Path | None
     if taken:
         core.log(f"Note: {taken} exists, so the list went to {target}.")
     core.log(f"Saved list: {target} ({count} video{'' if count == 1 else 's'})")
+
+
+# --------------------------------------------------------------------------
+# --channel-list CHANNEL LIST PERIOD: an unofficial option (the user's,
+# 22.11.2026; not in --help, the README, DEVELOPMENT or the CHANGELOG;
+# described in his notes, 5.4): some videos of a channel, chosen by their
+# publication dates or as the newest N, written to a list file, without
+# downloading them; never the whole channel.
+# --------------------------------------------------------------------------
+
+LAST = re.compile(r"last:(\d+)", re.I)
+LAST_MAX = 500              # last:N at most
+CANDIDATES_MAX = 100        # videos whose exact date is asked for, one request each
+READ_MAX = 5000             # videos of the channel's list read at most
+CHECK_PAUSE = (2, 5)        # seconds between those requests, chosen at random
+CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
+CHANNEL_ADDRESS = re.compile(r"(https?://(?:www\.|m\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+"
+                             r"|c/[^/?#]+|user/[^/?#]+))(?:[/?#].*)?", re.I)
+PERIOD_FORMS = ("DD.MM.YYYY, MM.YYYY or YYYY, or two of them joined by - (a range), "
+                f"or last:N for the newest N videos (N up to {LAST_MAX})")
+
+
+def channel_videos_url(text: str) -> str:
+    """The address of a channel's Videos tab from what the user gave: an
+    address of the channel (any of its tabs), @handle or a channel id.
+    Raises ListFileError for anything else, a video or playlist named."""
+    text = text.strip()
+    if text.startswith("@"):
+        text = f"{core.YOUTUBE}/{text}"
+    elif CHANNEL_ID.fullmatch(text):
+        text = f"{core.YOUTUBE}/channel/{text}"
+    elif "://" not in text and text.lower().startswith(YOUTUBE_HOSTS):
+        text = "https://" + text
+    found = CHANNEL_ADDRESS.fullmatch(text)
+    if found:
+        return found.group(1) + "/videos"
+    if core.video_id_from_url(text) or core.playlist_id_from_url(text):
+        raise ListFileError(f"--channel-list takes a channel, not a video or playlist: {text}")
+    raise ListFileError(f"--channel-list: not a YouTube channel: {text} (e.g. "
+                        "https://www.youtube.com/@name, @name or a channel id UC…)")
+
+
+def period_of(text: str, today: dt.date | None = None) -> tuple[dt.date, dt.date]:
+    """The first and last day of DD.MM.YYYY, MM.YYYY or YYYY (as "= !date:",
+    forced_date()). Raises ValueError."""
+    parts = [int(part) for part in forced_date(text, today).split(".")]
+    if len(parts) == 3:
+        day = dt.date(parts[2], parts[1], parts[0])
+        return day, day
+    if len(parts) == 2:
+        month, year = parts
+        following = dt.date(year + month // 12, month % 12 + 1, 1)
+        return dt.date(year, month, 1), following - dt.timedelta(days=1)
+    return dt.date(parts[0], 1, 1), dt.date(parts[0], 12, 31)
+
+
+def channel_choice(text: str, today: dt.date | None = None) -> int | tuple[dt.date, dt.date]:
+    """The third value of --channel-list: N of last:N, or the first and last
+    day of the period. Raises ListFileError."""
+    found = LAST.fullmatch(text.strip())
+    if found:
+        number = int(found.group(1))
+        if not 1 <= number <= LAST_MAX:
+            raise ListFileError(f"--channel-list: {text}: last:N takes N from 1 to {LAST_MAX}")
+        return number
+    sides = re.split(r"\s*[-–]\s*", text.strip())
+    try:
+        if len(sides) > 2:
+            raise ValueError
+        start, end = period_of(sides[0], today)[0], period_of(sides[-1], today)[1]
+    except ValueError:
+        raise ListFileError(f"--channel-list: {text}: not a period ({PERIOD_FORMS})") from None
+    if start > end:
+        raise ListFileError(f"--channel-list: {text}: the period ends before it starts")
+    return start, end
+
+
+def possible_days(entry: dict) -> tuple[dt.date, dt.date] | None:
+    """The days a video of the channel's list may have been published on, from
+    yt-dlp's approximate date (the list says only "5 months ago", "6 years
+    ago": the moment is "now" less that, so the video is from up to one unit
+    earlier; a day more on both sides for time zones). None without a date."""
+    if entry.get("timestamp") is None:
+        return None
+    approximate = dt.datetime.fromtimestamp(entry["timestamp"], dt.timezone.utc).date()
+    age = (dt.datetime.now(dt.timezone.utc).date() - approximate).days
+    unit = 366 if age >= 365 else 31 if age >= 28 else 7 if age >= 7 else 1
+    return approximate - dt.timedelta(days=unit + 1), approximate + dt.timedelta(days=1)
+
+
+def fetch_channel(url: str, args: argparse.Namespace):
+    """yt-dlp's flat list of a channel tab, with approximate dates: first the
+    channel's data, then its videos one by one, newest first, a page read only
+    when it is reached (so stopping early saves the rest)."""
+    opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True,
+            "quiet": True, "extractor_args": {"youtubetab": {"approximate_date": [""]}}}
+    if args.cookies_from_browser:
+        opts["cookiesfrombrowser"] = core.cookies_spec(args.cookies_from_browser)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False, process=False)
+        for _ in range(3):  # follow a redirect to the real list, as fetch_playlist()
+            if info.get("_type") not in ("url", "url_transparent"):
+                break
+            info = ydl.extract_info(info["url"], download=False, process=False,
+                                    ie_key=info.get("ie_key"))
+        yield info
+        yield from info.get("entries") or []
+
+
+def exact_day(video_id: str, args: argparse.Namespace) -> dt.date | None:
+    """A video's publication day, as its page shows it (core.published_day()),
+    from its own data: one request."""
+    return core.published_day(core.fetch_formats(f"{core.YOUTUBE}/watch?v={video_id}", args))
+
+
+def channel_list(args: argparse.Namespace) -> int:
+    """--channel-list: read the channel's list, choose, write the list file;
+    the exit code."""
+    url, choice, target, taken = args.channel
+    period = None if isinstance(choice, int) else choice
+    chosen, read, stopped = [], 0, False   # chosen: [id, title, day or None]
+    core.log(f"Reading the videos of {url} (newest first)...")
+    try:
+        entries = fetch_channel(url, args)
+        channel = next(entries)
+        for entry in entries:
+            video_id = core.entry_video_id(entry)
+            if not video_id or entry.get("live_status") == "is_upcoming":
+                continue
+            read += 1
+            if period is None:
+                chosen.append([video_id, entry.get("title"), None])
+                if len(chosen) == choice:
+                    break
+                continue
+            days = possible_days(entry)
+            if days and days[1] < period[0]:
+                break                           # older from here on
+            if not days or days[0] <= period[1]:
+                chosen.append([video_id, entry.get("title"), None])
+            if read >= READ_MAX:
+                stopped = True
+                break
+        entries.close()
+    except KeyboardInterrupt:
+        core.log("Interrupted (Ctrl+C) while reading the channel: nothing was written.")
+        return 130
+    except yt_dlp.utils.DownloadError:
+        core.log(f"FAILED: {url}")              # yt-dlp has already said why
+        return 1
+    if stopped:
+        core.log(f"Note: stopped after {READ_MAX} videos of the list; older ones were not read.")
+    if period:
+        core.log(f"Read {core.plural(read, 'video')} of the list; "
+                 f"{core.plural(len(chosen), 'video')} may be from the period.")
+        if len(chosen) > CANDIDATES_MAX:
+            core.log(f"That is more than {CANDIDATES_MAX} to check one by one (a request each); "
+                     "give a shorter period. Nothing was written.")
+            return 1
+        if chosen:
+            core.log(f"Checking the date of each, with a pause of {CHECK_PAUSE[0]}–"
+                     f"{CHECK_PAUSE[1]} s between them...")
+        try:
+            for number, video in enumerate(chosen, 1):
+                if number > 1:
+                    time.sleep(random.uniform(*CHECK_PAUSE))
+                try:
+                    video[2] = exact_day(video[0], args)
+                except Exception as error:
+                    core.log(f"  {number}/{len(chosen)} {video[0]}: date not read "
+                             f"({core.failure_reason(error)}); kept in the list")
+                    continue
+                shown = video[2].strftime(core.DATE_FORMAT) if video[2] else "no date"
+                core.log(f"  {number}/{len(chosen)} {video[0]}: {shown}")
+        except KeyboardInterrupt:
+            core.log("Interrupted (Ctrl+C) while checking the dates: nothing was written.")
+            return 130
+        chosen = [video for video in chosen
+                  if video[2] is None or period[0] <= video[2] <= period[1]]
+    if not chosen:
+        core.log("No videos of the channel in the period; nothing was written.")
+        return 0
+    name = channel.get("channel") or channel.get("uploader") or channel.get("title") or url
+    lines = [f"# {name}",
+             f"// {url}, {args.channel_list[2]}: made by yt2html --channel-list on "
+             f"{dt.date.today().strftime(core.DATE_FORMAT)}; titles as YouTube lists them "
+             "(may be translated), so in comments"]
+    if stopped:
+        lines.append(f"// stopped after {READ_MAX} videos of the list; older ones were not read")
+    for video_id, title, day in chosen:
+        note = (f" ({day.strftime(core.DATE_FORMAT)})" if day
+                else " (date not read)" if period else "")
+        lines += ["", f"// {title or video_id}{note}", video_id]
+    write_reverse(lines, len(chosen), target, taken)
+    return 0

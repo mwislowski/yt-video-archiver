@@ -5830,6 +5830,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--reverse", nargs=2, metavar=("INDEX", "LIST"), help=argparse.SUPPRESS)
     parser.add_argument("--reverse-details", nargs=2, metavar=("INDEX", "LIST"),
                         help=argparse.SUPPRESS)
+    # unofficial (the user's, 22.11.2026): some videos of a channel, by their
+    # dates or the newest N, written to a list file (yt2html_index.channel_list())
+    parser.add_argument("--channel-list", nargs=3, metavar=("CHANNEL", "LIST", "PERIOD"),
+                        help=argparse.SUPPRESS)
     parser.add_argument("--video-formats", action="store_true",
                         help="only list, for each video, the qualities a download can take "
                              "(with the parameter that chooses each, the codec and the size) "
@@ -5854,20 +5858,30 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "looked up in -o), without YouTube; existing pages are always "
                              "replaced; a missing file fails that video, nothing is downloaded")
     args = parser.parse_args(argv)
-    reverse = next((dest for dest in ("reverse", "reverse_details")
-                    if getattr(args, dest) is not None), None)
-    if reverse:
-        option = "--" + reverse.replace("_", "-")
+    # the options that only write a list file: (what they do, what may go with them)
+    alone = {"reverse": ("only writes the list of an index page", ()),
+             "reverse_details": ("only writes the list of an index page", ()),
+             "channel_list": ("only writes a list of a channel's videos",
+                              ("cookies_from_browser",))}
+    special = next((dest for dest in alone if getattr(args, dest) is not None), None)
+    if special:
+        option = "--" + special.replace("_", "-")
+        what, allowed = alone[special]
         used = [action.option_strings[0] if action.option_strings else "a URL"
                 for action in parser._actions
-                if action.dest not in ("help", "version", reverse)
+                if action.dest not in ("help", "version", special, *allowed)
                 and getattr(args, action.dest) not in (action.default, [])]
         if used:
-            parser.error(f"{option} only writes the list of an index page, so it cannot be "
-                         f"used with {', '.join(used)}")
+            parser.error(f"{option} {what}, so it cannot be used with {', '.join(used)}")
         import yt2html_index   # (here: that module imports this one)
         try:
-            args.reversed = yt2html_index.reverse_index(*getattr(args, reverse), option)
+            if special == "channel_list":
+                channel, name, period = args.channel_list
+                args.channel = (yt2html_index.channel_videos_url(channel),
+                                yt2html_index.channel_choice(period),
+                                *yt2html_index.list_target(name))
+            else:
+                args.reversed = yt2html_index.reverse_index(*getattr(args, special), option)
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
@@ -5944,6 +5958,9 @@ def readable_output() -> None:
 def main(argv=None) -> int:
     readable_output()
     args = parse_args(argv)
+    if getattr(args, "channel", None):
+        import yt2html_index
+        return yt2html_index.channel_list(args)
     if getattr(args, "reversed", None):
         import yt2html_index
         yt2html_index.write_reverse(*args.reversed)
