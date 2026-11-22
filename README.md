@@ -113,6 +113,7 @@ Instead of a URL you can also give a video or playlist id (`Z8lf5oWKfj0`, `PLeBg
 | Add to saved data only what is missing, e.g. a translation YouTube refused before, keeping the comments (see *Saved data*) | `yt2html VIDEO_ID -o "D:\Videos" --update-json --transcript bilingual:pl` |
 | The same, and also refresh the counts and the comments: new ones added, those YouTube no longer has kept and marked (see *Saved data*) | `yt2html VIDEO_ID -o "D:\Videos" --refresh-json --transcript` |
 | Make a page again from saved data only, offline (see *Saved data*) | `yt2html --load-json VIDEO_ID -o "D:\Videos" --transcript` |
+| Merge a translation of your own (an SRT file made from the transcript's subtitles) into the saved data and show it on the page (see *Saved data*) | `yt2html --merge-json "Title [id].pl.own.srt" --transcript plain,bilingual:pl` |
 | Versions of the program and yt-dlp | `yt2html --version` |
 | All options | `yt2html --help` |
 
@@ -126,7 +127,7 @@ Without `--transcript` the page has no transcript (and none is downloaded). `--t
 |---|---|
 | `plain` (also the option alone) | continuous text, without timestamps |
 | `timestamps` | one line per caption, each with its timestamp |
-| `bilingual:CODE` | like `timestamps`, with YouTube's machine translation into that language (e.g. `bilingual:pl`) in a second column |
+| `bilingual:CODE` | like `timestamps`, with YouTube's machine translation into that language (e.g. `bilingual:pl`) in a second column; or with your own translation, once `--merge-json` has put it into the saved data |
 
 Examples: `--transcript`, `--transcript plain,timestamps`, `--transcript plain,bilingual:pl,bilingual:de`. Each version may appear only once; a code that is no language code (`bilingual:jp`) stops the program before anything is downloaded. With `--load-json` the versions are made from the saved data: the order may change, `timestamps` works for any saved transcript, a translation needs to be in the data (or noted there as left out).
 
@@ -140,7 +141,7 @@ Only when the transcript itself cannot be downloaded is nothing saved for that v
 
 ### Saved data
 
-Four options work with the data a page is made from, saved next to it as `Title [id].info.json`: yt-dlp's data of the video (description, counts, formats, comments, …) together with what yt2html adds (the transcript and its translations, the chapters and other timestamp lists, info cards, the extras of the video page, what `--video` downloaded). Only one of them at a time; combining two is an error.
+Five options work with the data a page is made from, saved next to it as `Title [id].info.json`: yt-dlp's data of the video (description, counts, formats, comments, …) together with what yt2html adds (the transcript and its translations, the chapters and other timestamp lists, info cards, the extras of the video page, what `--video` downloaded). Only one of them at a time; combining two is an error.
 
 | Option | What it does | Asks YouTube for | Comments and counts | The copy's date |
 |---|---|---|---|---|
@@ -148,6 +149,7 @@ Four options work with the data a page is made from, saved next to it as `Title 
 | `--update-json` | adds to saved data what the options ask for and they lack, saves them back, makes the page again | only what is missing; nothing if nothing is | as saved | as saved, with a note of the update |
 | `--refresh-json` | as `--update-json`, and refreshes what changes over time | the video's data with the comments, then what is missing | refreshed; the comments merged with the saved ones | as saved, with a note and, from another day, a *Refreshed* tile |
 | `--load-json` | makes the page from saved data only | nothing (images aside) | as saved | as saved |
+| `--merge-json` | adds a translation of your own (an SRT file) to saved data; with `--transcript`, makes the page as `--load-json` | nothing (images aside) | as saved | as saved, with a note of the update |
 
 Saving and reading are not symmetric: `--write-json` is an extra to a download (without it the download is the same), while `--update-json`, `--refresh-json` and `--load-json` change where the page comes from.
 
@@ -177,6 +179,14 @@ Saving and reading are not symmetric: `--write-json` is an extra to a download (
 - **Options:** those that shape the page work as with a download (the `--transcript` versions, `--theme`, `--no-cards`, `--no-avatars`, `--no-snapshot`, fewer comments with `--max-comments N` or `--no-comments`). What is not in the data cannot be added (that is what `--update-json` is for, and `--refresh-json` for more comments): more comments, a translation that was not downloaded (a `bilingual:CODE` neither in the data nor noted there as left out fails that video), the video (`--video` cannot be used with `--load-json`).
 - **Existing pages are always replaced**, without `--overwrite`; the page keeps its current name. The file stays as it is.
 - **A missing file:** that video fails (`FAILED: …`, the run ends with exit code 1); nothing is downloaded instead.
+
+**`--merge-json`** adds a translation of your own to saved data: when YouTube refuses its machine translations (`HTTP 429`), translate the subtitles in the video's original language yourself (by hand or with a tool) and merge the result. Nothing is asked of YouTube.
+
+- **What it takes:** SRT files named `Title [id].CODE.own.srt` (e.g. `Title [id].pl.own.srt`; `own` sets them apart from YouTube's kinds of subtitles), also as patterns (`"*.own.srt"`). The saved data are the `.info.json` file with the same id **next to the SRT file**.
+- **What the file must be:** a translation of the subtitles the transcript was made from (`--video sub:CODE` in the transcript's language usually gives them; when the video has the author's subtitles and the transcript is auto-generated, they may differ): the same number of lines, each starting at the same moment as the transcript's line, none empty. Words may move between neighbouring lines, lines may not be joined or split. Anything else is an error that names the first line that does not fit, and nothing is saved.
+- **What it saves:** the translation as the transcript's translation into CODE, with the file's name and the day; a note of an earlier refusal by YouTube in that language is dropped, so `--update-json` no longer asks YouTube for it. A translation of your own already there is replaced (with a message); one from YouTube in that language is never replaced (an error). `--overwrite --write-json` downloads new data without it; the SRT file stays, merge it again.
+- **The page:** without `--transcript` it stays as it is (the console says how to show the translation); with `--transcript` it is made from the data as with `--load-json`, and `bilingual:CODE` shows the translation in a second column headed `Polish, own translation`. *About this copy* names it in the *Transcript* row (`bilingual with Polish (own translation)`) and adds the run to *Downloaded* (`…; updated 22.11.2026 14:05`); *Video formats* lists the translations of your own the page shows. The *Command* row leaves them out: a command cannot get them from YouTube.
+- **Options:** those that shape the page, as with `--load-json`; `--video`, `--overwrite`, `--index`, `--index-only` and the other JSON options are errors.
 
 ### Archiving many videos
 
@@ -332,6 +342,7 @@ Above *About this copy*, *Video formats* is folded to a grey line with a short s
 - **Image** by quality (YouTube's name for it, as in its quality menu, with the frame rate, e.g. `1080p, 30 fps`), resolution (the actual size of the image, e.g. `1920×1080`; YouTube calls a wide `1920×804` or a vertical `1080×1920` "1080p" too) and codec (h264, av1, vp9; formats for YouTube Premium accounts in their own columns; HLS formats only named, since YouTube gives no reliable size for them) with approximate sizes including the audio. A quality a download of the video can take (up to 1080p, in AV1 or H.264) has its parameter in brackets, e.g. `1080p, 30 fps (1080p30)`.
 - **Languages:** one row per audio track (code, language, role: original, dubbed by the author, auto-dubbed by YouTube, audio description; a single track whose language YouTube does not give takes the original language shown in the *Transcript* row) with the subtitles in that language (by the author, and auto-generated from that track's speech: a dub has its own); subtitles without such audio in rows of their own (the languages with audio first, the original's first).
 - **Machine translation:** a line on YouTube's machine translation of subtitles (`machine-translated subtitles: possible in 155 other languages for each row with subtitles`, made on request; without subtitles `none (no subtitles to translate)`; `unknown (…)` when YouTube listed no languages, or when the list could not be read, which making the page again later usually fixes).
+- **Translations of your own** (`--merge-json`) that the page shows: a line under it, `own translations: pl (added 22.11.2026), de (added 25.11.2026)`, the codes in yellow.
 - **Colours:** cells in blue show what `--video` takes by default: the best quality up to 1080p in AV1, else H.264, with the original audio, as mp4. Cells in yellow show what `--video` downloaded, including the codes of downloaded subtitles and, in the line on machine translation, the translations (`downloaded: pl (from en)`); when it took something else, the default stays blue. Tracks and subtitles only found next to the page are yellow too (their language and kind are certain); a video only found is not (its variant is not known).
 
 When YouTube sent no video or audio formats at all (it happens for a while, e.g. after several requests for the same video in a row; only the small preview images for the seek bar come), the section says so in one line; making the page again later usually brings them. The *Video file* row of *About this copy* says what `--video` downloaded, by day (`downloaded 12.11.2026: 1080p, 30 fps av1 + en-US aac, mp4, 293 MB; extra audio m4a: pl (dubbed), 69 MB`), then the files it only found next to the page, without a day (`next to the page: video 01 Title [id].mp4, 293 MB; subtitles srt: pl (translated)`), else `not downloaded`, and notes how the list came about (with or without Deno, signed in or not).
@@ -374,7 +385,7 @@ At the bottom of every page, *About this copy* is folded to a single grey line w
 
 - **Fetching fails after it used to work:** YouTube changes often and yt-dlp follows within days; update first with `uv tool upgrade yt-video-archiver`. `yt2html --version` shows the yt-dlp version in use.
 - **`Sign in to confirm you're not a bot`, age-restricted video:** use `--cookies firefox`. Firefox works best on Windows; Chrome and Edge encrypt their cookies in a way yt-dlp often cannot read.
-- **A translation fails with `HTTP 429`:** YouTube refuses auto-translated captions to downloads at times (in November 2026 for days, also to yt-dlp alone, with cookies and from other networks). The page is made without it; try again later: `--update-json` with the same `--transcript` for the bilingual transcript (keeps the comments; needs the saved data) or `--overwrite`, the same `--video` for `sub:` subtitles.
+- **A translation fails with `HTTP 429`:** YouTube refuses auto-translated captions to downloads at times (in November 2026 for days, also to yt-dlp alone, with cookies and from other networks). The page is made without it; try again later: `--update-json` with the same `--transcript` for the bilingual transcript (keeps the comments; needs the saved data) or `--overwrite`, the same `--video` for `sub:` subtitles. Or translate the subtitles yourself and merge the translation with `--merge-json` (see *Saved data*).
 - **`No transcript: ...` although YouTube shows *Show transcript*:** look for a yt-dlp warning about subtitles and a missing PO token; updating yt-dlp usually helps.
 - **`Could not read them ...; using yt-dlp chapters instead`:** the page is made, but without the AI summary, People mentioned and similar sections, and with chapters under a plain `Chapters` heading (*About this copy* says so in its *Video page* row). Usually temporary; run again with `--overwrite`.
 - **`Chapter source unclear: ...`:** the chapters are on the page, only without the grey origin note. Please report the video: YouTube has probably changed something.

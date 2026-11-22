@@ -122,10 +122,12 @@ CAPTION_KEY = "yt2html_default_caption_track"
 TRANSLATIONS_KEY = "yt2html_translation_languages"
 
 # The transcript: {language, name, kind, cues: [{start, text}], translations:
-# {lang: {language, name, cues}}, missing: {lang: {reason, refused, date}}}
+# {lang: {language, name, cues, own?}}, missing: {lang: {reason, refused, date}}}
 # (missing: the translations left out; refused ones are asked for again by
-# --update-json); None if the video has none, absent without --transcript.
-# All versions on the page are built from the same cues.
+# --update-json; own: {file, date} for a translation of one's own that
+# --merge-json took from an SRT file, the others are YouTube's); None if the
+# video has none, absent without --transcript. All versions on the page are
+# built from the same cues.
 TRANSCRIPT_KEY = "yt2html_transcript"
 
 # The author's info cards: [{type, title, url, image, details, message, start}];
@@ -1288,6 +1290,15 @@ def translations_of(transcript: dict) -> dict[str, dict]:
     return transcript.get("translations") or {}
 
 
+def own_shown(transcript: dict | None, spec: list | None) -> list[tuple[str, str]]:
+    """[(language, day added)] of the translations of one's own (--merge-json)
+    that the page shows: those of its bilingual versions."""
+    translations = translations_of(transcript or {})
+    return [(language, translations[language]["own"].get("date") or "")
+            for language in bilingual_languages(spec or [])
+            if (translations.get(language) or {}).get("own")]
+
+
 def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
                      translate_to: list[str] | None = None,
                      not_before: float = 0.0) -> dict | None:
@@ -2276,7 +2287,8 @@ def render_bilingual_transcript(transcript: dict, translation: dict,
     cues = transcript.get("cues") or []
     translated = dict(zip(map(id, cues), align_translation(cues, translation.get("cues") or [])))
     original_label = transcript_note(transcript)
-    target_label = f'{translation.get("name") or translation.get("language")}, auto-translated'
+    target_label = (f'{translation.get("name") or translation.get("language")}, '
+                    + ("own translation" if translation.get("own") else "auto-translated"))
     parts = [f'<div class="bi-row bi-head"><span class="time"></span>'
              f'<span class="text">{esc(original_label)}</span>'
              f'<span class="text">{esc(target_label)}</span></div>']
@@ -3138,6 +3150,10 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
         parts.append("--no-cards")
     if no_avatars:
         parts.append("--no-avatars")
+    # a translation of one's own does not come from YouTube: its bilingual
+    # version is left out, and --transcript too when nothing else is shown
+    own = {language for language, _ in own_shown(info.get(TRANSCRIPT_KEY), spec)}
+    spec = [(version, language) for version, language in spec if language not in own]
     if TRANSCRIPT_KEY in info and spec:   # the option alone means plain
         versions = format_transcript_spec(spec)
         parts += ["--transcript"] + ([versions] if versions != "plain" else [])
@@ -3237,7 +3253,9 @@ def about_transcript(info: dict, spec: list) -> str:
     translations = translations_of(transcript)
 
     def translated(language):
-        return f'{esc((translations.get(language) or {}).get("name") or language)} (auto-translated)'
+        translation = translations.get(language) or {}
+        kind = "own translation" if translation.get("own") else "auto-translated"
+        return f'{esc(translation.get("name") or language)} ({kind})'
 
     versions = [f"bilingual with {translated(language)}" if version == "bilingual" else version
                 for version, language in spec if version != "bilingual" or language in translations]
@@ -3913,10 +3931,22 @@ NO_FORMATS = "no video or audio formats in the data"
 NO_FORMATS_WHY = "YouTube sometimes sends none for a while"
 
 
-def render_video_formats(info: dict) -> str:
+def own_translations_line(own: list[tuple[str, str]]) -> str:
+    """"own translations: de, en (added 22.11.2026), fr (added 25.11.2026)":
+    the codes yellow (this copy has them), by the day they were added."""
+    days = {}
+    for language, day in sorted(own, key=lambda item: (item[1], item[0])):
+        days.setdefault(day, []).append(f'<span class="chosen">{esc(language)}</span>')
+    return "own translations: " + ", ".join(
+        f'{", ".join(codes)} (added {esc(format_date(day))})' for day, codes in days.items())
+
+
+def render_video_formats(info: dict, own: list[tuple[str, str]] = ()) -> str:
     """The Video formats section above "About this copy": folded to one grey
-    line with the summary; open, the tables. Without formats, one line that
-    says so (it looks like a fault of the page otherwise)."""
+    line with the summary; open, the tables, and under them the translations
+    of one's own the page shows (`own`: [(language, day added)]). Without
+    formats, one line that says so (it looks like a fault of the page
+    otherwise)."""
     overview = video_overview(info)
     if overview is None:
         return ('<details class="formats-info"><summary>Video formats<span class="rest"> · '
@@ -3941,6 +3971,8 @@ def render_video_formats(info: dict) -> str:
                                    {(r, 3 + c) for r, c in languages["picks"]},
                                    {(r, 3 + c) for r, c in languages["chosen"]}))
     parts.append(f'<div class="translation">{languages["translation"]}</div>')
+    if own:
+        parts.append(f'<div class="translation">{own_translations_line(own)}</div>')
     rest = f'<span class="rest"> · {overview["summary"]}</span>' if overview["summary"] else ""
     return (f'<details class="formats-info"><summary>Video formats{rest}</summary>\n'
             + "".join(parts) + "</details>")
@@ -4274,7 +4306,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
             body.append(render_comment(c, children, avatars, video_id, duration, uploader))
         body.append("</section>")
 
-    body.append(render_video_formats(info))
+    body.append(render_video_formats(info, own_shown(info.get(TRANSCRIPT_KEY), spec)))
     body.append(render_about(info, archived, thumbnail, avatar_uris, extra_images or {},
                              spec, theme, show_snapshot, no_avatars, from_json,
                              built or dt.datetime.now(), video_files, video_size))
@@ -4840,6 +4872,119 @@ def video_added(result: dict, previous: dict) -> list[str]:
     return added
 
 
+# --------------------------------------------------------------------------
+# --merge-json: a translation of one's own (an SRT file) into the saved data
+# --------------------------------------------------------------------------
+
+# "Title [ID].pl.own.srt": "own" sets it apart from the kinds of YouTube's
+# subtitles in file names (author, auto-generated, translated)
+OWN_SRT = re.compile(r"\.([A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)\.own\.srt$", re.IGNORECASE)
+SRT_TIMING = re.compile(r"^\s*(\d+):(\d{2}):(\d{2})[,.](\d{3})\s*-->")
+
+
+def srt_cues(path: Path) -> list[dict]:
+    """The lines of an SRT file as transcript cues: [{start (s), text}], the
+    text of a line on one line. Raises ValueError for what is not SRT or a
+    line without text."""
+    raw = path.read_bytes().decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    cues = []
+    for block in re.split(r"\n\s*\n", raw.strip()):
+        lines = block.split("\n")
+        at = next((i for i, line in enumerate(lines[:2]) if SRT_TIMING.match(line)), None)
+        if at is None:
+            raise ValueError(f"{path.name} is not an SRT file (block {len(cues) + 1}: "
+                             f"{lines[0][:40]!r})")
+        h, m, sec, ms = map(int, SRT_TIMING.match(lines[at]).groups())
+        text = " ".join(" ".join(lines[at + 1:]).split())
+        if not text:
+            raise ValueError(f"line {len(cues) + 1} of {path.name} has no text")
+        cues.append({"start": round(h * 3600 + m * 60 + sec + ms / 1000, 3), "text": text})
+    return cues
+
+
+def check_own_cues(cues: list[dict], transcript: dict) -> None:
+    """The translation must have the transcript's lines: as many, each from
+    the same moment (so the file was made from the same captions); raises
+    ValueError otherwise."""
+    saved = transcript.get("cues") or []
+    track = transcript_note(transcript)
+    if len(cues) != len(saved):
+        raise ValueError(f"{plural(len(cues), 'line')} in the file, {len(saved)} in the "
+                         f"transcript ({track}): not made from the transcript's captions")
+    for number, (cue, line) in enumerate(zip(cues, saved), 1):
+        if round(cue["start"] * 1000) != round(float(line.get("start") or 0) * 1000):
+            raise ValueError(f"line {number} starts at {srt_time(round(cue['start'] * 1000))}, "
+                             f"the transcript's at {srt_time(round(float(line.get('start') or 0) * 1000))} "
+                             f"({track}): not made from the transcript's captions")
+
+
+def merge_own_translation(source: str, args: argparse.Namespace,
+                          outcome: dict | None = None) -> Path | None:
+    """--merge-json: a translation of one's own, "Title [ID].CODE.own.srt",
+    into the saved data next to it (the ".info.json" file with the same id),
+    as the transcript's translation into CODE; then, with --transcript, the
+    page from the data as with --load-json. Nothing is asked of YouTube. A
+    translation of one's own replaces an earlier one; one from YouTube in the
+    same language is never replaced. Raises ValueError, with nothing saved,
+    when the file does not fit the data."""
+    path = Path(source)
+    if not path.is_file():
+        raise ValueError(f"no file matches {source}" if has_wildcards(source)
+                         else f"no such file: {source}")
+    named = OWN_SRT.search(path.name)
+    if not named:
+        raise ValueError(f"{path.name}: the name of a translation of your own ends with "
+                         "'.CODE.own.srt', e.g. 'Title [ID].pl.own.srt'")
+    language = standard_code(named.group(1))
+    if not recognised_code(language, set()):
+        raise ValueError(f"{path.name}: '{named.group(1)}' is not a language code "
+                         "(e.g. pl, en, pt-BR)")
+    video_id = id_in_name(path.name, playlists=False)
+    if not video_id:
+        raise ValueError(f"{path.name}: no [VIDEO_ID] in the name")
+    data_path = file_with_id(path.parent, video_id, (".info.json",), "saved data files")
+    if not data_path:
+        raise ValueError(f"no saved data for {video_id} next to the file "
+                         f"(looked for *[{video_id}]*.info.json in {path.parent})")
+    log(f"Merging {path.name} into {data_path}")
+    info = json.loads(data_path.read_text(encoding="utf-8"))
+    transcript = info.get(TRANSCRIPT_KEY)
+    if not transcript:
+        raise ValueError("the saved data have no transcript to translate (download it "
+                         "with --update-json --transcript first)")
+    if base_language(language) == base_language(transcript.get("language")):
+        raise ValueError(f"'{language}' is the language of the transcript itself "
+                         f"({transcript_note(transcript)})")
+    earlier = translations_of(transcript).get(language)
+    if earlier and not earlier.get("own"):
+        raise ValueError(f"the saved data have YouTube's translation into '{language}'; "
+                         "a translation of your own is not merged over it")
+    cues = srt_cues(path)
+    check_own_cues(cues, transcript)
+    if earlier:
+        log(f"  Replaces the own translation into '{language}' added on "
+            f"{format_date(earlier['own']['date'])}.")
+    transcript.setdefault("translations", {})[language] = {
+        "language": language,
+        "name": (info.get(TRANSLATIONS_KEY) or {}).get(language) or language,
+        "cues": cues, "own": {"file": path.name, "date": dt.date.today().isoformat()}}
+    transcript.get("missing", {}).pop(language, None)   # (not asked of YouTube again)
+    if not transcript.get("missing"):
+        transcript.pop("missing", None)
+    note_update(info, {}, [f"own translation {language}"])
+    write_atomically(data_path, json.dumps(info, ensure_ascii=False, indent=1))
+    log(f"Updated metadata: {data_path} (own translation into '{language}', "
+        f"{plural(len(cues), 'line')})")
+    if not args.transcript:
+        log(f"  The page is unchanged; to show the translation: yt2html --load-json "
+            f"\"{data_path}\" --transcript plain,bilingual:{language}")
+        return data_path
+    if language not in bilingual_languages(args.transcript):
+        log(f"  The page does not show it: --transcript has no bilingual:{language}.")
+    return archive(str(data_path), argparse.Namespace(**{**vars(args), "merge_json": False,
+                                                         "load_json": True}), None, outcome)
+
+
 PLAYLIST_ERROR = "this URL leads to a playlist or channel, not a single video"
 CHANNEL_ERROR = ("this is a channel URL; only videos and playlists are supported "
                  "(open the channel's playlist and use its URL)")
@@ -4860,6 +5005,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     saves the data (with --write-json) and the page again from it, with the
     images already downloaded.
     """
+    if getattr(args, "merge_json", False):
+        return merge_own_translation(source, args, outcome)
     outcome = {} if outcome is None else outcome
     output_dir = Path(args.output_dir)
     adding = args.update_json or args.refresh_json     # to saved data, if there are any
@@ -5696,9 +5843,10 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
     youtu.be/ID and watch?v=ID); anything else (playlist URLs, .info.json
     paths) must match exactly. Raises ValueError if there is nothing to do.
     """
-    what = "file" if args.load_json else "URL"
+    files = args.load_json or args.merge_json   # file names as they are
+    what = "file" if files else "URL"
     seen = set()
-    if args.load_json:
+    if files:
         args.sources = [path for source in args.sources for path in expand_pattern(source)]
     else:
         adding = args.update_json or args.refresh_json
@@ -5708,7 +5856,7 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
                                      if adding and "://" not in source else [source])]
 
     def new(source: str) -> bool:
-        key = source if args.load_json else (source_video_id(source) or source)
+        key = source if files else (source_video_id(source) or source)
         if key in seen:
             return False
         seen.add(key)
@@ -5746,7 +5894,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "made by yt2html ('Title [ID].html'); a playlist archives all its "
                              "videos. With --load-json: .info.json file(s), also as patterns "
                              "with * or ?, or video id(s) or page names, looked up in the "
-                             "output folder (-o). Not with --index / --index-only (the videos "
+                             "output folder (-o). With --merge-json: SRT files of your own "
+                             "translations. Not with --index / --index-only (the videos "
                              "then come from the list file)")
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
                         help="folder for the generated pages (default: the current folder)")
@@ -5770,7 +5919,7 @@ def parse_args(argv=None) -> argparse.Namespace:
              "plain (continuous text), timestamps (one line per caption), bilingual:CODE "
              "(timestamps with YouTube's translation into that language in a second "
              "column, e.g. bilingual:pl; left out with a note if YouTube has "
-             "none or refuses it). "
+             "none or refuses it; or your own translation merged with --merge-json). "
              "Write the address first: yt2html URL --transcript plain,bilingual:pl")
     parser.add_argument("--theme", choices=THEMES, default="auto", type=str.lower,
                         help="colour theme of the page: auto (default; follows the light/dark "
@@ -5857,6 +6006,17 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="build pages only from saved .info.json files (or video ids "
                              "looked up in -o), without YouTube; existing pages are always "
                              "replaced; a missing file fails that video, nothing is downloaded")
+    parser.add_argument("--merge-json", action="store_true",
+                        help="merge a translation of your own into the saved data: the "
+                             "files given are SRT files named 'Title [ID].CODE.own.srt' "
+                             "(also as patterns with * or ?), each made from the subtitles "
+                             "of the transcript (the same lines, the same times) and merged "
+                             "into the .info.json file with the same id next to it, as the "
+                             "transcript's translation into CODE (an earlier own one is "
+                             "replaced, YouTube's never); nothing is asked of YouTube. With "
+                             "--transcript, the page is then made from the data as with "
+                             "--load-json (bilingual:CODE shows the translation); without "
+                             "it, the page stays as it is")
     args = parser.parse_args(argv)
     # the options that only write a list file: (what they do, what may go with them)
     alone = {"reverse": ("only writes the list of an index page", ()),
@@ -5892,7 +6052,7 @@ def parse_args(argv=None) -> argparse.Namespace:
             ("--update-json", args.update_json), ("--refresh-json", args.refresh_json),
             ("--no-comments", args.no_comments), ("--max-comments", args.max_comments is not None),
             ("--no-cards", args.no_cards), ("--no-avatars", args.no_avatars),
-            ("--transcript", bool(args.transcript)),
+            ("--transcript", bool(args.transcript)), ("--merge-json", args.merge_json),
             ("--theme", args.theme != "auto"), ("--no-snapshot", args.no_snapshot),
             ("--video", args.video is not None)) if on]
         if used:
@@ -5901,11 +6061,22 @@ def parse_args(argv=None) -> argparse.Namespace:
     json_options = [name for name, on in (("--write-json", args.write_json),
                                           ("--update-json", args.update_json),
                                           ("--refresh-json", args.refresh_json),
-                                          ("--load-json", args.load_json)) if on]
+                                          ("--load-json", args.load_json),
+                                          ("--merge-json", args.merge_json)) if on]
     if len(json_options) > 1:
         parser.error(f"{' and '.join(json_options)} cannot be used together (one JSON option "
                      "at a time: --write-json saves with a download, --update-json adds what "
-                     "is missing, --refresh-json also refreshes, --load-json only reads)")
+                     "is missing, --refresh-json also refreshes, --load-json only reads, "
+                     "--merge-json adds a translation of your own)")
+    if args.merge_json:
+        used = [name for name, on in (("--video", args.video is not None),
+                                      ("--overwrite", args.overwrite),
+                                      ("--index", args.index is not None),
+                                      ("--index-only", args.index_only is not None)) if on]
+        if used:
+            parser.error(f"--merge-json only merges SRT files into saved data (and makes "
+                         f"their pages with --transcript), so it cannot be used with "
+                         f"{', '.join(used)}")
     for name, on in (("--update-json", args.update_json), ("--refresh-json", args.refresh_json)):
         if on and args.overwrite:
             parser.error(f"--overwrite downloads everything again and {name} keeps the saved "
@@ -5936,8 +6107,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
-    if args.load_json and args.cookies_from_browser:
-        log("Note: --cookies-from-browser has no effect with --load-json (nothing is downloaded).")
+    if (args.load_json or args.merge_json) and args.cookies_from_browser:
+        log(f"Note: --cookies-from-browser has no effect with "
+            f"{'--load-json' if args.load_json else '--merge-json'} (nothing is downloaded).")
     try:
         args.sources = collect_sources(args)
     except ValueError as error:

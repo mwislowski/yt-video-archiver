@@ -234,7 +234,17 @@ def test_load_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
 @pytest.mark.parametrize("options, message", [
     (["--load-json", "--write-json"], "--write-json and --load-json cannot be used together "
      "(one JSON option at a time: --write-json saves with a download, --update-json adds what "
-     "is missing, --refresh-json also refreshes, --load-json only reads)"),
+     "is missing, --refresh-json also refreshes, --load-json only reads, --merge-json adds a "
+     "translation of your own)"),
+    (["--merge-json", "--load-json"], "--load-json and --merge-json cannot be used together"),
+    (["--merge-json", "--refresh-json"], "--refresh-json and --merge-json cannot be used together"),
+    (["--merge-json", "--video"], "--merge-json only merges SRT files into saved data (and "
+     "makes their pages with --transcript), so it cannot be used with --video"),
+    (["--merge-json", "--overwrite", "--index", "list.txt"], "so it cannot be used with "
+     "--overwrite, --index"),
+    (["--merge-json", "--index-only", "list.txt"], "so it cannot be used with --index-only"),
+    (["--merge-json", "--video-formats"], "--video-formats makes no page, so it cannot be "
+     "used with --merge-json"),
     (["--refresh-json", "--update-json"], "--update-json and --refresh-json cannot be used together"),
     (["--refresh-json", "--overwrite"], "--overwrite downloads everything again and "
      "--refresh-json keeps the saved data; use one of them"),
