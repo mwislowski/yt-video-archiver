@@ -139,8 +139,9 @@ def test_a_removed_video_fails_and_saves_nothing(tmp_path, capsys):
 
 def test_channel_list_newest_and_a_day(tmp_path):
     """--channel-list (unofficial): the newest videos of a channel, then the day of
-    the third of them as the period: the two steps must find it (the list gives
-    only approximate dates, so this checks the margin on real data)."""
+    the oldest of them (the list is written oldest first) as the period: the two
+    steps must find it (the list gives only approximate dates, so this checks the
+    margin on real data)."""
     import yt2html_index as index
     channel = "UCw3L8lysSdQpNaeGLBqnr5A"     # getitjob, the Python course's channel
     newest = tmp_path / "newest.txt"
@@ -148,11 +149,12 @@ def test_channel_list_newest_and_a_day(tmp_path):
     ids = [item.ref for item in index.read_list_file(str(newest)).items()]
     assert len(ids) == 3
     args = yt2html.parse_args(["--channel-list", channel, str(tmp_path / "x.txt"), "last:1"])
-    day = index.exact_day(ids[2], args)
+    day = index.exact_day(ids[0], args)
     assert day is not None
     period = tmp_path / "day.txt"
     assert yt2html.main(["--channel-list", channel, str(period),
                          day.strftime("%d.%m.%Y")]) == 0
     text = period.read_text(encoding="utf-8")
-    assert f"= !date: {day.strftime('%d.%m.%Y')}\n{ids[2]}\n" in text
+    assert f"= !date: {day.strftime('%d.%m.%Y')}\n{ids[0]}\n" in text
     assert "// ~" in newest.read_text(encoding="utf-8")           # last:N: approximate dates
+    assert "; oldest first\n" in newest.read_text(encoding="utf-8")

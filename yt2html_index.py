@@ -1511,6 +1511,19 @@ def approximate_comment(entry: dict) -> str | None:
     return f"// ~{shown}"
 
 
+def oldest_first(chosen: list[list]) -> list[list]:
+    """The chosen videos oldest first (the user, 23.11.2026): the channel's
+    list turned round (its Videos tab lists the newest first), then sorted by
+    the best day known, the exact one, else the list's approximate one (the
+    last item of each video); a video with neither stays after the one before
+    it. The sort is stable, so videos of one day keep the turned-round order."""
+    ordered, keys, key = chosen[::-1], [], dt.date.min
+    for video in ordered:
+        key = (video[2] if isinstance(video[2], dt.date) else None) or video[3] or key
+        keys.append(key)
+    return [video for _, video in sorted(zip(keys, ordered), key=lambda pair: pair[0])]
+
+
 def fetch_channel(url: str, args: argparse.Namespace):
     """yt-dlp's flat list of a channel tab, with approximate dates: first the
     channel's data, then its videos one by one, newest first, a page read only
@@ -1541,7 +1554,9 @@ def channel_list(args: argparse.Namespace) -> int:
     the exit code."""
     url, choice, target, taken = args.channel
     period = None if isinstance(choice, int) else choice
-    chosen, read, stopped = [], 0, False   # [id, title, day (last:N: its comment) or None]
+    # [id, title, exact day (last:N: the approximate one as a comment) or None,
+    #  the list's approximate day or None]
+    chosen, read, stopped = [], 0, False
     core.log(f"Reading the videos of {url} (newest first)...")
     try:
         entries = fetch_channel(url, args)
@@ -1551,8 +1566,10 @@ def channel_list(args: argparse.Namespace) -> int:
             if not video_id or entry.get("live_status") == "is_upcoming":
                 continue
             read += 1
+            approximate = (approximate_day(entry) or [None])[0]
             if period is None:
-                chosen.append([video_id, entry.get("title"), approximate_comment(entry)])
+                chosen.append([video_id, entry.get("title"), approximate_comment(entry),
+                               approximate])
                 if len(chosen) == choice:
                     break
                 continue
@@ -1560,7 +1577,7 @@ def channel_list(args: argparse.Namespace) -> int:
             if days and days[1] < period[0]:
                 break                           # older from here on
             if not days or days[0] <= period[1]:
-                chosen.append([video_id, entry.get("title"), None])
+                chosen.append([video_id, entry.get("title"), None, approximate])
             if read >= READ_MAX:
                 stopped = True
                 break
@@ -1607,13 +1624,13 @@ def channel_list(args: argparse.Namespace) -> int:
     lines = [f"# {name}",
              f"// {url}, {args.channel_list[2]}: made by yt2html --channel-list on "
              f"{dt.date.today().strftime(core.DATE_FORMAT)}; titles as YouTube lists them "
-             "(may be translated), so in comments"]
+             "(may be translated), so in comments; oldest first"]
     if stopped:
         lines.append(f"// stopped after {READ_MAX} videos of the list; older ones were not read")
     # the date on a line of its own under the title (the user, 22.11.2026): an exact
     # one as "= !date:" (the page's own date: nothing changes, and a row not yet
     # downloaded shows it), the list's approximate one as a comment
-    for video_id, title, day in chosen:
+    for video_id, title, day, _ in oldest_first(chosen):
         lines += ["", f"// {title or video_id}"]
         if period:
             lines.append(f"= !date: {day.strftime(core.DATE_FORMAT)}" if day

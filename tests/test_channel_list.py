@@ -156,15 +156,16 @@ def test_the_newest_n(tmp_path, capsys, channel):
     text = target.read_text("utf-8")
     assert text == (f"# Some Body\n// {CHANNEL}, last:2: made by yt2html --channel-list on "
                     f"{dt.date.today().strftime('%d.%m.%Y')}; titles as YouTube lists them "
-                    "(may be translated), so in comments\n"
+                    "(may be translated), so in comments; oldest first\n"
+                    f"\n// Video 3\n// ~{(TODAY - dt.timedelta(days=40)).strftime('%m.%Y')}"
+                    "\nCHANNELVI03\n"
                     f"\n// Video 2\n// ~{(TODAY - dt.timedelta(days=1)).strftime('%d.%m.%Y')}\n"
-                    f"CHANNELVI02\n\n// Video 3\n// ~{(TODAY - dt.timedelta(days=40)).strftime('%m.%Y')}"
-                    "\nCHANNELVI03\n")
+                    "CHANNELVI02\n")   # the newest two, oldest first
     assert channel["read"] == 4 and channel["asked"] == []      # stops there; no dates asked
     assert f"Saved list: {target} (2 videos)" in out
     assert index.read_list_file(str(target)).title == "Some Body"   # a list file as it is
-    assert [i.ref for i in index.read_list_file(str(target)).items()] == ["CHANNELVI02",
-                                                                          "CHANNELVI03"]
+    assert [i.ref for i in index.read_list_file(str(target)).items()] == ["CHANNELVI03",
+                                                                          "CHANNELVI02"]
 
 
 # A period ---------------------------------------------------------------------------
@@ -196,14 +197,16 @@ def test_a_period_in_two_steps(tmp_path, capsys, channel):
     assert f"  3/5 CHANNELVI04: 07.07.{year}" in out
     assert "  5/5 CHANNELVI06: date not read (Video unavailable); kept in the list" in out
     text = target.read_text("utf-8").split("\n", 2)[2]
-    assert text == (f"\n// Video 3\n= !date: 01.06.{year}\nCHANNELVI03\n\n"
-                    f"// Video 4\n= !date: 07.07.{year}\nCHANNELVI04\n\n"
+    # oldest first, by the exact day, else the list's approximate one (6 and 5);
+    # 4 is listed after 3 but published later: the date decides
+    assert text == ("\n// Video 6\n// date not read\nCHANNELVI06\n\n"
                     "// Video 5\n// date not read\nCHANNELVI05\n\n"
-                    "// Video 6\n// date not read\nCHANNELVI06\n")   # 2: after the period
+                    f"// Video 3\n= !date: 01.06.{year}\nCHANNELVI03\n\n"
+                    f"// Video 4\n= !date: 07.07.{year}\nCHANNELVI04\n")   # 2: after the period
     listing = index.read_list_file(str(target))                       # a list file as it is
     assert [(i.ref, i.date) for i in listing.items()] == [
-        ("CHANNELVI03", f"01.06.{year}"), ("CHANNELVI04", f"07.07.{year}"),
-        ("CHANNELVI05", None), ("CHANNELVI06", None)]
+        ("CHANNELVI06", None), ("CHANNELVI05", None),
+        ("CHANNELVI03", f"01.06.{year}"), ("CHANNELVI04", f"07.07.{year}")]
     assert f", {year}: made by yt2html --channel-list on " in target.read_text("utf-8")
     assert period == index.channel_choice(str(year))
 
@@ -343,3 +346,35 @@ def test_the_newest_n_without_a_date(tmp_path, capsys, channel):
     channel["entries"] = [entry(1, None)]
     run(capsys, "@somebody", str(tmp_path / "list.txt"), "last:1")
     assert (tmp_path / "list.txt").read_text("utf-8").endswith("\n\n// Video 1\nCHANNELVI01\n")
+
+
+def test_oldest_first():
+    day = dt.date(2025, 3, 1)
+    later = dt.date(2025, 4, 1)
+    # as the list gives them, newest first: [id, title, exact day or comment, approximate]
+    chosen = [["A", "", later, later],
+              ["B", "", None, None],              # no date at all: stays after the next older
+              ["C", "", day, later],              # exact day before the approximate one
+              ["D", "", "// ~03.2025", day],      # last:N: a comment, the approximate day counts
+              ["E", "", day, None],               # the same day as C, listed later: older
+              ["F", "", None, None]]              # nothing older: first
+    assert [video[0] for video in index.oldest_first(chosen)] == ["F", "E", "D", "C", "B", "A"]
+    # listed oldest, but the approximate day says later: moved (F stays after it)
+    chosen.append(["G", "", None, dt.date(2025, 3, 15)])
+    assert [video[0] for video in index.oldest_first(chosen)] == ["E", "D", "C", "B", "G", "F", "A"]
+    assert index.oldest_first([]) == []
+
+
+def test_a_list_not_newest_first(tmp_path, capsys, channel):
+    # YouTube's Videos tab lists the newest first; if it does not, the dates decide
+    channel["entries"] = [entry(1, 40), entry(2, 1), entry(3, 400)]
+    run(capsys, "@somebody", str(tmp_path / "last.txt"), "last:3")
+    assert [i.ref for i in index.read_list_file(str(tmp_path / "last.txt")).items()] == [
+        "CHANNELVI03", "CHANNELVI01", "CHANNELVI02"]
+    year = TODAY.year - 3
+    channel["entries"] = [entry(4, (TODAY - dt.date(year, 3, 1)).days),
+                          entry(5, (TODAY - dt.date(year, 9, 1)).days)]
+    channel["days"] = {"CHANNELVI04": None, "CHANNELVI05": None}     # no exact day read
+    run(capsys, "@somebody", str(tmp_path / "period.txt"), str(year))
+    assert [i.ref for i in index.read_list_file(str(tmp_path / "period.txt")).items()] == [
+        "CHANNELVI04", "CHANNELVI05"]
