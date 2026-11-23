@@ -6,7 +6,9 @@ a failure here usually means YouTube changed something the program reads,
 or yt-dlp needs an update. Run them now and then, not on every change.
 """
 
+import datetime as dt
 import re
+import warnings
 
 import pytest
 
@@ -38,6 +40,13 @@ def test_description_chapters_summary_podcast_and_dubbed_transcript(tmp_path):
     assert chapters["id"] == "chapters" and chapters["source"] == "description"
     types = [e["type"] for e in info[yt2html.EXTRAS_KEY]]
     assert "video_summary" in types and "playlists" in types
+    # YouTube showed the podcast in two forms on 23.11.2026; which one, in the
+    # warnings summary at the end of every run (YOUTUBE.local.md 10.1)
+    podcast = next(e for e in info[yt2html.EXTRAS_KEY] if e["type"] == "playlists")
+    newer = podcast["title"] != "Explore the podcast"
+    warnings.warn(f"Z8lf5oWKfj0: the podcast section came in YouTube's "
+                  f"{'newer card' if newer else 'older'} form ({podcast['title']!r}), "
+                  f"{dt.date.today().strftime('%d.%m.%Y')}")
     # auto-dubbed video: the transcript must be the original English one
     assert info[yt2html.TRANSCRIPT_KEY]["language"].startswith("en")
     assert "from description" in html

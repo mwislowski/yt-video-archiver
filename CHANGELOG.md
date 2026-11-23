@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Fixed
+
+- The podcast a video belongs to shows again when YouTube uses its newer podcast card under the description (seen since 23.11.2026) instead of the "Explore the podcast" section: the section is headed "Podcast" and shows the podcast's title, episode count and square cover, linked to its playlist; the card names no author.
+
 ## [0.10.8] - 2026-11-23
 
 ### Added

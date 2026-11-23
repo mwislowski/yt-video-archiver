@@ -49,6 +49,80 @@ def test_podcast():
                                    "image": "https://img.test/c240"}
 
 
+# Z8lf5oWKfj0 (23.11.2026): YouTube's newer podcast card, as the page saved in
+# the user's browser has it (tracking fields left out)
+PODCAST_CARD = json.loads((Path(__file__).parent / "data" / "podcast_card.json")
+                          .read_text(encoding="utf-8"))
+
+
+def test_podcast_card():
+    podcast = extras(PODCAST_CARD)
+    assert podcast == [{"type": "playlists", "title": "Podcast", "items": [{
+        "title": "The AI Automation Society Podcast",
+        "url": "https://www.youtube.com/playlist?list=PLvQWpZ46MVvhlLM0uLWEGNk4x2Gq_rfxD",
+        "byline": None, "count": "8 episodes",
+        # the smallest cover at least 240 px wide (they are square: 240, 480, 720)
+        "image": PODCAST_CARD["itemSectionRenderer"]["contents"][0]["cardViewModel"]
+                 ["background"]["heroCardBackgroundViewModel"]["image"]["sources"][0]["url"]}]}]
+
+
+def card(**changes):
+    """The podcast card with parts changed: a key path joined by dots, the new value."""
+    item = json.loads(json.dumps(PODCAST_CARD))
+    for path, value in changes.items():
+        node = item["itemSectionRenderer"]["contents"][0]
+        *parents, last = path.split(".")
+        for key in parents:
+            node = node[int(key)] if key.isdigit() else node[key]
+        node[last] = value
+    return item
+
+
+ROWS = ("cardViewModel.bodyContent.heroCardBodyViewModel.bodyContent.linearLayoutViewModel"
+        ".items.0.contentMetadataViewModel.metadataRows")
+
+
+def test_podcast_card_with_parts_missing():
+    def first(**changes):
+        result = extras(card(**changes))
+        return result[0] if result else None
+    # no badge, no link, no count, no cover: what there is
+    podcast = first(**{"cardViewModel.bodyContent.heroCardBodyViewModel.topContent": {},
+                       "cardViewModel.rendererContext": {},
+                       ROWS: [{"metadataParts": [{"text": {"content": "Only a title"}}]}],
+                       "cardViewModel.background": {}})
+    assert podcast == {"type": "playlists", "title": "Podcast", "items": [{
+        "title": "Only a title", "url": None, "byline": None, "count": None, "image": None}]}
+    # parts of one row
+    podcast = first(**{ROWS: [{"metadataParts": [{"text": {"content": "Title"}}]},
+                              {"metadataParts": [{"text": {"content": "8 episodes"}},
+                                                 {"text": {"content": "Updated today"}}]}]})
+    assert podcast["items"][0]["count"] == "8 episodes · Updated today"
+    # a playlist id without "VL" is taken as it is
+    podcast = first(**{"cardViewModel.rendererContext.commandContext.onTap.innertubeCommand"
+                       ".browseEndpoint.browseId": "PLbare"})
+    assert podcast["items"][0]["url"] == "https://www.youtube.com/playlist?list=PLbare"
+    # no title: nothing to show
+    assert first(**{ROWS: []}) is None
+    assert first(**{ROWS: [{"metadataParts": []}]}) is None
+    # another card, or an item section of something else ("Video details")
+    assert first(**{"cardViewModel.accessibilityId": "something_else"}) is None
+    assert extras({"itemSectionRenderer": {"contents": [{"linearLayoutViewModel": {}}]}}) == []
+    # the card after another card in the same section
+    item = json.loads(json.dumps(PODCAST_CARD))
+    item["itemSectionRenderer"]["contents"].insert(0, {"cardViewModel": {"accessibilityId": "x"}})
+    assert extras(item)[0]["items"][0]["count"] == "8 episodes"
+
+
+def test_podcast_card_on_the_page(info):
+    info[yt2html.EXTRAS_KEY] = extras(summary_item("S"), PODCAST_CARD)
+    html = yt2html.render_page(info, None, {}, DAY)
+    section = re.search(r'<section class="desc-extra playlists">.*?</section>', html).group(0)
+    assert section.startswith('<section class="desc-extra playlists"><h2>Podcast</h2>')
+    assert "The AI Automation Society Podcast</a></div><div class=\"meta\">8 episodes</div>" in section
+    assert section.count('class="meta"') == 1        # no author line
+
+
 def test_extras_keep_youtube_order():
     result = extras(summary_item("S"), people_item([("A", "")]), podcast_item())
     assert [e["type"] for e in result] == ["video_summary", "people", "playlists"]

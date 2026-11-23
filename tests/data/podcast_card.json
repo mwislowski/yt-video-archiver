@@ -1,0 +1,117 @@
+{
+ "itemSectionRenderer": {
+  "contents": [
+   {
+    "cardViewModel": {
+     "cardStyle": "CARD_STYLE_TONAL",
+     "background": {
+      "heroCardBackgroundViewModel": {
+       "image": {
+        "sources": [
+         {
+          "url": "https://i.ytimg.com/pl_c/PLvQWpZ46MVvhlLM0uLWEGNk4x2Gq_rfxD/studio_square_thumbnail.jpg?sqp=CKPsjdgG-oaymwEICPABEPABSFqi85f_AwYIl8qz0AY=&rs=AOn4CLCsjP-bW2sQYhdwleqS3jp5pr99VA",
+          "width": 240,
+          "height": 240
+         },
+         {
+          "url": "https://i.ytimg.com/pl_c/PLvQWpZ46MVvhlLM0uLWEGNk4x2Gq_rfxD/studio_square_thumbnail.jpg?sqp=CKPsjdgG-oaymwEICOADEOADSFqi85f_AwYIl8qz0AY=&rs=AOn4CLANhPpSNcOmLqSdkReotTyLWSbg6A",
+          "width": 480,
+          "height": 480
+         },
+         {
+          "url": "https://i.ytimg.com/pl_c/PLvQWpZ46MVvhlLM0uLWEGNk4x2Gq_rfxD/studio_square_thumbnail.jpg?sqp=CKPsjdgG-oaymwEICNAFENAFSFqi85f_AwYIl8qz0AY=&rs=AOn4CLA8p2fSHmYgyvaP3zDX4beJ6fMitA",
+          "width": 720,
+          "height": 720
+         }
+        ],
+        "contentMode": "CONTENT_MODE_SCALE_ASPECT_FILL"
+       }
+      }
+     },
+     "bodyContent": {
+      "heroCardBodyViewModel": {
+       "bodyContent": {
+        "linearLayoutViewModel": {
+         "items": [
+          {
+           "contentMetadataViewModel": {
+            "metadataRows": [
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "The AI Automation Society Podcast"
+                },
+                "maxLines": 2,
+                "typographyToken": {
+                 "ytSysTypographyTypestackReference": "YT_SYS_TYPOGRAPHY_TYPESTACK_REFERENCE_HEADLINE_M_HEAVY"
+                },
+                "colorToken": {
+                 "ytSysColorBaselineReference": "YT_SYS_COLOR_BASELINE_REFERENCE_OVERLAY_TEXT_PRIMARY"
+                }
+               }
+              ],
+              "a11yLabel": "The AI Automation Society Podcast"
+             },
+             {
+              "metadataParts": [
+               {
+                "text": {
+                 "content": "8 episodes"
+                },
+                "typographyToken": {
+                 "ytSysTypographyTypestackReference": "YT_SYS_TYPOGRAPHY_TYPESTACK_REFERENCE_BODY_M_HEAVY"
+                },
+                "colorToken": {
+                 "ytSysColorBaselineReference": "YT_SYS_COLOR_BASELINE_REFERENCE_OVERLAY_TEXT_SECONDARY"
+                }
+               }
+              ],
+              "a11yLabel": "8 episodes"
+             }
+            ]
+           }
+          }
+         ],
+         "linearLayoutContainerConfiguration": {
+          "justifyContent": "JUSTIFY_CONTENT_FLEX_END"
+         }
+        }
+       },
+       "topContent": {
+        "thumbnailBadgeViewModel": {
+         "icon": {
+          "sources": [
+           {
+            "clientResource": {
+             "imageName": "PODCAST"
+            }
+           }
+          ]
+         },
+         "text": "Podcast",
+         "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"
+        }
+       }
+      }
+     },
+     "disableTopContentPadding": false,
+     "disableBodyContentPadding": true,
+     "accessibilityId": "podcast_hero_card",
+     "rendererContext": {
+      "commandContext": {
+       "onTap": {
+        "innertubeCommand": {
+         "browseEndpoint": {
+          "browseId": "VLPLvQWpZ46MVvhlLM0uLWEGNk4x2Gq_rfxD"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  ],
+  "sectionIdentifier": "hero-card"
+ }
+}

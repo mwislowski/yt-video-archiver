@@ -777,7 +777,8 @@ def parse_description_extras(data: dict) -> list[dict]:
       people          "People mentioned": {title, subtitle, info, people:
                       [{name, description, image}]}
       playlists       "Explore the podcast" (or course): {title, items:
-                      [{title, url, byline, count, image}]}
+                      [{title, url, byline, count, image}]}; also from
+                      YouTube's newer podcast card ("Podcast", no byline)
     `info` is attributed text: {text, links: [{start, length, url}]}.
     """
     extras = []
@@ -791,6 +792,10 @@ def parse_description_extras(data: dict) -> list[dict]:
             playlists = parse_playlist_section(item["videoDescriptionCourseSectionRenderer"])
             if playlists:
                 extras.append(playlists)
+            continue
+        podcast = parse_podcast_card(item)
+        if podcast:
+            extras.append(podcast)
             continue
         metadata = item.get("expandableMetadataRenderer")
         if metadata:
@@ -887,6 +892,42 @@ def parse_playlist_section(section: dict) -> dict | None:
         return None
     return {"type": "playlists", "title": text_of(section.get("sectionTitle")) or "Explore the podcast",
             "items": items}
+
+
+def parse_podcast_card(item: dict) -> dict | None:
+    """YouTube's newer form of the podcast section (seen 23.11.2026 on
+    Z8lf5oWKfj0, in place of "Explore the podcast"): an itemSectionRenderer
+    holding a cardViewModel marked "podcast_hero_card", with the podcast's
+    title and episode count as metadata rows, its square cover as the
+    background and the playlist as the tap target. As a "playlists" element
+    headed "Podcast" (the card's badge; it has no heading) and without a
+    byline (it names no author); parts of a row joined with " · ". None for
+    anything else."""
+    for content in (item.get("itemSectionRenderer") or {}).get("contents") or []:
+        card = content.get("cardViewModel") or {}
+        if card.get("accessibilityId") != "podcast_hero_card":
+            continue
+        body = (card.get("bodyContent") or {}).get("heroCardBodyViewModel") or {}
+        layout = (body.get("bodyContent") or {}).get("linearLayoutViewModel") or {}
+        rows = []   # the podcast's title, then "8 episodes"
+        for entry in layout.get("items") or []:
+            for row in (entry.get("contentMetadataViewModel") or {}).get("metadataRows") or []:
+                rows.append(" · ".join(text_of(part.get("text"))
+                                     for part in row.get("metadataParts") or []))
+        if not rows or not rows[0]:
+            continue
+        tap = (((card.get("rendererContext") or {}).get("commandContext") or {})
+               .get("onTap") or {}).get("innertubeCommand") or {}
+        browse_id = (tap.get("browseEndpoint") or {}).get("browseId") or ""
+        playlist_id = browse_id[2:] if browse_id.startswith("VL") else browse_id
+        image = (((card.get("background") or {}).get("heroCardBackgroundViewModel") or {})
+                 .get("image") or {}).get("sources")
+        return {"type": "playlists", "title": "Podcast", "items": [{
+            "title": rows[0],
+            "url": f"{YOUTUBE}/playlist?list={playlist_id}" if playlist_id else None,
+            "byline": None, "count": rows[1] if len(rows) > 1 else None,
+            "image": best_image_url(image)}]}
+    return None
 
 
 # Info cards: the content is a lockup in the description panel's infocards
