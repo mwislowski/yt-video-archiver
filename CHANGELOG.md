@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-11-23
+
 ### Added
 
 - `--merge-json` merges a translation of your own into the saved data, for when YouTube refuses its machine translations (`HTTP 429`): translate the subtitles in the video's original language yourself and give the SRT file, named `Title [id].pl.own.srt`. It must have the transcript's lines (the same number, each at the same moment); nothing is asked of YouTube. With `--transcript plain,bilingual:pl` the page is made from the data at once and shows the translation in the second column, headed `Polish, own translation`; *About this copy* names it in the *Transcript* row, *Video formats* lists it in yellow under the languages table, and the *Command* row leaves it out. An own translation can be replaced by a corrected one; YouTube's is never replaced.
@@ -272,7 +274,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.7...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.8...HEAD
+[0.10.8]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.7...v0.10.8
 [0.10.7]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.6...v0.10.7
 [0.10.6]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.4...v0.10.5
