@@ -583,6 +583,29 @@ def test_rows_line_up_with_the_title_and_indent_exactly(open_index, layout, thum
     assert part["info"]["right"] == found["intro"]["right"]
 
 
+GAPS = """() => {
+    const box = el => el.getBoundingClientRect();
+    const top = el => box(el.classList.contains('row') ? el.querySelector('.thumb, .play') : el).top;
+    const after = el => Math.round(top(el.nextElementSibling) - box(el).bottom);
+    const title = document.querySelector('.index>h1.title');
+    return {title: after(title), chapters: [...document.querySelectorAll('.index .chapter')].map(after),
+            titleTop: box(title).top, playerTop: box(document.querySelector('.ix-player video')).top}; }"""
+
+
+@pytest.mark.parametrize("layout", ["plain", "compact", "cards"])
+@pytest.mark.parametrize("intro", ["> Intro.\n", ""])
+def test_the_same_gap_under_the_title_and_every_chapter(open_index, layout, intro):
+    """The user, 23.11.2026: a chapter's note was nearly glued to its heading
+    (6 px) while its videos were 12 px away, and the title nearly glued to the
+    list; and the player's top was 12 px above the title's."""
+    found = open_index(f"!layout: {layout}\n# Series\n{intro}a.webm\n## Part\n> Of the chapter.\n"
+                       "b.webm\n## Other\nc.webm\n", files=["a.webm", "b.webm", "c.webm"]
+                       ).evaluate(GAPS)
+    assert found["title"] == 12
+    assert found["chapters"] == [12, 12]                        # a note next, a row next
+    assert found["titleTop"] == found["playerTop"]
+
+
 def test_plain_without_numbers_keeps_the_note_under_the_thumbnail(open_index):
     row = open_index("!numbers: no\n" + LAYOUT_LIST, files=["a.webm", "b.webm"]
                      ).evaluate(MEASURE)["rows"][0]

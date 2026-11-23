@@ -7,6 +7,7 @@ All notable changes to this project. Versions: the second number for new feature
 ### Fixed
 
 - The podcast a video belongs to shows again when YouTube uses its newer podcast card under the description (seen since 23.11.2026) instead of the "Explore the podcast" section: the section is headed "Podcast" and shows the podcast's title, episode count and square cover, linked to its playlist; the card names no author.
+- The index of a list file spaces its headings evenly: the same gap under the list's title and under every chapter, whether a note or a video comes next (a chapter's note sat nearly glued to its heading, and the first video or note to the title), and with the player open the title's top is level with the player's.
 
 ## [0.10.8] - 2026-11-23
 

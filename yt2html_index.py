@@ -934,6 +934,10 @@ INDEX_CSS = """
   margin-bottom:6px;
   font-size:13px;line-height:18px;overflow-wrap:anywhere}
 .index .row .note{margin-bottom:0}
+/* 12 px under the title and under every chapter, a note or a row next alike
+   (a row has 6 px padding of its own); the title's top level with the player's */
+.index>h1.title{margin:0 0 6px}
+.index>h1.title+.note,.index .chapter+.note{margin-top:12px}
 .index .note p{margin:0 0 6px}
 .index .note p:last-child{margin-bottom:0}
 .index .playlist-note .days{color:var(--muted)}
