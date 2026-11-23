@@ -121,6 +121,12 @@ CAPTION_KEY = "yt2html_default_caption_track"
 # Languages YouTube can translate captions into: {code: name}.
 TRANSLATIONS_KEY = "yt2html_translation_languages"
 
+# The language of the audio track the watch page marks as the original
+# (page_original_language()): "pl"; None when none is so marked (a video in
+# one language, or a page without its audio tracks). Kept apart from yt-dlp's
+# formats, which can come without any audio track (YOUTUBE.local.md 15.5).
+ORIGINAL_AUDIO_KEY = "yt2html_original_audio_language"
+
 # The transcript: {language, name, kind, cues: [{start, text}], translations:
 # {lang: {language, name, cues, own?}}, missing: {lang: {reason, refused, date}}}
 # (missing: the translations left out; refused ones are asked for again by
@@ -198,7 +204,7 @@ WATCH_PAGE_KEY = "yt2html_watch_page"
 
 # Keys filled from the watch page; all None when the page cannot be read.
 PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, COMMENTS_MESSAGE_KEY, LICENSE_KEY, CAPTION_KEY,
-             TRANSLATIONS_KEY, CHANNEL_AVATAR_KEY)
+             TRANSLATIONS_KEY, CHANNEL_AVATAR_KEY, ORIGINAL_AUDIO_KEY)
 
 
 # --------------------------------------------------------------------------
@@ -345,12 +351,13 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
         player_response = embedded_json(webpage, "ytInitialPlayerResponse")
         refusal = playability_refusal(player_response)
         info[CAPTION_KEY] = default_caption_track(player_response)
+        info[ORIGINAL_AUDIO_KEY] = page_original_language(player_response)
         info[TRANSLATIONS_KEY] = translation_languages(player_response)
         if info.get("like_count") is None:
             info["like_count"] = like_count(player_response)
         info[WATCH_PAGE_KEY] = "read"
     except Exception:
-        info[CAPTION_KEY] = info[TRANSLATIONS_KEY] = None
+        info[CAPTION_KEY] = info[TRANSLATIONS_KEY] = info[ORIGINAL_AUDIO_KEY] = None
         info[WATCH_PAGE_KEY] = "partial"
     if refusal:
         raise refusal
@@ -536,6 +543,19 @@ def like_count(player_response: dict) -> int | None:
     return int(count) if isinstance(count, str) and count.isdecimal() else None
 
 
+def page_original_language(player_response: dict) -> str | None:
+    """The language of the audio track the watch page marks as the original,
+    by yt-dlp's rule for its language preference 10 (get_language_code_and_
+    preference): "original" in the track's name ("Polish original"; the page
+    is asked for in English), the part of its id before the dot ("pl.4"); an
+    audio description is not the original. None without such a track."""
+    for fmt in (player_response.get("streamingData") or {}).get("adaptiveFormats") or []:
+        name = ((fmt.get("audioTrack") or {}).get("displayName") or "").lower()
+        if "original" in name and "descriptive" not in name:
+            return (fmt["audioTrack"].get("id") or "").split(".")[0] or None
+    return None
+
+
 def default_caption_track(player_response: dict) -> dict | None:
     """Language and kind of the caption track the transcript panel opens with.
 
@@ -560,13 +580,8 @@ def default_caption_track(player_response: dict) -> dict | None:
                     "kind": "asr" if track.get("kind") == "asr" else "manual"}
     # Original audio language: the audio stream marked "original", else the
     # audio track the player starts with.
-    language = None
-    for fmt in (player_response.get("streamingData") or {}).get("adaptiveFormats") or []:
-        audio_track = fmt.get("audioTrack") or {}
-        if "original" in (audio_track.get("displayName") or "").lower():
-            language = (audio_track.get("id") or "").split(".")[0]
-            break
-    language = language or (audio.get("audioTrackId") or "").split(".")[0]
+    language = (page_original_language(player_response)
+                or (audio.get("audioTrackId") or "").split(".")[0])
     if not language:
         indices = audio.get("captionTrackIndices") or [0]
         track = captions[indices[0]] if 0 <= indices[0] < len(captions) else captions[0]
@@ -1037,20 +1052,46 @@ def base_language(code: str | None) -> str:
     return (code or "").removesuffix("-orig").split("-")[0].lower()
 
 
+# What the watch page tells about the transcript's track and languages; a
+# fresh list of formats (yt-dlp alone) has none of it.
+PAGE_CHOICE_KEYS = (CAPTION_KEY, ORIGINAL_AUDIO_KEY, TRANSLATIONS_KEY)
+
+
+def with_page_choices(fresh: dict, page: dict | None) -> dict:
+    """Fresh yt-dlp data with the watch page's PAGE_CHOICE_KEYS from `page`
+    (saved data, or the page's data made now), for choosing the transcript's
+    track and language as the page did."""
+    return {**fresh, **{key: (page or {}).get(key) for key in PAGE_CHOICE_KEYS}}
+
+
 def marked_original_language(info: dict) -> str | None:
-    """The language of the audio marked as the original: yt-dlp's language
-    preference 10, or YouTube's kind in the format's address (audio_kind());
-    a video with one audio language has no such mark."""
+    """The language of the audio marked as the original: in yt-dlp's formats
+    (language preference 10, or YouTube's kind in the format's address,
+    audio_kind()), else on the watch page (ORIGINAL_AUDIO_KEY: yt-dlp can get
+    no audio tracks at all, e.g. when YouTube asks to confirm one is not a
+    bot, imRB4Y2ShoM 23.11.2026). A video with one audio language has no
+    such mark."""
     for fmt in info.get("formats") or []:
         if fmt.get("language") and (fmt.get("language_preference") == 10
                                     or audio_kind(fmt) == "original"):
             return fmt["language"]
-    return None
+    return info.get(ORIGINAL_AUDIO_KEY)
+
+
+def original_uncertain(info: dict) -> bool:
+    """Whether the original language is a guess that may be a dub's: no audio
+    is marked as the original (marked_original_language()), and YouTube
+    recognised speech in more than one language (several "-orig" automatic
+    captions: the video has dubs). Then the transcript's language is that of
+    the captions the watch page opens with, which may be a dub's."""
+    origs = [lang for lang, fmts in (info.get("automatic_captions") or {}).items()
+             if fmts and lang.endswith("-orig")]
+    return len(origs) > 1 and not marked_original_language(info)
 
 
 def original_audio_language(info: dict) -> str | None:
-    """Original audio language as yt-dlp knows it (formats marked "original",
-    else the video's language)."""
+    """Original audio language (the audio marked "original" in the formats or
+    on the watch page, else yt-dlp's language of the video)."""
     return marked_original_language(info) or info.get("language")
 
 
@@ -1061,7 +1102,7 @@ def transcript_language(info: dict) -> str | None:
     in another language can be a dub (8etkFuBLGZ0, 20.11.2026: Polish
     original, an English auto-dub, the English one's captions as default for
     yt-dlp's English request); so an audio marked as the original in another
-    language wins."""
+    language wins (marked in yt-dlp's formats, else on the watch page)."""
     auto = [lang for lang, fmts in (info.get("automatic_captions") or {}).items() if fmts]
     origs = [lang for lang in auto if lang.endswith("-orig")]
     default = (info.get(CAPTION_KEY) or {}).get("language")
@@ -1335,7 +1376,8 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
         return unavailable("YouTube returned it empty")
     original = transcript_language(info)
     transcript = {"language": lang, "name": name, "kind": kind, "cues": cues,
-                  "original": bool(original) and base_language(original) == base_language(lang)}
+                  "original": (bool(original) and base_language(original) == base_language(lang)
+                               and not original_uncertain(info))}
     if translate_to:
         add_translations(ydl, info, transcript, url, translate_to, not_before)
     return transcript
@@ -1807,6 +1849,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 .comments{margin-top:24px}
 .comments h2{font-size:20px;line-height:28px;font-weight:700;margin:0}
 .comments .note{color:var(--muted);font-size:12px;margin:4px 0 16px}
+.transcript .note{color:var(--muted);font-size:12px;margin:-4px 0 12px}
 .comments .note.closed{margin-bottom:0}
 .comment{display:flex;gap:16px;margin-top:16px}
 .comment .body{min-width:0;flex:1}
@@ -2342,6 +2385,29 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
     css = "transcript with-timestamps" if timestamps else "transcript"
     return (f'<section class="{css}"><h2>Transcript{note_html(note)}</h2>'
             f'{"".join(parts)}</section>')
+
+
+def uncertain_note(info: dict) -> str:
+    """The grey note at the top of the transcript when original_uncertain():
+    in which language it is, and what may help (no option names on pages)."""
+    transcript = info.get(TRANSCRIPT_KEY) or {}
+    name = transcript.get("name") or transcript.get("language") or "an unknown language"
+    return (f'<div class="note uncertain">Original language uncertain: YouTube did not send '
+            f'the audio tracks that tell it from the dubs, so this transcript is in '
+            f'{esc(name)}, the captions YouTube opens with. Make the page again later; if '
+            f'YouTube asked to confirm you are not a bot, with your browser&#x27;s cookies.</div>')
+
+
+def uncertain_warning(info: dict) -> str:
+    """The console's warning when original_uncertain(); the advice does not
+    promise that cookies help."""
+    language = transcript_language(info) or "unknown"
+    what = ("the transcript and the page's language are" if info.get(TRANSCRIPT_KEY)
+            else "the page's language is")
+    return (f"  Warning: the original language is uncertain: YouTube sent no audio tracks to "
+            f"tell it from the dubs, so {what} taken as '{language}' (the captions YouTube "
+            f"opens with). Make the page again later; if YouTube asked you to confirm you're "
+            f"not a bot, try with --cookies.")
 
 
 def comment_status(info: dict) -> str:
@@ -3247,7 +3313,9 @@ def about_transcript(info: dict, spec: list) -> str:
         reason = info.get(TRANSCRIPT_MISSING_KEY)
         return f"none: {esc(reason)}" if reason else "none"
     kind = "auto-generated" if transcript.get("kind") == "auto" else "by the author"
-    features = (f"original language, {kind}" if transcript.get("original", True)
+    # (data saved before the check of original_uncertain() may say original)
+    features = (f"original language, {kind}"
+                if transcript.get("original", True) and not original_uncertain(info)
                 else f"{kind}; original language unknown")
     name = transcript.get("name") or transcript.get("language") or ""
     translations = translations_of(transcript)
@@ -4269,7 +4337,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     spec = [("plain", None)] if transcript_spec is None else transcript_spec
     if transcript and spec:  # "none" (an empty spec) also hides a stored one
         chapters = next((m.get("items") or [] for m in markers if m.get("id") == "chapters"), [])
-        body.extend(render_transcripts(transcript, chapters, video_id, spec))
+        sections = render_transcripts(transcript, chapters, video_id, spec)
+        if sections and original_uncertain(info):   # once, under the first heading
+            sections[0] = sections[0].replace("</h2>", "</h2>" + uncertain_note(info))
+        body.extend(sections)
 
     license_info = license_of(info)
     if license_info:
@@ -4711,8 +4782,7 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
             fresh = ydl.sanitize_info(ydl.extract_info(f"{YOUTUBE}/watch?v={info.get('id')}",
                                                        download=False))
         # the track and the languages as the saved data know them
-        data = {**fresh, CAPTION_KEY: info.get(CAPTION_KEY),
-                TRANSLATIONS_KEY: info.get(TRANSLATIONS_KEY)}
+        data = with_page_choices(fresh, info)
         not_before = started + translation_wait()
         if whole:
             transcript = fetch_transcript(ydl, data, targets, not_before)
@@ -5163,6 +5233,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
         f"{len(shown().get('comments') or [])} comments)")
+    if original_uncertain(info):
+        log(uncertain_warning(info))
     outcome.update(target=target, info=info, rebuild=rebuild, updating=updating)
     if (not data_path or args.refresh_json) and comments_interrupted(info):
         log("  Comments were interrupted (Ctrl+C): the page has those fetched so far "
@@ -5337,8 +5409,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     fresh = fetch_formats(f"{YOUTUBE}/watch?v={ident}", args)
     # the page's data (made now) knows the transcript's track and YouTube's
     # translation languages; the fresh list has neither
-    data = {**fresh, CAPTION_KEY: (page_info or {}).get(CAPTION_KEY),
-            TRANSLATIONS_KEY: (page_info or {}).get(TRANSLATIONS_KEY)}
+    data = with_page_choices(fresh, page_info)
     choice = video_choice(data)
     if choice is None:
         raise VideoSkipped("no video or audio formats in the list (YouTube sometimes sends "

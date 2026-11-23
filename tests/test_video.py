@@ -695,6 +695,19 @@ def test_subtitles_with_the_video(tmp_path, subtitles, capsys):
          "date": dt.date.today().isoformat(), "source": "en"}]
 
 
+def test_subtitles_follow_the_pages_original(tmp_path, subtitles, monkeypatch):
+    # the fresh formats mark no original (as when YouTube sent no audio tracks):
+    # the page's data name it, German, so a translation is made from German
+    formats = yt2html.fetch_formats
+    monkeypatch.setattr(yt2html, "fetch_formats", lambda s, a: {**formats(s, a), "formats": [
+        dict(f, language_preference=-1) for f in formats(s, a)["formats"]]})
+    page_info = yt2html.fetch_info
+    monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: {**page_info(s, a),
+                                                            yt2html.ORIGINAL_AUDIO_KEY: "de"})
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:pl"]) == 0
+    assert subtitles["subs"] == [TT + "de&kind=asr&fmt=json3&tlang=pl"]
+
+
 def test_subtitles_empty_and_failure(tmp_path, subtitles, capsys):
     subtitles["sub_answers"] = {"en": [b"   "],                       # empty: not saved
                                 "pl": [json3("Czesc")],

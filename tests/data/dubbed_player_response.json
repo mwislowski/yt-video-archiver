@@ -1,0 +1,149 @@
+{
+ "captions": {
+  "playerCaptionsTracklistRenderer": {
+   "captionTracks": [
+    {
+     "name": {
+      "simpleText": "English (auto-generated)"
+     },
+     "vssId": "a.en",
+     "languageCode": "en",
+     "kind": "asr",
+     "isTranslatable": true,
+     "trackName": ""
+    },
+    {
+     "name": {
+      "simpleText": "Polish (auto-generated)"
+     },
+     "vssId": "a.pl",
+     "languageCode": "pl",
+     "kind": "asr",
+     "isTranslatable": true,
+     "trackName": ""
+    }
+   ],
+   "audioTracks": [
+    {
+     "captionTrackIndices": [
+      1,
+      0
+     ],
+     "defaultCaptionTrackIndex": 1,
+     "hasDefaultTrack": true,
+     "audioTrackId": "pl.4",
+     "captionsInitialState": "CAPTIONS_INITIAL_STATE_ON_RECOMMENDED"
+    },
+    {
+     "captionTrackIndices": [
+      1,
+      0
+     ],
+     "defaultCaptionTrackIndex": 1,
+     "hasDefaultTrack": true,
+     "audioTrackId": "en-US.10",
+     "captionsInitialState": "CAPTIONS_INITIAL_STATE_OFF_RECOMMENDED"
+    }
+   ],
+   "translationLanguages": [
+    {
+     "languageCode": "ab",
+     "languageName": {
+      "simpleText": "Abkhazian"
+     }
+    },
+    {
+     "languageCode": "aa",
+     "languageName": {
+      "simpleText": "Afar"
+     }
+    },
+    {
+     "languageCode": "af",
+     "languageName": {
+      "simpleText": "Afrikaans"
+     }
+    }
+   ],
+   "defaultAudioTrackIndex": 0
+  }
+ },
+ "streamingData": {
+  "adaptiveFormats": [
+   {
+    "itag": 136,
+    "mimeType": "video/mp4; codecs=\"avc1.64001F\""
+   },
+   {
+    "itag": 134,
+    "mimeType": "video/mp4; codecs=\"avc1.4D401E\""
+   },
+   {
+    "itag": 243,
+    "mimeType": "video/webm; codecs=\"vp9\""
+   },
+   {
+    "itag": 160,
+    "mimeType": "video/mp4; codecs=\"avc1.4D400C\""
+   },
+   {
+    "itag": 140,
+    "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+    "audioTrack": {
+     "displayName": "English (US)",
+     "id": "en-US.10",
+     "audioIsDefault": true,
+     "isAutoDubbed": true
+    }
+   },
+   {
+    "itag": 140,
+    "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+    "audioTrack": {
+     "displayName": "Polish original",
+     "id": "pl.4",
+     "audioIsDefault": false
+    }
+   },
+   {
+    "itag": 249,
+    "mimeType": "audio/webm; codecs=\"opus\"",
+    "audioTrack": {
+     "displayName": "English (US)",
+     "id": "en-US.10",
+     "audioIsDefault": true,
+     "isAutoDubbed": true
+    }
+   },
+   {
+    "itag": 250,
+    "mimeType": "audio/webm; codecs=\"opus\"",
+    "audioTrack": {
+     "displayName": "English (US)",
+     "id": "en-US.10",
+     "audioIsDefault": true,
+     "isAutoDubbed": true
+    }
+   },
+   {
+    "itag": 251,
+    "mimeType": "audio/webm; codecs=\"opus\"",
+    "audioTrack": {
+     "displayName": "English (US)",
+     "id": "en-US.10",
+     "audioIsDefault": true,
+     "isAutoDubbed": true
+    }
+   },
+   {
+    "itag": 251,
+    "mimeType": "audio/webm; codecs=\"opus\"",
+    "audioTrack": {
+     "displayName": "Polish original",
+     "id": "pl.4",
+     "audioIsDefault": false
+    }
+   }
+  ]
+ }
+}

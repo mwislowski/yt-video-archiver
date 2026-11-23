@@ -4,12 +4,20 @@ import argparse
 import datetime as dt
 import json
 import re
+from pathlib import Path
 
 import pytest
 
 import yt2html
 
-from conftest import ORIGINAL_CAPTIONS, FakeHTTPError, caption_formats, translated_captions
+from conftest import (ORIGINAL_CAPTIONS, FakeHTTPError, FakeYDL, caption_formats,
+                      translated_captions, watch_page)
+
+# imRB4Y2ShoM (23.11.2026), the page saved in the user's browser: Polish
+# original, an English auto-dub; only the caption list and the audio tracks
+# (no addresses), and three of the translation languages
+DUBBED_PLAYER = json.loads((Path(__file__).parent / "data" / "dubbed_player_response.json")
+                           .read_text(encoding="utf-8"))
 
 
 def asr(*languages):
@@ -35,6 +43,9 @@ class TestDefaultCaptionTrack:
             "streamingData": {"adaptiveFormats": [
                 {"audioTrack": {"id": "en-US.10", "displayName": "English (US)", "audioIsDefault": True}},
                 {"audioTrack": {"id": "pl.4", "displayName": "Polish original"}}]}}
+        assert yt2html.default_caption_track(player) == {"language": "pl", "kind": None}
+        # the player starting with the dub: the stream's mark still names the original
+        player["captions"]["playerCaptionsTracklistRenderer"]["defaultAudioTrackIndex"] = 0
         assert yt2html.default_caption_track(player) == {"language": "pl", "kind": None}
 
     def test_single_track(self):
@@ -358,3 +369,182 @@ class TestSpeakerChanges:
 def test_bilingual_section_names_its_language(info):
     _, html = sections(info, [("bilingual", "pl")])
     assert '<section class="transcript bilingual" data-lang="pl"><h2>Transcript</h2>' in html
+
+
+# --------------------------------------------------------------------------
+# The original language when yt-dlp has no audio tracks (imRB4Y2ShoM, 23.11.2026)
+# --------------------------------------------------------------------------
+
+def without_audio_tracks(**extra):
+    """Data as from a run where YouTube asked to confirm one is not a bot:
+    only the combined format 18 and storyboards, the watch page's default
+    captions those of the English dub, speech recognised in both languages."""
+    auto = {f"{lang}-orig": caption_formats(f"{lang} (Original)") for lang in ("en", "pl")}
+    auto.update({lang: caption_formats(lang) for lang in ("en", "pl", "de")})
+    formats = [{"format_id": f"sb{i}", "ext": "mhtml", "vcodec": "none", "acodec": "none"}
+               for i in range(4)]
+    formats.append({"format_id": "18", "ext": "mp4", "vcodec": "avc1.42001E",
+                    "acodec": "mp4a.40.2", "height": 360})
+    return {"automatic_captions": auto, "formats": formats, "language": "en",
+            yt2html.CAPTION_KEY: {"language": "en", "kind": "asr"}, **extra}
+
+
+class TestOriginalFromTheWatchPage:
+    def test_read_from_the_audio_tracks(self):
+        assert yt2html.page_original_language(DUBBED_PLAYER) == "pl"
+        # the default captions there follow the original (the user's own browser)
+        assert yt2html.default_caption_track(DUBBED_PLAYER) == {"language": "pl", "kind": "asr"}
+
+    def test_by_yt_dlps_rule(self):
+        def player(*tracks):
+            return {"streamingData": {"adaptiveFormats": [{"itag": 1}] + [
+                {"itag": 140, "audioTrack": t} for t in tracks]}}
+        assert yt2html.page_original_language({}) is None
+        assert yt2html.page_original_language(player()) is None
+        # the dub YouTube plays by default is not the original
+        assert yt2html.page_original_language(player(
+            {"displayName": "English (US)", "id": "en-US.10", "audioIsDefault": True})) is None
+        # an audio description is not the original, even when its name says so
+        assert yt2html.page_original_language(player(
+            {"displayName": "English original descriptive", "id": "en.3"},
+            {"displayName": "English ORIGINAL", "id": "en-GB.4"})) == "en-GB"
+        assert yt2html.page_original_language(player({"displayName": "Polish original"})) is None
+
+    def test_saved_with_the_page_data(self):
+        info = {"id": "imRB4Y2ShoM"}
+        yt2html.add_watch_page_data(FakeYDL(webpage=watch_page({}, DUBBED_PLAYER)), info)
+        assert info[yt2html.ORIGINAL_AUDIO_KEY] == "pl"
+        # the page without the player data, or not read at all: unknown
+        yt2html.add_watch_page_data(FakeYDL(webpage=watch_page({})), info)
+        assert info[yt2html.ORIGINAL_AUDIO_KEY] is None
+        info[yt2html.ORIGINAL_AUDIO_KEY] = "pl"
+        yt2html.add_watch_page_data(FakeYDL(webpage="<html></html>"), info)
+        assert info[yt2html.ORIGINAL_AUDIO_KEY] is None
+
+    def test_the_page_tells_the_original_when_the_formats_do_not(self):
+        info = without_audio_tracks()
+        assert yt2html.transcript_language(info) == "en"      # the dub's captions, as before
+        info[yt2html.ORIGINAL_AUDIO_KEY] = "pl"
+        assert yt2html.marked_original_language(info) == "pl"
+        assert yt2html.transcript_language(info) == "pl"
+        assert yt2html.choose_caption_track(info)[:2] == ("auto", "pl")
+        assert not yt2html.original_uncertain(info)
+        # the formats' mark comes first
+        info["formats"] = [{"language": "de", "language_preference": 10}]
+        assert yt2html.transcript_language(info) == "de"
+
+    def test_the_formats_table_takes_the_same_language(self):
+        # an audio format without a language takes the original's (the guess of
+        # the Transcript row); format 18 combines image and sound, no audio row
+        info = without_audio_tracks(**{yt2html.ORIGINAL_AUDIO_KEY: "pl"})
+        info["formats"].append({"format_id": "140", "ext": "m4a", "vcodec": "none",
+                                "acodec": "mp4a.40.2", "filesize": 1000})
+        choice = yt2html.video_choice(info)
+        assert [choice.track(f)[0] for f in choice.audio] == ["pl"]
+
+    def test_the_page_metadata_takes_the_same_language(self, info):
+        info.update(without_audio_tracks(**{yt2html.ORIGINAL_AUDIO_KEY: "pl"}))
+        html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5))
+        assert '<meta name="yt2html:language" content="pl">' in html
+
+    def test_fresh_data_get_the_pages_choices(self):
+        page = {yt2html.CAPTION_KEY: {"language": "en"}, yt2html.ORIGINAL_AUDIO_KEY: "pl",
+                yt2html.TRANSLATIONS_KEY: {"de": "German"}, "title": "not taken"}
+        fresh = {"id": "x", "title": "fresh", yt2html.ORIGINAL_AUDIO_KEY: "stale"}
+        assert yt2html.with_page_choices(fresh, page) == {
+            "id": "x", "title": "fresh", yt2html.CAPTION_KEY: {"language": "en"},
+            yt2html.ORIGINAL_AUDIO_KEY: "pl", yt2html.TRANSLATIONS_KEY: {"de": "German"}}
+        assert yt2html.with_page_choices(fresh, None)[yt2html.ORIGINAL_AUDIO_KEY] is None
+
+
+class TestOriginalUncertain:
+    def test_when(self):
+        info = without_audio_tracks()
+        assert yt2html.original_uncertain(info)
+        # one language recognised: no dubs to mistake it for
+        del info["automatic_captions"]["pl-orig"]
+        assert not yt2html.original_uncertain(info)
+        info["automatic_captions"]["pl-orig"] = []          # a track without formats
+        assert not yt2html.original_uncertain(info)
+        # marked: in the formats, or on the page
+        assert not yt2html.original_uncertain(without_audio_tracks(
+            formats=[{"language": "pl", "language_preference": 10}]))
+        assert not yt2html.original_uncertain(without_audio_tracks(
+            **{yt2html.ORIGINAL_AUDIO_KEY: "pl"}))
+
+    def test_the_transcript_is_not_called_original(self):
+        info = without_audio_tracks()
+        transcript = yt2html.fetch_transcript(FakeYDL(), info)
+        assert transcript["language"] == "en" and transcript["original"] is False
+        info[yt2html.ORIGINAL_AUDIO_KEY] = "pl"
+        transcript = yt2html.fetch_transcript(FakeYDL(), info)
+        assert transcript["language"] == "pl" and transcript["original"] is True
+
+    def test_on_the_page(self, info):
+        info.update(without_audio_tracks())
+        info[yt2html.TRANSCRIPT_KEY]["original"] = True      # saved before the check
+        spec = [("plain", None), ("timestamps", None), ("bilingual", "fr")]
+        info[yt2html.TRANSCRIPT_KEY]["translations"] = {
+            "fr": {"language": "fr", "name": "French", "cues": info[yt2html.TRANSCRIPT_KEY]["cues"]}}
+        html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5), transcript_spec=spec)
+        note = ('<div class="note uncertain">Original language uncertain: YouTube did not send '
+                'the audio tracks that tell it from the dubs, so this transcript is in English, '
+                'the captions YouTube opens with. Make the page again later; if YouTube asked to '
+                'confirm you are not a bot, with your browser&#x27;s cookies.</div>')
+        assert html.count(note) == 1
+        assert re.search(r'<section class="transcript"><h2>Transcript[^\n]*?</h2>'
+                         + re.escape(note), html)
+        assert "--cookies" not in html.split("<code")[0]          # no option names on the page
+        assert re.search(r"<dt>Transcript</dt><dd>English \(auto-generated; original language "
+                         r"unknown\); 3 versions", html)
+        # known: no note, the row as before
+        info[yt2html.ORIGINAL_AUDIO_KEY] = "en"
+        html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5), transcript_spec=spec)
+        assert "uncertain" not in html and "English (original language, auto-generated)" in html
+
+    def test_no_transcript_section_no_note(self, info):
+        # a bilingual version YouTube could not give makes no section
+        info.update(without_audio_tracks())
+        html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5),
+                                   transcript_spec=[("bilingual", "it")])
+        assert 'class="note uncertain"' not in html
+        assert ".transcript .note{color:var(--muted);font-size:12px;" in html   # grey
+
+    def test_a_transcript_of_an_unknown_language(self, info):
+        info.update(without_audio_tracks())
+        del info[yt2html.TRANSCRIPT_KEY]["name"]
+        info[yt2html.TRANSCRIPT_KEY]["language"] = ""
+        html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5))
+        assert "so this transcript is in an unknown language, the captions" in html
+        info[yt2html.TRANSCRIPT_KEY]["language"] = "en"           # no name: the code
+        html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5))
+        assert "so this transcript is in en, the captions" in html
+
+    def test_the_console_warns(self, capsys, tmp_path, info):
+        info.update(without_audio_tracks())
+        data = tmp_path / "Title [TESTVIDEO01].info.json"
+        data.write_text(json.dumps(info), encoding="utf-8")
+        assert yt2html.main([str(data), "--load-json", "-o", str(tmp_path), "--transcript"]) == 0
+        warning = ("  Warning: the original language is uncertain: YouTube sent no audio tracks "
+                   "to tell it from the dubs, so the transcript and the page's language are "
+                   "taken as 'en' (the captions YouTube opens with). Make the page again later; "
+                   "if YouTube asked you to confirm you're not a bot, try with --cookies.")
+        out = capsys.readouterr().out
+        assert warning in out and out.index("Saved page:") < out.index(warning)
+        # without a transcript: only the page's language
+        del info[yt2html.TRANSCRIPT_KEY]
+        info.pop(yt2html.CAPTION_KEY)
+        data.write_text(json.dumps(info), encoding="utf-8")
+        assert yt2html.main([str(data), "--load-json", "-o", str(tmp_path)]) == 0
+        out = capsys.readouterr().out
+        assert "so the page's language is taken as 'en' (the captions" in out
+        # nothing to know it by at all
+        info["language"] = None
+        data.write_text(json.dumps(info), encoding="utf-8")
+        yt2html.main([str(data), "--load-json", "-o", str(tmp_path)])
+        assert "taken as 'unknown'" in capsys.readouterr().out
+        # known: no warning
+        info[yt2html.ORIGINAL_AUDIO_KEY] = "pl"
+        data.write_text(json.dumps(info), encoding="utf-8")
+        yt2html.main([str(data), "--load-json", "-o", str(tmp_path)])
+        assert "Warning" not in capsys.readouterr().out

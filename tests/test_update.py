@@ -530,3 +530,21 @@ def test_a_failed_update_with_a_list_file(capsys, saved, youtube, tmp_path, monk
     # the reason is only in the console; the index shows what is in the folder
     assert code == 1 and "could not download the transcript" in out
     assert "could not download" not in index and "not downloaded" in index
+
+
+def test_the_whole_transcript_uses_the_saved_original(capsys, saved, youtube, monkeypatch):
+    # the fresh data (yt-dlp alone) know nothing of the watch page: the saved
+    # data's default captions and original audio decide the language
+    data = json.loads(saved.read_text("utf-8"))
+    del data[yt2html.TRANSCRIPT_KEY]
+    data[yt2html.ORIGINAL_AUDIO_KEY] = "pl"
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    seen = []
+
+    def choose(info):
+        seen.append((yt2html.transcript_language(info), info.get(yt2html.CAPTION_KEY)))
+        return "auto", "en", caption_formats("English")
+    monkeypatch.setattr(yt2html, "choose_caption_track", choose)
+    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+               "--transcript")[0] == 0
+    assert seen[0] == ("pl", {"language": "en", "kind": "asr"})

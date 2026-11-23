@@ -46,6 +46,10 @@ def test_description_chapters_summary_podcast_and_dubbed_transcript(tmp_path):
     assert info[yt2html.DOWNLOAD_KEY]["yt2html"] == yt2html.__version__
     assert info[yt2html.WATCH_PAGE_KEY] == "read"
     assert info[yt2html.TRANSCRIPT_KEY]["original"] is True
+    # the watch page names the original audio too (23.11.2026: not known whether
+    # the page yt2html reads always carries the audio tracks; this tells)
+    assert (info[yt2html.ORIGINAL_AUDIO_KEY] or "").startswith("en"), (
+        "the watch page named no original audio track")
     assert info[yt2html.PLAYLIST_KEY] is None
     assert "<dt>Video page</dt><dd>read</dd>" in html
     # metadata for the index, incl. YouTube's small cover (mqdefault)

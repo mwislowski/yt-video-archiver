@@ -8,6 +8,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 - `--merge-json` merges a translation of your own into the saved data, for when YouTube refuses its machine translations (`HTTP 429`): translate the subtitles in the video's original language yourself and give the SRT file, named `Title [id].pl.own.srt`. It must have the transcript's lines (the same number, each at the same moment); nothing is asked of YouTube. With `--transcript plain,bilingual:pl` the page is made from the data at once and shows the translation in the second column, headed `Polish, own translation`; *About this copy* names it in the *Transcript* row, *Video formats* lists it in yellow under the languages table, and the *Command* row leaves it out. An own translation can be replaced by a corrected one; YouTube's is never replaced.
 
+### Fixed
+
+- Videos with YouTube's automatic dubbing: when YouTube sent no audio tracks (for example after asking to confirm you're not a bot), the transcript, the page's language and the index row took the language of a dub. The original language is now also read from the video's YouTube page, which names the original audio track; when it still cannot be told, the page says the original language is uncertain and the console warns, with the advice to make the page again later (with `--cookies` if YouTube asked to confirm you're not a bot).
+
 ## [0.10.7] - 2026-11-22
 
 ### Added
