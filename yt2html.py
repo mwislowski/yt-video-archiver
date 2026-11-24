@@ -229,14 +229,14 @@ def fetch_formats(url: str, args: argparse.Namespace) -> dict:
     opts = {"skip_download": True, "noplaylist": True, "extract_flat": "in_playlist",
             "ignore_no_formats_error": True, "noprogress": True, "quiet": True,
             "format": NO_MERGE_FORMAT}
-    if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+    if args.cookies:
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
     if getattr(args, "olang", None):
         info[OLANG_KEY] = args.olang
     info[DOWNLOAD_KEY] = {"yt2html": __version__,
-                          "cookies_from_browser": browser_name(args.cookies_from_browser),
+                          "cookies_from_browser": browser_name(args.cookies),
                           "deno": shutil.which("deno") is not None}
     return info
 
@@ -265,8 +265,8 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
             }
         },
     }
-    if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+    if args.cookies:
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies)
     started = time.monotonic()
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
@@ -274,7 +274,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         if getattr(args, "olang", None):
             info[OLANG_KEY] = args.olang
         info[DOWNLOAD_KEY] = {"yt2html": __version__,
-                              "cookies_from_browser": browser_name(args.cookies_from_browser),
+                              "cookies_from_browser": browser_name(args.cookies),
                               # yt-dlp needs a JavaScript runtime (by default Deno) for
                               # YouTube's full list of formats (Video formats section)
                               "deno": shutil.which("deno") is not None}
@@ -3600,7 +3600,7 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
         parts += ["--olang", info[OLANG_KEY]]
     browser = (info.get(DOWNLOAD_KEY) or {}).get("cookies_from_browser")
     if browser:
-        parts += ["--cookies-from-browser", browser]
+        parts += ["--cookies", browser]
     return f'<code class="command">{esc(" ".join(parts))}</code>'
 
 
@@ -4573,10 +4573,17 @@ def extra_track_lines(extra: list) -> list[str]:
 def list_formats(args: argparse.Namespace) -> int:
     """--video-formats: for each source, the formats a download can take,
     printed; no page is made. Playlists and channels are not listed."""
-    failed = 0
-    for n, source in enumerate(args.sources):
-        if n:
+    failed = left = listed = 0
+    for source in args.sources:
+        try:
+            if not (args.load_json or is_channel_url(source) or playlist_id_from_url(source)):
+                taking(args, video_id_from_url(source) or source)
+        except TakeReached:
+            left += 1
+            continue
+        if listed:
             print()
+        listed += 1
         try:
             if args.load_json:
                 info = json.loads(saved_data_path(source, Path(args.output_dir))
@@ -4600,6 +4607,8 @@ def list_formats(args: argparse.Namespace) -> int:
         if not args.load_json and not info[DOWNLOAD_KEY]["deno"]:
             log("Note: no JavaScript runtime (Deno) found, so YouTube may have offered "
                 "more formats than listed.")
+    if left:
+        log(take_note(args, left))
     return 1 if failed else 0
 
 
@@ -4964,8 +4973,8 @@ def fetch_playlist(url: str, args: argparse.Namespace) -> dict:
     with its flat entries: only the list of its videos, in playlist order,
     none of them extracted (one request per ~100 videos)."""
     opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True}
-    if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+    if args.cookies:
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies)
     with yt_dlp.YoutubeDL(opts) as ydl:
         # process=False: the entries are read as they are, without yt-dlp's
         # "Downloading item N of M" line for each of them.
@@ -5176,8 +5185,8 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
     Returns what was added, for UPDATES_KEY."""
     opts = {"skip_download": True, "noplaylist": True, "ignore_no_formats_error": True,
             "noprogress": True, "quiet": True, "format": NO_MERGE_FORMAT}
-    if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+    if args.cookies:
+        opts["cookiesfrombrowser"] = cookies_spec(args.cookies)
     with yt_dlp.YoutubeDL(opts) as ydl:
         if fresh is None:
             log("Fetching the video's data (no comments) for what is missing...")
@@ -5539,6 +5548,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
                 return None
             log(f"No saved data for {source}: downloading everything.")
             write_json = True
+        taking(args, video_id_from_url(source) or source)
         log(f"Fetching {source}")
         info = fetch_info(source, args)
         info[PLAYLIST_KEY] = playlist
@@ -5560,6 +5570,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         fresh = started = None
         gone = False
         if args.refresh_json:
+            taking(args, info.get("id"))
             log(f"Fetching {source} (to refresh the saved data)")
             started = time.monotonic()
             try:
@@ -5584,6 +5595,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
                         f"of them.")
         whole, targets = ((False, []) if gone else missing_for_update(info, args))
         if whole or targets:
+            taking(args, info.get("id"))
             note_update(info, record, update_transcript(info, args, whole, targets, fresh,
                                                         started))
     for note in resolve_versions(args.transcript, info.get(TRANSCRIPT_KEY))[1]:
@@ -5892,6 +5904,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         notes.add("yt-dlp")
         log(f"Note: yt-dlp {yt_dlp.version.__version__} is {age} days old; if the download "
             "fails, update: uv tool upgrade yt-video-archiver")
+    taking(args, ident)
     log("Video: fetching the current list of formats...")
     notes.add("requested")   # the next video waits a moment first
     not_before = time.monotonic() + translation_wait()   # for translated subtitles
@@ -5920,8 +5933,8 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                 "outtmpl": {"default": str(folder / name.replace("%", "%%")) + ".%(ext)s"},
                 "overwrites": spec["ovr"], "noplaylist": True,
                 "quiet": True, "noprogress": False}
-        if args.cookies_from_browser:
-            opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
+        if args.cookies:
+            opts["cookiesfrombrowser"] = cookies_spec(args.cookies)
         return opts
 
     failures = 0
@@ -6175,6 +6188,61 @@ class Once(argparse.Action):
 
 
 JSON_PARAMETERS = ("write", "refresh", "load", "merge")
+
+DEFAULT_TAKE = 100   # videos that ask YouTube, at most, in one run (--take)
+
+
+def take_value(value: str) -> int | str:
+    """--take N|all: a whole number, 1 or more, or "all" (any case). 0 and
+    no are errors: in comments: "no" means none, and a run that takes no
+    video would do nothing."""
+    text = value.strip().lower()
+    if text == "all":
+        return text
+    if not text.isdigit() or int(text) < 1:
+        raise argparse.ArgumentTypeError(
+            f"'{value}': --take is how many videos a run takes from YouTube, 1 or more, "
+            f"or all")
+    return int(text)
+
+
+class TakeReached(Exception):
+    """--take: a video would ask YouTube, but the run has taken its number."""
+
+
+def taking(args: argparse.Namespace, ident: str | None) -> None:
+    """--take, called just before a video's first question to YouTube: the
+    video (with all its files) counts once, the run's videos up to the
+    limit; past it, TakeReached, before anything is asked or written.
+    Videos left as they are, without YouTube, do not count."""
+    taken = getattr(args, "taken", None)
+    if taken is None:
+        taken = args.taken = set()
+    if ident in taken:
+        return
+    limit = getattr(args, "take_limit", None)
+    if limit is not None and len(taken) >= limit:
+        raise TakeReached(ident)
+    taken.add(ident)
+
+
+def take_exhausted(args: argparse.Namespace) -> bool:
+    """Whether --take's number is taken: no other video asks YouTube now."""
+    limit = getattr(args, "take_limit", None)
+    return limit is not None and len(getattr(args, "taken", None) or ()) >= limit
+
+
+def take_note(args: argparse.Namespace, left: int) -> str:
+    """The run's end when --take left videos: how far it got, and how to go on."""
+    taken = len(args.taken)
+    total = taken + left
+    text = (f"--take {args.take_limit}: {taken} of {total} videos that need YouTube were "
+            f"taken; ")
+    if args.overwrite or args.refresh_json:
+        every = "--page ovr" if args.overwrite else "--json refresh"
+        return text + (f"{every} asks YouTube for every video, so the same command would "
+                       f"take the same ones again: give --take {total} or --take all.")
+    return text + "run the same command again for the next ones."
 
 
 def json_parameter(value: str) -> str:
@@ -6472,7 +6540,8 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
 # Options --index-only refuses: they download or shape the video pages,
 # and it only makes the index from what is in the folder.
 INDEX_ONLY_REFUSES = (("--video", "video"), ("--transcript", "transcript"),
-                      ("--json", "json"), ("--page", "page"), ("--olang", "olang"))
+                      ("--json", "json"), ("--page", "page"), ("--olang", "olang"),
+                      ("--take", "take"))
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -6536,8 +6605,7 @@ def parse_args(argv=None) -> argparse.Namespace:
              "-o) or merge (add a translation of your own: SRT files 'Title [ID].CODE.own.srt' "
              "with the lines and times of the transcript, merged into the data with the same "
              "id; makes no page: --json load then shows it)")
-    parser.add_argument("--cookies-from-browser", "--cookies", dest="cookies_from_browser",
-                        metavar="BROWSER", type=cookies_argument,
+    parser.add_argument("--cookies", metavar="BROWSER", type=cookies_argument,
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in; a profile after a colon: "
                              "\"firefox:PROFILE_FOLDER\" (its folder name or path)")
@@ -6578,11 +6646,20 @@ def parse_args(argv=None) -> argparse.Namespace:
     # dates or the newest N, written to a list file (yt2html_index.channel_list())
     parser.add_argument("--channel-list", nargs=3, metavar=("CHANNEL", "LIST", "PERIOD"),
                         help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--take", type=take_value, default=None, action=Once, metavar="N",
+        help=f"the number of videos a run takes from YouTube, at most (default "
+             f"{DEFAULT_TAKE}), or all; only those that need it count: a video whose page "
+             f"and files are there is skipped without it. A playlist longer than that is "
+             f"done in parts: run the same command again for the next ones")
     parser.add_argument("--video-formats", action="store_true",
                         help="only list, for each video, the qualities a download can take "
                              "(with the parameter that chooses each, the codec and the size) "
                              "and the audio tracks it can add; no page is made")
     args = parser.parse_args(argv)
+    args.take_limit = (DEFAULT_TAKE if args.take is None else
+                       None if args.take == "all" else args.take)
+    args.taken = set()   # the videos that asked YouTube in this run (taking())
     apply_page_spec(args)
     apply_json_parameter(args)
     args.transcript_ovr = ("ovr", None) in args.transcript
@@ -6592,7 +6669,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     alone = {"reverse": ("only writes the list of an index page", ()),
              "reverse_details": ("only writes the list of an index page", ()),
              "channel_list": ("only writes a list of a channel's videos",
-                              ("cookies_from_browser",))}
+                              ("cookies",))}
     special = next((dest for dest in alone if getattr(args, dest) is not None), None)
     if special:
         option = "--" + special.replace("_", "-")
@@ -6615,6 +6692,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
+    if args.take is not None and args.json in ("load", "merge"):
+        parser.error(f"--take counts the videos that need YouTube, and --json {args.json} "
+                     f"asks YouTube for nothing; leave --take out")
     if args.transcript_ovr and args.json not in ("write", "refresh"):
         parser.error("--transcript ovr downloads the saved transcript again, so it needs "
                      "--json write or --json refresh (without saved data the transcript is "
@@ -6680,8 +6760,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
-    if (args.load_json or args.merge_json) and args.cookies_from_browser:
-        log(f"Note: --cookies-from-browser has no effect with --json {args.json} "
+    if (args.load_json or args.merge_json) and args.cookies:
+        log(f"Note: --cookies has no effect with --json {args.json} "
             f"(nothing is downloaded).")
     try:
         args.sources = collect_sources(args)
@@ -6710,7 +6790,7 @@ def main(argv=None) -> int:
         import yt2html_index
         yt2html_index.write_reverse(*args.reversed)
         return 0
-    counts = {"saved": 0, "skipped": 0, "failed": 0}
+    counts = {"saved": 0, "skipped": 0, "failed": 0, "left": 0}
     without_data = []   # --json load --index: videos of the list without saved data
     videos = {"downloaded": 0, "skipped": 0, "failed": 0}
     notes = set()   # --video: notes told once, and whether YouTube was asked
@@ -6722,6 +6802,9 @@ def main(argv=None) -> int:
         """Run one step; a failure is reported and counted, the run goes on."""
         try:
             return action()
+        except TakeReached:
+            left_for_next_run()
+            return None
         except yt_dlp.utils.DownloadError:
             log(f"FAILED: {source}")  # yt-dlp has already printed the reason
         except Exception as error:
@@ -6729,8 +6812,15 @@ def main(argv=None) -> int:
         counts["failed"] += 1
         return None
 
+    def left_for_next_run():
+        """A video --take leaves (it would ask YouTube): counted; said once."""
+        if not counts["left"]:
+            log(f"--take {args.take_limit} reached: the other videos that need YouTube are "
+                f"left for the next run (those that do not are still done).")
+        counts["left"] += 1
+
     def archive_video(source: str, playlist: dict | None = None):
-        if args.video is not None and "requested" in notes:
+        if args.video is not None and "requested" in notes and not take_exhausted(args):
             # a moment between videos that asked YouTube for a video file
             notes.discard("requested")
             seconds = random.uniform(*PAUSE_SECONDS)
@@ -6754,6 +6844,9 @@ def main(argv=None) -> int:
         try:
             result, formats, new = download_video(source, args, outcome["target"], notes,
                                                   outcome.get("info"), outcome.get("previous"))
+        except TakeReached:
+            left_for_next_run()
+            return
         except VideoSkipped as reason:
             log(f"Video skipped: {reason}")
             videos["skipped"] += 1
@@ -6822,12 +6915,13 @@ def main(argv=None) -> int:
     try:
         if listing:
             archive_list(index.videos_to_download(args.list, run))
+        # the playlists first (--take counts from the whole list), then the videos
+        queue = []   # (video, the playlist it comes from, or None)
         for source in [] if listing else args.sources:
             if not args.load_json and playlist_id_from_url(source):
                 playlists += 1
-                for url in attempt(source,
-                                   lambda: playlist_videos(source, args, seen, run)) or []:
-                    archive_video(url, playlist_context(run, source, url))
+                queue += [(url, source) for url in attempt(
+                    source, lambda: playlist_videos(source, args, seen, run)) or []]
                 continue
             video_id = None if args.load_json else source_video_id(source)
             if video_id in seen:
@@ -6835,7 +6929,9 @@ def main(argv=None) -> int:
                 continue
             if video_id:
                 seen.add(video_id)
-            archive_video(source)
+            queue.append((source, None))
+        for source, playlist in queue:
+            archive_video(source, playlist_context(run, playlist, source) if playlist else None)
     except KeyboardInterrupt:
         interrupted = True
         log("Interrupted (Ctrl+C). Run the same command again to continue: "
@@ -6844,9 +6940,12 @@ def main(argv=None) -> int:
     if sum(counts.values()) > 1 or playlists or listing or interrupted:
         log(f"Done: {counts['saved']} saved, {counts['skipped']} skipped (page exists), "
             f"{counts['failed']} failed"
-            + (f", {len(without_data)} without saved data" if without_data else "") + "."
+            + (f", {len(without_data)} without saved data" if without_data else "")
+            + (f", {counts['left']} left for the next run" if counts["left"] else "") + "."
             + (f" Videos: {videos['downloaded']} downloaded, {videos['skipped']} skipped, "
                f"{videos['failed']} failed." if args.video is not None else ""))
+    if counts["left"]:
+        log(take_note(args, counts["left"]))
     if interrupted:
         return 130  # the usual exit code after Ctrl+C
     return 1 if counts["failed"] or videos["failed"] or index_failed else 0

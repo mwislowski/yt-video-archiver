@@ -210,7 +210,7 @@ def test_a_pattern_merges_every_file(capsys, tmp_path, saved):
 
 def test_cookies_note(capsys, tmp_path):
     yt2html.parse_args(["--json", "merge", "x.de.own.srt", "--cookies", "firefox"])
-    assert ("Note: --cookies-from-browser has no effect with --json merge (nothing is "
+    assert ("Note: --cookies has no effect with --json merge (nothing is "
             "downloaded).") in capsys.readouterr().out
 
 

@@ -120,7 +120,7 @@ def test_fetch_info_keeps_the_download_settings(monkeypatch, info):
 
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", Fake)
     monkeypatch.setattr(yt2html.shutil, "which", lambda name: None)  # whatever this computer has
-    args = yt2html.parse_args(["u", "--cookies-from-browser", "firefox:/home/me/profile"])
+    args = yt2html.parse_args(["u", "--cookies", "firefox:/home/me/profile"])
     monkeypatch.setattr(yt2html, "fetch_transcript", lambda *a, **k: pytest.fail("no --transcript"))
     fetched = yt2html.fetch_info("u", args)                  # no --transcript: not downloaded
     assert fetched[yt2html.DOWNLOAD_KEY] == {"yt2html": yt2html.__version__,
@@ -171,7 +171,7 @@ def test_command_has_the_settings_that_shaped_the_page(info):
                   theme="light", show_snapshot=False, no_avatars=True)
     assert command(html) == ("yt2html TESTVIDEO01 --page comments:500,snap:no,cards:no,"
                              "avatars:no,theme:light --transcript timed,dual:pl "
-                             "--cookies-from-browser firefox")
+                             "--cookies firefox")
 
 
 def test_command_with_the_video(info):
@@ -241,7 +241,7 @@ def test_cookies_spec_is_split_like_yt_dlp_does(spec, expected):
 def test_cookies_spec_errors_come_before_any_download(capsys):
     for bad in ("netscape", "firefox+wallet", ":x"):
         with pytest.raises(SystemExit):
-            yt2html.parse_args(["u", "--cookies-from-browser", bad])
+            yt2html.parse_args(["u", "--cookies", bad])
     assert "unsupported browser 'netscape'" in capsys.readouterr().err
 
 
@@ -257,26 +257,30 @@ def test_fetch_info_gives_yt_dlp_the_split_spec(monkeypatch, info):
         def sanitize_info(self, i): return i
 
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", Fake)
-    yt2html.fetch_info("u", yt2html.parse_args(["u", "--cookies-from-browser",
+    yt2html.fetch_info("u", yt2html.parse_args(["u", "--cookies",
                                                  "firefox:fTW1hk7Y.Profile 1"]))
     assert seen["cookiesfrombrowser"] == ("firefox", "fTW1hk7Y.Profile 1", None, None)
     # a single format: yt-dlp does not warn about a missing ffmpeg (a page needs none)
     assert seen["format"] == yt2html.NO_MERGE_FORMAT == "bv*/b/ba"
 
 
-def test_cookies_is_the_short_name(info, capsys):
-    # a real second name, not only argparse's prefix matching
+def test_only_cookies(info, capsys):
+    # one name: the old --cookies-from-browser is gone (argparse's prefix matching
+    # would have taken --cookies-from as --cookies, it cannot take the old name)
     with pytest.raises(SystemExit):
         yt2html.parse_args(["--help"])
-    assert "--cookies-from-browser, --cookies BROWSER" in capsys.readouterr().out
-    long = yt2html.parse_args(["u", "--cookies-from-browser", "firefox:fTW1hk7Y.Profile 1"])
-    short = yt2html.parse_args(["u", "--cookies", "firefox:fTW1hk7Y.Profile 1"])
-    assert short.cookies_from_browser == long.cookies_from_browser == "firefox:fTW1hk7Y.Profile 1"
+    out = capsys.readouterr().out
+    assert "--cookies BROWSER" in out and "cookies-from-browser" not in out
+    assert yt2html.parse_args(["u", "--cookies", "firefox:fTW1hk7Y.Profile 1"]).cookies \
+        == "firefox:fTW1hk7Y.Profile 1"
+    with pytest.raises(SystemExit):
+        yt2html.parse_args(["u", "--cookies-from-browser", "firefox"])
+    assert "unrecognized arguments: --cookies-from-browser" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         yt2html.parse_args(["u", "--cookies", "netscape"])
-    # the Command row keeps the full name, the same for old and new pages
+    # the Command row writes --cookies, also for pages whose data are older
     info[yt2html.DOWNLOAD_KEY] = {"cookies_from_browser": yt2html.browser_name("firefox:x")}
-    assert command(render(info)).endswith("--cookies-from-browser firefox")
+    assert command(render(info)).endswith("--cookies firefox")
 
 
 def test_browser_name_has_no_profile():
@@ -588,8 +592,8 @@ def test_no_comments_leaves_out_the_saved_ones(capsys, tmp_path, info):
 
 
 def test_cookies_have_no_effect_when_building(capsys, tmp_path, info):
-    _, out, _ = rebuild(capsys, tmp_path, info, "--cookies-from-browser", "firefox")
-    assert "Note: --cookies-from-browser has no effect with --json load" in out
+    _, out, _ = rebuild(capsys, tmp_path, info, "--cookies", "firefox")
+    assert "Note: --cookies has no effect with --json load" in out
 
 
 

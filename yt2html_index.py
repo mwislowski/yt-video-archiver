@@ -1540,8 +1540,8 @@ def fetch_channel(url: str, args: argparse.Namespace):
     when it is reached (so stopping early saves the rest)."""
     opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True,
             "quiet": True, "extractor_args": {"youtubetab": {"approximate_date": [""]}}}
-    if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = core.cookies_spec(args.cookies_from_browser)
+    if args.cookies:
+        opts["cookiesfrombrowser"] = core.cookies_spec(args.cookies)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False, process=False)
         for _ in range(3):  # follow a redirect to the real list, as fetch_playlist()

@@ -92,7 +92,8 @@ def test_failed_video_does_not_stop_the_playlist_and_is_retried(tmp_path, capsys
 
 def test_video_given_before_the_playlist_is_archived_once(tmp_path, youtube):
     yt2html.main([url(2), PLAYLIST, "-o", str(tmp_path)])
-    assert youtube.fetched == [url(2), PLAYLIST, url(1), url(3)]
+    # the playlists are read first, then the videos, in the command's order
+    assert youtube.fetched == [PLAYLIST, url(2), url(1), url(3)]
 
 
 def test_video_given_after_the_playlist_is_archived_once(tmp_path, capsys, youtube):
@@ -105,7 +106,7 @@ def test_two_playlists_with_a_common_video(tmp_path, capsys, youtube):
     other = "https://www.youtube.com/playlist?list=PLother123456789"
     youtube.playlists[other] = [entry(3), entry(4)]
     yt2html.main([PLAYLIST, other, "-o", str(tmp_path)])
-    assert youtube.fetched == [PLAYLIST, url(1), url(2), url(3), other, url(4)]
+    assert youtube.fetched == [PLAYLIST, other, url(1), url(2), url(3), url(4)]
     assert 'Playlist "Test playlist": 2 videos (1 duplicate ignored).' in capsys.readouterr().out
 
 
@@ -186,7 +187,7 @@ def test_fetch_playlist_reads_only_the_list(monkeypatch):
         "real": {"_type": "playlist", "id": "PLx", "title": "Python course", "entries": entries()},
     }
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", FakePlaylistYDL)
-    args = yt2html.parse_args(["x", "--cookies-from-browser", "firefox"])
+    args = yt2html.parse_args(["x", "--cookies", "firefox"])
     found = yt2html.fetch_playlist("short", args)
     assert found["title"] == "Python course"
     assert [i["id"] for i in found["entries"]] == ["TESTVIDEO01", "TESTVIDEO02"]
@@ -252,3 +253,98 @@ def test_a_saved_data_file_after_its_playlist_is_a_duplicate(tmp_path, capsys, y
     out = capsys.readouterr().out
     assert out.count(f"Reading {data}") == 1
     assert f"Ignored duplicate: {data} (already in a playlist above)" in out
+
+
+# --take: the videos a run takes from YouTube ------------------------------------------------
+
+def test_take_does_a_playlist_in_parts(tmp_path, capsys, youtube):
+    assert yt2html.main([PLAYLIST, "-o", str(tmp_path), "--take", "2"]) == 0
+    out = capsys.readouterr().out
+    assert youtube.fetched == [PLAYLIST, url(1), url(2)]
+    assert out.count("--take 2 reached: the other videos that need YouTube are left for the "
+                     "next run (those that do not are still done).") == 1
+    assert "Done: 2 saved, 0 skipped (page exists), 0 failed, 1 left for the next run." in out
+    assert out.rstrip().endswith("--take 2: 2 of 3 videos that need YouTube were taken; run "
+                                 "the same command again for the next ones.")
+    youtube.fetched.clear()
+    assert yt2html.main([PLAYLIST, "-o", str(tmp_path), "--take", "2"]) == 0
+    out = capsys.readouterr().out
+    assert youtube.fetched == [PLAYLIST, url(3)]   # the pages there do not count
+    assert "Done: 1 saved, 2 skipped (page exists), 0 failed." in out and "--take 2:" not in out
+
+
+def test_take_counts_failures_and_every_source(tmp_path, capsys, youtube):
+    youtube.broken = {"TESTVIDEO01"}
+    other = "https://www.youtube.com/playlist?list=PLother123456789"
+    youtube.playlists[other] = [entry(4), entry(5)]
+    assert yt2html.main([PLAYLIST, url(6), other, "-o", str(tmp_path), "--take", "3"]) == 1
+    out = capsys.readouterr().out
+    assert youtube.fetched == [PLAYLIST, other, url(1), url(2), url(3)]
+    assert "Done: 2 saved, 0 skipped (page exists), 1 failed, 3 left for the next run." in out
+    assert out.count("--take 3 reached") == 1
+    assert "--take 3: 3 of 6 videos that need YouTube were taken;" in out
+
+
+def test_take_with_page_ovr_says_the_same_ones_come_again(tmp_path, capsys, youtube):
+    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--page", "ovr", "--take", "1"])
+    assert capsys.readouterr().out.rstrip().endswith(
+        "--take 1: 1 of 3 videos that need YouTube were taken; --page ovr asks YouTube for "
+        "every video, so the same command would take the same ones again: give --take 3 or "
+        "--take all.")
+
+
+def test_take_all_and_the_default(tmp_path, capsys, youtube, monkeypatch):
+    monkeypatch.setattr(yt2html, "DEFAULT_TAKE", 2)
+    yt2html.main([PLAYLIST, "-o", str(tmp_path)])
+    assert youtube.fetched == [PLAYLIST, url(1), url(2)]
+    youtube.fetched.clear()
+    capsys.readouterr()
+    yt2html.main([PLAYLIST, "-o", str(tmp_path), "--page", "ovr", "--take", "ALL"])
+    assert youtube.fetched == [PLAYLIST, url(1), url(2), url(3)]
+    assert "left for the next run" not in capsys.readouterr().out
+
+
+def test_taking_counts_a_video_once():
+    args = yt2html.parse_args(["u", "--take", "2"])
+    assert (args.take, args.take_limit, args.taken) == (2, 2, set())
+    yt2html.taking(args, "A")
+    yt2html.taking(args, "A")          # the page and then its video: one
+    assert not yt2html.take_exhausted(args)
+    yt2html.taking(args, "B")
+    assert yt2html.take_exhausted(args)
+    yt2html.taking(args, "B")
+    with pytest.raises(yt2html.TakeReached):
+        yt2html.taking(args, "C")
+    assert args.taken == {"A", "B"}
+    assert yt2html.parse_args(["u"]).take_limit == yt2html.DEFAULT_TAKE == 100
+    assert yt2html.parse_args(["u", "--take", "all"]).take_limit is None
+
+
+@pytest.mark.parametrize("argv, message", [
+    (["--take", "0"], "argument --take: '0': --take is how many videos a run takes from "
+                      "YouTube, 1 or more, or all"),
+    (["--take", "no"], "'no': --take is how many"),
+    (["--take", "-3"], "'-3': --take is how many"),
+    (["--take", "2.5"], "'2.5': --take is how many"),
+    (["--take", "2", "--take", "3"], "--take is given more than once"),
+    (["--take", "5", "--json", "load"], "--take counts the videos that need YouTube, and "
+                                        "--json load asks YouTube for nothing; leave --take out"),
+    (["--take", "5", "--json", "merge"], "and --json merge asks YouTube for nothing"),
+])
+def test_take_errors(capsys, argv, message):
+    with pytest.raises(SystemExit):
+        yt2html.parse_args(["u", *argv])
+    assert message in capsys.readouterr().err
+
+
+def test_take_with_video_formats(capsys, monkeypatch):
+    asked = []
+    monkeypatch.setattr(yt2html, "fetch_formats",
+                        lambda source, args: asked.append(source) or {"id": "x", yt2html.DOWNLOAD_KEY: {"deno": True}})
+    monkeypatch.setattr(yt2html, "format_list", lambda info, saved: ["listed"])
+    args = yt2html.parse_args([url(1), url(2), url(3), "--video-formats", "--take", "2"])
+    assert yt2html.list_formats(args) == 0
+    captured = capsys.readouterr()
+    assert asked == [url(1), url(2)]
+    assert captured.out.count("listed") == 2 and "listed\n\nlisted" in captured.out
+    assert "--take 2: 2 of 3 videos that need YouTube were taken" in captured.out

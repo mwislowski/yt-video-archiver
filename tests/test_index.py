@@ -915,6 +915,19 @@ def test_index_downloads_what_is_missing_and_makes_the_index(tmp_path, youtube, 
                               "row d1 2", "row d0 3", "row d0 4"]
 
 
+def test_take_with_an_index_writes_it_after_each_part(tmp_path, youtube, capsys):
+    listing = write_list(tmp_path, f"# Series\n{PLAYLIST_ID}\nhttps://youtu.be/TESTVIDEO01\n")
+    assert yt2html.main(["--index", listing, "-o", str(tmp_path), "--take", "1"]) == 0
+    out = capsys.readouterr().out
+    assert youtube.fetched == [url(1)]
+    assert "Done: 1 saved, 0 skipped (page exists), 0 failed, 1 left for the next run." in out
+    assert f"Saved index: {tmp_path / 'series.html'}" in out
+    assert "not downloaded" in (tmp_path / "series.html").read_text(encoding="utf-8")
+    assert yt2html.main(["--index", listing, "-o", str(tmp_path), "--take", "1"]) == 0
+    assert youtube.fetched == [url(1), url(2)]
+    assert "left for the next run" not in capsys.readouterr().out
+
+
 def test_the_index_theme_comes_from_the_list_and_the_pages_theme_from_page(tmp_path, youtube):
     """!theme for the index, --page theme: for the video pages, apart."""
     listing = write_list(tmp_path, "!theme: light\nhttps://youtu.be/TESTVIDEO01\n")
@@ -1030,6 +1043,7 @@ def test_load_json_with_a_list(tmp_path, youtube, capsys, saved):
     (["--index-only", "a.txt", "--page", "comments:0"], "cannot be used with --page"),
     (["--index-only", "a.txt", "--page", "theme:dark"], "cannot be used with --page"),
     (["--index-only", "a.txt", "--json", "refresh"], "cannot be used with --json ("),
+    (["--index-only", "a.txt", "--take", "all"], "cannot be used with --take ("),
     (["--index"], "argument --index: expected one argument"),
 ])
 def test_index_option_errors(capsys, argv, message):
@@ -1043,7 +1057,7 @@ def test_index_option_errors(capsys, argv, message):
 def test_every_refused_option(capsys, name, refused):
     value = {"page": ["--page", "comments:5"], "video": ["--video"],
              "transcript": ["--transcript"], "json": ["--json", "load"],
-             "olang": ["--olang", "en"]}.get(refused, [name])
+             "olang": ["--olang", "en"], "take": ["--take", "5"]}.get(refused, [name])
     with pytest.raises(SystemExit):
         yt2html.parse_args(["--index-only", "a.txt", *value])
     assert f"cannot be used with {name} (" in capsys.readouterr().err
