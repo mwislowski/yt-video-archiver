@@ -1212,7 +1212,7 @@ def test_reverse_details_in_every_layout(tmp_path, settings):
 
 
 @pytest.mark.parametrize("make, args, message", [
-    (None, ["series.htm", "x.txt"], "--reverse takes the index page itself, e.g. index.html"),
+    (None, ["series.htm", "x.txt"], "--reverse takes an index page (e.g. index.html) or a folder"),
     (None, ["none.html", "x.txt"], "cannot read index page"),
     ("<html><main class=\"page\">a video page</main>", ["page.html", "x.txt"],
      "'{page}' is not an index page made by yt2html"),
@@ -1378,3 +1378,41 @@ def test_a_video_removed_after_its_download(tmp_path, youtube, capsys):
     result = (tmp_path / "series.html").read_text(encoding="utf-8")
     assert [row_id(row) for row in rows(result)] == ["TESTVIDEO03", "TESTVIDEO01", "TESTVIDEO02"]
     assert removed_rows(result) == ["TESTVIDEO02"]
+
+
+# --reverse FOLDER LIST: the video files of a folder, by name ------------------------------
+
+def test_reverse_a_folder(tmp_path, capsys):
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    for name in ["02 b.mp4", "01 a.MKV", "10 c.webm", "2 d.m4v", "Zebra.mp4", "apple.mp4",
+                 "#1 intro.mp4", "Title [TESTVIDEO01].mp4", "Title [TESTVIDEO01].f399.mp4",
+                 "Title [TESTVIDEO01].pl.dubbed.m4a", "notes.txt", "clip.avi", "x.mp4.part"]:
+        (folder / name).write_bytes(b"x")
+    (folder / "sub").mkdir()
+    (folder / "sub" / "inner.mp4").write_bytes(b"x")
+    target = tmp_path / "out" / "list.txt"
+    assert yt2html.main(["--reverse", str(folder), str(target)]) == 0
+    # plain order, any case; every video file as it is (also "#1 …", corrected by hand)
+    assert target.read_text("utf-8").splitlines() == [
+        "#1 intro.mp4", "01 a.MKV", "02 b.mp4", "10 c.webm", "2 d.m4v", "apple.mp4",
+        "Title [TESTVIDEO01].mp4", "Zebra.mp4"]
+    assert f"Saved list: {target} (8 videos)" in capsys.readouterr().out
+    # never written over; details:no asks for nothing
+    assert yt2html.main(["--reverse", str(folder), str(target), "details:no"]) == 0
+    assert (tmp_path / "out" / "list-1.txt").read_text("utf-8") == target.read_text("utf-8")
+
+
+@pytest.mark.parametrize("make, extra, message", [
+    (True, ["details:title"], "--reverse: a folder gives only its files' names, so no "
+                              "details:title; details: goes with an index page"),
+    (False, [], "no video files in '"),
+])
+def test_reverse_a_folder_errors(tmp_path, capsys, make, extra, message):
+    if make:
+        (tmp_path / "a.mp4").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_bytes(b"x")
+    with pytest.raises(SystemExit):
+        yt2html.main(["--reverse", str(tmp_path), str(tmp_path / "list.txt"), *extra])
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "list.txt").exists()

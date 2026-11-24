@@ -1448,19 +1448,45 @@ def reverse_details(page_html: str, details: tuple[str, ...] = REVERSE_DETAILS) 
     return out
 
 
+def folder_lines(folder: Path) -> list[str]:
+    """--reverse FOLDER LIST (the user's, 24.11.2026): the names of the video
+    files in the folder itself (VIDEO_EXTENSIONS; not its subfolders, not the
+    formats of an unfinished --video download, other files left out without a
+    word), as they are, one a line, in plain alphabetical order without
+    regard to case (no numbers read as numbers: the user numbers 01, 02, …).
+    Names the list would read otherwise (#…, >…) are written too: he
+    corrects them by hand."""
+    names = [path.name for path in folder.iterdir()
+             if path.is_file() and path.suffix.lower().lstrip(".") in core.VIDEO_EXTENSIONS
+             and not core.FORMAT_PART_RE.search(path.name)]
+    return sorted(names, key=lambda name: (name.casefold(), name))
+
+
 def reverse_index(page_name: str, list_name: str, *more: str
                   ) -> tuple[list[str], int, Path, Path | None]:
-    """--reverse INDEX LIST [details:…]: the lines, the number of videos and
-    where they go: the list's name, or, when that file exists, the name with
-    "-1" before its extension (then the taken name is returned too); both
-    taken is an error, as are a page that is not an index made by yt2html
-    and an index without videos."""
+    """--reverse INDEX LIST [details:…] or --reverse FOLDER LIST: the lines,
+    the number of videos and where they go: the list's name, or, when that
+    file exists, the name with "-1" before its extension (then the taken
+    name is returned too); both taken is an error, as are a page that is not
+    an index made by yt2html and an index or folder without videos."""
     if len(more) > 1:
         raise ListFileError("--reverse takes the index page, the list file and, if you like, "
                             "details:title,date,lang")
     details = reverse_details_spec(more[0]) if more else ()
+    if Path(page_name).is_dir():
+        if details:   # (details:no asks for nothing: no error)
+            raise ListFileError(f"--reverse: a folder gives only its files' names, so no "
+                                f"{more[0]}; details: goes with an index page")
+        try:
+            lines = folder_lines(Path(page_name))
+        except OSError as error:
+            raise ListFileError(f"cannot read folder '{page_name}': "
+                                f"{error.strerror or error}") from None
+        if not lines:
+            raise ListFileError(f"no video files in '{page_name}'; nothing was written")
+        return (lines, len(lines), *list_target(list_name))
     if not page_name.lower().endswith(".html"):
-        raise ListFileError(f"--reverse takes the index page itself, e.g. index.html "
+        raise ListFileError(f"--reverse takes an index page (e.g. index.html) or a folder "
                             f"(not {page_name})")
     path = Path(page_name)
     try:
