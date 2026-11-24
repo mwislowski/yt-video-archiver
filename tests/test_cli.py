@@ -93,7 +93,7 @@ def test_bilingual_without_saved_translation_saves_nothing(capsys, info_file, tm
     code, out = run(capsys, "--json", "load", str(info_file), "-o", str(out_dir),
                     "--transcript", "dual:de")
     assert code == 1
-    assert "no transcript translation into 'de'" in out
+    assert "no dual:de in the data (no transcript translation or subtitles of it)" in out
     assert not list(out_dir.glob("*.html"))
 
 

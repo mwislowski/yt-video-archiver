@@ -49,8 +49,8 @@ def test_resolve_versions(info, spec, versions, notes):
 def test_the_languages_to_ask_for():
     spec = [("plain", None), ("timed", "pl"), ("dual", "pl"), ("plain", "en"), ("dual", "de")]
     assert yt2html.version_languages(spec) == ["pl", "en", "de"]
-    assert yt2html.wanted_translations(spec, {"language": "en"}) == ["pl", "de"]
-    assert yt2html.wanted_translations(spec, None) == ["pl", "en", "de"]
+    assert yt2html.source_keys(spec, {}, "en") == ["pl", "de"]
+    assert yt2html.source_keys(spec, {}, None) == ["pl", "en", "de"]
 
 
 # The page -----------------------------------------------------------------------------------
@@ -383,3 +383,144 @@ def test_srt_and_a_page_that_is_there(capsys, saved, youtube):
     assert yt2html.main(["TESTVIDEO01", "-o", str(folder), "--json", "write",
                          "--transcript", "srt"]) == 0
     assert "the page stays as it is" in capsys.readouterr().out
+
+
+# Subtitles of their own in another language (the author's, automatic ones of a dub) ------------
+
+PL_TT = "https://www.youtube.com/api/timedtext?v=X&lang=pl"
+
+
+def with_polish(author=True, auto=False):
+    """English data with the author's Polish subtitles and/or a Polish dub's automatic ones."""
+    from test_transcript import english_info
+    info = english_info()
+    if author:
+        info["subtitles"] = {"pl": caption_formats("Polish", PL_TT),
+                             "live_chat": [{"ext": "json", "url": "chat"}]}
+    if auto:
+        info["automatic_captions"]["pl-orig"] = caption_formats("Polish (Original)",
+                                                                PL_TT + "&kind=asr")
+    return info
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("plain:pl.author", [("plain", "pl.author")]),
+    ("timed:PT-br.Auto-Generated", [("timed", "pt-BR.auto-generated")]),
+    ("plain:pl.translated,plain:pl.own", [("plain", "pl.translated"), ("plain", "pl.own")]),
+    ("dual:pl.own", [("dual", "pl.own")]),
+])
+def test_kinds_in_the_spec(value, expected):
+    assert yt2html.transcript_spec(value) == expected
+
+
+@pytest.mark.parametrize("value, message", [
+    ("plain:pl.dubbed", "'plain:pl.dubbed': the kind after the code is one of author, "
+                        "auto-generated, translated, own, e.g. plain:pl.author"),
+    ("dual:pl.author", "'dual:pl.author': dual puts the translation of the same lines beside the "
+                       "original, so only dual:pl, dual:pl.translated or dual:pl.own"),
+    ("timed:jp.author", "'timed:jp.author': 'jp' is not a language code"),
+    ("plain:pl.author,plain:PL.author", "'plain:pl.author' is given more than once"),
+])
+def test_kind_errors(value, message):
+    import argparse
+    with pytest.raises(argparse.ArgumentTypeError, match=re.escape(message)):
+        yt2html.transcript_spec(value)
+
+
+def test_subtitles_in():
+    info = with_polish(auto=True)
+    assert yt2html.subtitles_in(info, "pl", "author")[0] == "pl"
+    assert yt2html.subtitles_in(info, "pl-PL", "author")[0] == "pl"      # the same language
+    assert yt2html.subtitles_in(info, "pl", "auto-generated")[0] == "pl"
+    assert yt2html.subtitles_in(info, "live_chat", "author") is None
+    assert yt2html.subtitles_in(info, "de", "author") is None
+
+
+@pytest.mark.parametrize("author, auto, spec, keys", [
+    # plain and timed: the author's, else the automatic ones, else the translation
+    (True, True, [("plain", "pl")], ["pl.author"]),
+    (False, True, [("timed", "pl")], ["pl.auto-generated"]),
+    (False, False, [("plain", "pl")], ["pl"]),
+    # a kind: that one; dual: the translation
+    (True, False, [("plain", "pl.translated"), ("dual", "pl")], ["pl"]),
+    (False, False, [("plain", "pl.author"), ("timed", "pl.auto-generated")],
+     ["pl.author", "pl.auto-generated"]),
+    (True, False, [("plain", "pl.own"), ("dual", "pl.own")], []),     # one's own: not asked
+])
+def test_source_keys(author, auto, spec, keys):
+    assert yt2html.source_keys(spec, with_polish(author, auto), "en") == keys
+
+
+def test_one_s_own_translation_is_not_asked_of_youtube():
+    spec = [("plain", "pl"), ("dual", "pl")]
+    assert yt2html.source_keys(spec, with_polish(author=False), "en", {"pl"}) == []
+    assert yt2html.source_keys(spec, with_polish(), "en", {"pl"}) == ["pl.author"]
+
+
+def test_the_author_s_subtitles_are_downloaded(fake_ydl, capsys):
+    ydl = fake_ydl()
+    transcript = yt2html.fetch_transcript(ydl, with_polish(), ["pl.author", "de.author", "pl"])
+    assert list(transcript["tracks"]) == ["pl.author"]
+    track = transcript["tracks"]["pl.author"]
+    assert (track["language"], track["name"], track["kind"]) == ("pl", "Polish", "author")
+    assert any(url.startswith(PL_TT) for url in ydl.urls)
+    assert transcript["missing"]["de.author"] == {
+        "reason": "YouTube has no subtitles by the author in 'de'",
+        "refused": False, "date": dt.date.today().isoformat()}
+    assert "pl" in transcript["translations"]                  # and the translation as well
+    out = capsys.readouterr().out
+    assert "Downloading subtitles (Polish, by the author)..." in out
+
+
+def test_subtitles_of_their_own_on_the_page(info):
+    transcript = info[yt2html.TRANSCRIPT_KEY]
+    transcript["tracks"] = {"pl.author": {"language": "pl", "name": "Polish", "kind": "author",
+                                          "cues": [{"start": 0.5, "text": "Cześć"}]}}
+    html = render(info, [("plain", None), ("timed", "pl"), ("timed", "pl.translated")])
+    found = sections(html)
+    assert found == [("transcript original", ""), ("transcript with-timestamps", ' data-track="pl"'),
+                     ("transcript with-timestamps", ' data-lang="pl"')]
+    assert "Polish, by the author" in html and "Cześć" in html
+    assert row(html, "Transcript").endswith(
+        "3 versions: plain, timed in Polish (by the author), timed in Polish (auto-translated)")
+    # the same source twice: once
+    versions, notes = yt2html.resolve_versions([("timed", "pl"), ("timed", "pl.author")], transcript)
+    assert versions == [("timed", "pl.author")]
+    assert notes == ["timed:pl.author: the same as timed:pl.author; shown once"]
+    # what the data have not: named with its reason
+    transcript["missing"] = {"pl.auto-generated": {"reason": "YouTube has none", "refused": False}}
+    assert row(render(info, [("plain", "pl.auto-generated")]), "Transcript").endswith(
+        "not available: plain:pl.auto-generated (YouTube has none)")
+    # their SRT file under their kind
+    assert yt2html.srt_tracks(info, [("timed", "pl")])[0][:2] == ("pl", "author")
+
+
+def test_json_write_adds_subtitles_of_their_own(capsys, saved, youtube):
+    # the saved data list the author's Polish subtitles: timed:pl asks for them
+    data = json.loads(saved.read_text("utf-8"))
+    data["subtitles"] = {"pl": caption_formats("Polish", PL_TT)}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    args = yt2html.parse_args(["TESTVIDEO01", "--json", "write", "--transcript", "timed:pl"])
+    assert yt2html.missing_for_update(data, args) == (False, ["pl.author"])
+    # YouTube's data now lack them: noted, not asked for again
+    assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                         "--transcript", "timed:pl"]) == 0
+    after = json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]
+    assert after["missing"]["pl.author"]["reason"] == "YouTube has no subtitles by the author in 'pl'"
+    capsys.readouterr()
+    assert yt2html.missing_for_update(json.loads(saved.read_text("utf-8")), args) == (False, [])
+    assert ("No subtitles pl.author in the saved data (YouTube has no subtitles by the author "
+            "in 'pl'); not asked for again.") in capsys.readouterr().out
+
+
+def test_a_kind_names_whose_translation_it_is():
+    transcript = {"language": "en", "cues": [], "translations": {
+        "pl": {"language": "pl", "name": "Polish", "cues": []},
+        "de": {"language": "de", "name": "German", "cues": [], "own": True}}}
+    source = yt2html.version_source
+    assert source(transcript, "plain", "pl.translated") == "pl"
+    assert source(transcript, "plain", "pl.own") == "pl.own"            # YouTube's, not one's own
+    assert source(transcript, "dual", "de.own") == "de"
+    assert source(transcript, "timed", "de.translated") == "de.translated"
+    assert source(transcript, "dual", "de") == "de"                     # no kind: either
+    assert not yt2html.available(transcript, "pl.own")
