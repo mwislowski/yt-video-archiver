@@ -6042,8 +6042,8 @@ def resolve_audio(choice: FormatChoice, requests: list) -> tuple[list, list[str]
     return found, messages
 
 
-# The kinds of subtitles sub: takes, in the order sub:CODE tries them.
-SUB_KINDS = ("author", "auto-generated", "translated")
+# The video's own subtitles as --video-formats lists them (what --transcript
+# CODE.author and CODE.auto-generated take).
 SUB_KIND_TEXT = {"author": "by the author", "auto-generated": "auto-generated"}
 
 
@@ -6374,11 +6374,12 @@ def video_spec(value: str) -> dict:
     "720p30": up to 720p and 30 fps; at most 1080p), "ovr" (download the
     files that are there again) and extra audio tracks ("audio:pl",
     "audio:pl.auto-dubbed"), one item for each (the code is written the
-    usual way); any case of letters. (Subtitles: --transcript srt.) Raises ArgumentTypeError (before anything is fetched), also for
-    an address taken as parameters ("--video URL"), a code that is no
-    language code, and a repeated item: the same one twice, or a language
-    both alone and with a role (kind): what was meant is not clear."""
-    spec = {"height": None, "fps": None, "ovr": False, "audio": [], "subs": [],
+    usual way); any case of letters. Subtitles are not here: --transcript
+    srt. Raises ArgumentTypeError (before anything is fetched), also for an
+    address taken as parameters ("--video URL"), a code that is no language
+    code, and a repeated item: the same one twice, or a language both alone
+    and with a role: what was meant is not clear."""
+    spec = {"height": None, "fps": None, "ovr": False, "audio": [],
             "text": value.strip().lower()}
     if not spec["text"]:
         return spec
@@ -6421,15 +6422,15 @@ def video_spec(value: str) -> dict:
 
 
 def add_once(items: list, new: tuple) -> None:
-    """Add (code, role or kind, text) to the audio: or sub: items, refusing
-    the same one twice and a code both alone and with a role (kind)."""
+    """Add (code, role, text) to the audio: items, refusing the same one
+    twice and a code both alone and with a role."""
     for code, sort, text in items:
         if code == new[0] and sort == new[1]:
             raise argparse.ArgumentTypeError(f"'{new[2]}' is given more than once")
         if code == new[0] and (sort is None or new[1] is None):
             raise argparse.ArgumentTypeError(
-                f"'{text}' and '{new[2]}': give the language alone or with a "
-                f"{'role' if text.lower().startswith('audio') else 'kind'} each time, not both")
+                f"'{text}' and '{new[2]}': give the language alone or with a role each "
+                f"time, not both")
     items.append(new)
 
 
@@ -6588,11 +6589,13 @@ def parse_args(argv=None) -> argparse.Namespace:
              "as continuous text in the original language; or versions, comma-separated, "
              "shown in this order: plain (continuous text), timed (one line per caption), "
              "dual:CODE (timed, with the translation into that language beside it), each "
-             "with :CODE for a language (plain:pl, timed:de: YouTube's translation, or your "
-             "own merged with --json merge) or without, for the original; ovr (with --json: "
-             "the saved transcript downloaded again). A translation YouTube has not or refuses "
-             "is left out with a note. Write the address first: yt2html URL --transcript "
-             "plain,dual:pl")
+             "with :CODE for a language (plain:pl, timed:de: the author's subtitles in it, else "
+             "the automatic ones of a dub, else YouTube's translation; .author, "
+             ".auto-generated, .translated or .own after the code chooses one) or without, for "
+             "the original; srt (each version's subtitles also as an SRT file next to the page); "
+             "ovr (with --json: the saved transcript downloaded again). What YouTube has not or "
+             "refuses is left out with a note. Write the address first: yt2html URL "
+             "--transcript plain,dual:pl")
     parser.add_argument(
         "--olang", type=olang_code, default=None, metavar="CODE",
         help="the video's original language, when you know it better than YouTube shows it: "
@@ -6620,8 +6623,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="archive the videos of a list file (UTF-8 text: video and "
                              "playlist addresses or ids, page names, video files of your own; "
                              "a '# Title', '## Chapter' to '#### Chapter', '> notes', "
-                             "'= Title' above a line, '// comments', '!numbers: no', "
-                             "'!thumbnails: no', '!layout: plain|compact|cards') and make its index page in the output folder, "
+                             "'= Title' above a line, '// comments', settings such as "
+                             "'!numbers: no', '!dates: no', '!layout: cards', '!theme: dark') "
+                             "and make its index page in the output folder, "
                              "named after the file ('series.txt' -> 'series.html'): built from "
                              "the pages and video files in the folder; playlists are read from "
                              "YouTube each time (the index keeps their lists for when YouTube "
@@ -6630,7 +6634,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--index-only", metavar="FILE",
                         help="only make the index page of a list file from what is in the "
                              "output folder, downloading nothing (playlists: only their lists "
-                             "are read); not with options that download or shape the pages")
+                             "are read); with -o and --cookies only")
     parser.add_argument("--video", nargs="?", const="", type=video_spec, metavar="PARAMETERS",
                         help="also download the video itself, after its page, as an mp4 "
                              "named like the page (needs ffmpeg): the best quality up to "
