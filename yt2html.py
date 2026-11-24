@@ -2736,6 +2736,7 @@ def page_metadata(info: dict, archived: dt.date, cover: str | None = None) -> di
     refreshes = [u for u in info.get(UPDATES_KEY) or [] if u.get("refreshed")]
     published = published_day(info)
     duration = info.get("duration")
+    playlist = info.get(PLAYLIST_KEY) or {}
     tags = {
         "yt2html:metadata": METADATA_VERSION,
         "yt2html:video-id": info.get("id"),
@@ -2752,6 +2753,12 @@ def page_metadata(info: dict, archived: dt.date, cover: str | None = None) -> di
         "yt2html:comments-status": comment_status(info),
         "yt2html:comments-downloaded": str(len(info.get("comments") or [])),
         "yt2html:comments-youtube": youtube_comment_count(info)[0],  # as on the Comments tile
+        # the playlist the video was downloaded from and its place there: the index
+        # keeps the video when the playlist no longer has it
+        "yt2html:playlist": playlist.get("id"),
+        "yt2html:playlist-position": (str(playlist["position"])
+                                      if playlist.get("id") and playlist.get("position")
+                                      else None),
         "yt2html:cover": cover,   # last: by far the longest
     }
     return {name: value for name, value in tags.items() if value}

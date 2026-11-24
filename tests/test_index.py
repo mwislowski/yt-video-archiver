@@ -1,5 +1,6 @@
 """The index of a list file (--index FILE, --index-only FILE)."""
 
+import datetime as dt
 import json
 import re
 import shutil
@@ -1248,3 +1249,96 @@ def test_the_two_reverses_do_not_go_together(tmp_path, capsys):
     with pytest.raises(SystemExit):
         yt2html.main(["--reverse-details", "a.htm", "b.txt"])
     assert "--reverse-details takes the index page itself" in capsys.readouterr().err
+
+
+# Videos a playlist no longer has, kept in the folder -------------------------------------
+
+def removed_rows(page_html: str) -> list[str]:
+    return [row_id(row) for row in rows(page_html) if "removed from the playlist</span>" in row]
+
+
+def row_id(row_html: str) -> str:
+    return re.search(r"watch\?v=([\w-]+)", row_html).group(1)
+
+
+def test_videos_removed_from_the_playlist_stay_at_its_end(tmp_path):
+    for n, position in ((1, 1), (4, 4), (5, 2), (6, None)):
+        page(tmp_path, f"TESTVIDEO0{n}", playlist=PLAYLIST_ID,
+             **{"playlist-position": position and str(position)})
+    page(tmp_path, "TESTVIDEO07")                                 # downloaded on its own
+    page(tmp_path, "TESTVIDEO09", name="Episode [Q5xYz123abc] again [TESTVIDEO09].html",
+         playlist=PLAYLIST_ID, **{"playlist-position": "9"})    # an id-like title
+    page(tmp_path, "TESTVIDEO08", playlist="PLother000001", **{"playlist-position": "1"})
+    lists = {PLAYLIST_ID: playlist("TESTVIDEO02", "TESTVIDEO01", "TESTVIDEO03")}
+    result = html(tmp_path, f"# Series\n{PLAYLIST_ID}\n", lists)
+    # the playlist as YouTube has it now, then the removed ones by their old places
+    # (no place known: first), each with its note; the others' pages are not shown
+    assert [row_id(row) for row in rows(result)] == [
+        "TESTVIDEO02", "TESTVIDEO01", "TESTVIDEO03", "TESTVIDEO06", "TESTVIDEO05", "TESTVIDEO04",
+        "TESTVIDEO09"]
+    assert removed_rows(result) == ["TESTVIDEO06", "TESTVIDEO05", "TESTVIDEO04", "TESTVIDEO09"]
+    assert line_of(rows(result)[-2]).endswith(
+        '<span class="miss">only the page downloaded</span> · <a href="https://www.youtube.com'
+        '/watch?v=TESTVIDEO04" target="_blank" rel="noopener noreferrer" title="Title of '
+        'TESTVIDEO04">YouTube</a> · <span class="removed">removed from the playlist</span>')
+    assert blocks(result)[-1] == "row d0 7"                     # numbered on
+    note = re.search(r'playlist-note"><p>(.*?)</p>', result).group(1)
+    assert ' · 3 videos <span class="days">(+4 removed from the playlist, kept here)</span> · ' \
+        in note
+    assert "TESTVIDEO07" not in result and "TESTVIDEO08" not in result
+
+
+def test_a_removed_video_shown_elsewhere_is_shown_there_only(tmp_path):
+    for n in (1, 2, 3):
+        page(tmp_path, f"TESTVIDEO0{n}", published="2024-05-0" + str(n),
+             playlist=PLAYLIST_ID, **{"playlist-position": str(n)})
+    lists = {PLAYLIST_ID: playlist("TESTVIDEO01"), "PLother000001": playlist("TESTVIDEO02"),
+             "PLthird000001": playlist()}
+    text = (f"# Series\n## A\n{PLAYLIST_ID}\n## B\nPLother000001\n## C\nTESTVIDEO03\n"
+            f"## D\nPLthird000001\n")
+    result = html(tmp_path, text, lists)
+    assert removed_rows(result) == []                 # in another playlist, a row of its own
+    assert "removed from the playlist, kept here" not in result
+    # in two playlists' pages... the page names one: there, and only once
+    page(tmp_path, "TESTVIDEO04", playlist="PLthird000001", **{"playlist-position": "3"})
+    text = f"# Series\n## A\nPLthird000001\n## B\nPLthird000001\n"
+    assert removed_rows(html(tmp_path, text, lists)) == ["TESTVIDEO04"]
+    # a span of days counts the playlist's videos, not the removed ones
+    line = re.search(r'playlist-note"><p>(.*?)</p>', html(tmp_path, f"{PLAYLIST_ID}\n", {
+        PLAYLIST_ID: playlist("TESTVIDEO01")})).group(1)
+    assert ('1 video <span class="days">(01.05.2024)</span> <span class="days">(+2 removed '
+            'from the playlist, kept here)</span>') in line
+
+
+def test_a_video_back_in_the_playlist_is_in_its_place(tmp_path):
+    page(tmp_path, "TESTVIDEO01", playlist=PLAYLIST_ID, **{"playlist-position": "1"})
+    result = html(tmp_path, f"{PLAYLIST_ID}\n",
+                  {PLAYLIST_ID: playlist("TESTVIDEO02", "TESTVIDEO01")})
+    assert removed_rows(result) == [] and "kept here" not in result
+
+
+def test_the_page_names_its_playlist_and_place(info):
+    info[yt2html.PLAYLIST_KEY] = {"id": PLAYLIST_ID, "title": "T", "position": 7, "count": 9}
+    meta = yt2html.page_metadata(info, dt.date(2026, 11, 6), "cover")
+    assert (meta["yt2html:playlist"], meta["yt2html:playlist-position"]) == (PLAYLIST_ID, "7")
+    assert list(meta)[-3:] == ["yt2html:playlist", "yt2html:playlist-position", "yt2html:cover"]
+    info[yt2html.PLAYLIST_KEY] = {"id": PLAYLIST_ID, "position": None}
+    meta = yt2html.page_metadata(info, dt.date(2026, 11, 6))
+    assert meta["yt2html:playlist"] == PLAYLIST_ID and "yt2html:playlist-position" not in meta
+    info[yt2html.PLAYLIST_KEY] = {"id": None, "position": 3}
+    assert not {"yt2html:playlist", "yt2html:playlist-position"} & set(
+        yt2html.page_metadata(info, dt.date(2026, 11, 6)))
+    info[yt2html.PLAYLIST_KEY] = None
+    assert "yt2html:playlist" not in yt2html.page_metadata(info, dt.date(2026, 11, 6))
+
+
+def test_a_video_removed_after_its_download(tmp_path, youtube, capsys):
+    listing = write_list(tmp_path, f"# Series\n{PLAYLIST_ID}\n")
+    assert yt2html.main(["--index", listing, "-o", str(tmp_path)]) == 0
+    second = yt2html.read_page_metadata(yt2html.existing_page(tmp_path, "TESTVIDEO02"))
+    assert (second["yt2html:playlist"], second["yt2html:playlist-position"]) == (PLAYLIST_ID, "2")
+    youtube.playlists[PLAYLIST_ID] = [entry(3), entry(1)]      # 2 removed, 3 added
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path)]) == 0
+    result = (tmp_path / "series.html").read_text(encoding="utf-8")
+    assert [row_id(row) for row in rows(result)] == ["TESTVIDEO03", "TESTVIDEO01", "TESTVIDEO02"]
+    assert removed_rows(result) == ["TESTVIDEO02"]

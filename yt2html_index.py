@@ -392,6 +392,9 @@ def videos_to_download(listing: ListFile, run: core.Run) -> list[tuple[str, str 
 # The structure of the index: chapters, rows, notes
 # --------------------------------------------------------------------------
 
+ID_IN_NAME = re.compile(r"\[([A-Za-z0-9_-]{11})\]")
+
+
 @dataclass
 class Row:
     kind: str                      # "video", "file" or "playlist" (could not be read)
@@ -402,6 +405,7 @@ class Row:
     notes: list[str] = field(default_factory=list)
     date: str | None = None        # from "= !date:"
     lang: str | None = None        # from "= !lang:"
+    removed: bool = False          # a video its playlist no longer has, kept in the folder
 
 
 @dataclass
@@ -420,6 +424,7 @@ class Notes:
 class PlaylistNotes:
     playlist_id: str
     data: dict
+    removed: int = 0               # videos the playlist no longer has, kept at its end
 
 
 def item_row(item: Item) -> Row:
@@ -436,11 +441,14 @@ def lone_playlist(children: list) -> Item | None:
     return None
 
 
-def structure(children: list, level: int, playlists: dict[str, dict | None]) -> list:
+def structure(children: list, level: int, playlists: dict[str, dict | None],
+              removed=lambda playlist_id: []) -> list:
     """The index's blocks for one level: a playlist that is the only element
     of its level puts its videos in its place; next to other elements it
     becomes a chapter one level lower, at the lowest level its videos stand
-    next to the other elements. Notes in a row are one block."""
+    next to the other elements. Notes in a row are one block. `removed`
+    gives the videos a playlist no longer has and the folder keeps: they
+    stand at its end (Builder.removed_from())."""
     lone = lone_playlist(children)
     blocks: list = []
     for child in children:
@@ -456,20 +464,35 @@ def structure(children: list, level: int, playlists: dict[str, dict | None]) -> 
                 data = playlists.get(inner.ref)
                 text = inner.title or (data or {}).get("title") or ""
             blocks.append(Heading(child.level, text,
-                                  structure(child.children, child.level, playlists)))
+                                  structure(child.children, child.level, playlists, removed)))
         elif child.kind != "playlist":
             blocks.append(item_row(child))
         elif playlists.get(child.ref) is None:
             blocks.append(Row("playlist", child.ref, child.line, child.title))
         else:
             data = playlists[child.ref]
-            videos = [PlaylistNotes(child.ref, data)] + [
-                Row("video", video_id, child.line) for video_id in data["entries"]]
+            gone = removed(child.ref)
+            videos = ([PlaylistNotes(child.ref, data, len(gone))]
+                      + [Row("video", video_id, child.line) for video_id in data["entries"]]
+                      + [Row("video", video_id, child.line, removed=True) for video_id in gone])
             if child is lone or level >= LEVELS:
                 blocks.extend(videos)
             else:
                 blocks.append(Heading(level + 1, child.title or data.get("title") or "", videos))
     return blocks
+
+
+def shown_videos(children: list, playlists: dict[str, dict | None]) -> set[str]:
+    """Every video the index shows: its own rows and the playlists' videos."""
+    shown: set[str] = set()
+    for child in children:
+        if isinstance(child, Chapter):
+            shown |= shown_videos(child.children, playlists)
+        elif isinstance(child, Item) and child.kind == "video":
+            shown.add(child.ref)
+        elif isinstance(child, Item) and child.kind == "playlist" and playlists.get(child.ref):
+            shown.update(playlists[child.ref]["entries"])
+    return shown
 
 
 def list_title(listing: ListFile, playlists: dict[str, dict | None]) -> str:
@@ -655,6 +678,7 @@ class Builder:
         self.old_pages: set[str] = set()
         self.missing: dict[int, list[str]] = {}   # line -> videos not downloaded
         self.pages: dict[str, tuple[Path | None, dict]] = {}   # video id -> (page, metadata)
+        self.placed: set[str] = set()   # videos kept at the end of a playlist (removed_from())
 
     # -- one row ---------------------------------------------------------------
 
@@ -666,6 +690,8 @@ class Builder:
         else:
             parts = self.video(row)
         thumb, title, line, missing = parts
+        if row.removed:
+            line = [*line, '<span class="removed">removed from the playlist</span>']
         notes = (f'<div class="note">{"".join(f"<p>{note_html(p)}</p>" for p in row.notes)}'
                  f'</div>' if row.notes else "")
         # the number goes before the title, beside it: a long title wraps under its
@@ -708,6 +734,33 @@ class Builder:
             page = core.existing_page(self.output_dir, video_id)
             self.pages[video_id] = (page, core.read_page_metadata(page) if page else {})
         return self.pages[video_id]
+
+    def removed_from(self, shown: set[str]):
+        """What structure() asks for each playlist: the videos whose pages in
+        the folder name it (yt2html:playlist, as on the day of their download)
+        and that the index shows nowhere else (not in this playlist, another
+        one or a row of their own), in their old places' order; each once."""
+        members: dict[str, list[tuple[int, str]]] = {}
+        pages = sorted(self.output_dir.glob("*.html")) if self.output_dir.is_dir() else []
+        # every "[…]" of eleven characters: a title may hold one too (its page's
+        # yt2html:video-id tells which is the video's)
+        for video_id in dict.fromkeys(found for path in pages
+                                      for found in ID_IN_NAME.findall(path.name)):
+            meta = self.page_of(video_id)[1]
+            playlist = meta.get("yt2html:playlist")
+            if playlist and video_id not in shown and meta.get("yt2html:video-id") == video_id:
+                try:
+                    position = int(meta.get("yt2html:playlist-position") or 0)
+                except ValueError:
+                    position = 0
+                members.setdefault(playlist, []).append((position, video_id))
+
+        def removed(playlist_id: str) -> list[str]:
+            gone = [video_id for _, video_id in sorted(members.get(playlist_id, []))
+                    if video_id not in self.placed]
+            self.placed.update(gone)
+            return gone
+        return removed
 
     def published(self, video_ids: list[str]) -> list[dt.date | None]:
         """The publication day of each video (its page's yt2html:published),
@@ -814,7 +867,8 @@ class Builder:
                            + "</div>")
             elif isinstance(block, PlaylistNotes):
                 out.append(playlist_notes(block, level,
-                                          self.published(block.data.get("entries") or [])))
+                                          self.published(block.data.get("entries") or []),
+                                          block.removed))
             elif isinstance(block, Heading):
                 number += 1
                 tag = f"h{block.level + 1}"
@@ -877,18 +931,24 @@ def published_range(days: list[dt.date | None]) -> str:
     return span
 
 
-def playlist_notes(block: PlaylistNotes, depth: int, days: list[dt.date | None]) -> str:
+def playlist_notes(block: PlaylistNotes, depth: int, days: list[dt.date | None],
+                   removed: int = 0) -> str:
     """The notes the program adds to a playlist: "Playlist" and its title,
     its count as YouTube gives it with the span of its videos' publication
     days in grey (the program puts it together from the pages in the folder;
     the user, 21.11.2026), "Channel" and its name; then its description, each
     line a paragraph as in the user's notes, trimmed, blank lines left out
-    (the user, 22.11.2026: the notes' paragraphs are the spacing)."""
+    (the user, 22.11.2026: the notes' paragraphs are the spacing). Videos
+    the playlist no longer has and the index keeps are counted apart, in
+    grey: "(+2 removed from the playlist, kept here)"."""
     data = block.data
     url = f"{core.YOUTUBE}/playlist?list={block.playlist_id}"
     channel = data.get("channel")
     span = published_range(days)
     span = f'<span class="days">({core.esc(span)})</span>' if span else ""
+    if removed:
+        span = (f'{span} <span class="days">(+{core.format_int(removed)} removed from the '
+                f'playlist, kept here)</span>').lstrip()
     count = (core.esc(f'{core.format_int(data["count"])} video{"" if data["count"] == 1 else "s"}')
              if data.get("count") is not None else "")
     first = ["Playlist " + core.link(url, data.get("title") or block.playlist_id)
@@ -1227,7 +1287,8 @@ def render_index(listing: ListFile, playlists: dict[str, dict | None], output_di
     """The index page, and the builder with its notes for the console."""
     today = today or dt.date.today()
     builder = Builder(output_dir, listing.settings)
-    body = builder.blocks(structure(listing.children, 0, playlists), 0)
+    removed = builder.removed_from(shown_videos(listing.children, playlists))
+    body = builder.blocks(structure(listing.children, 0, playlists, removed), 0)
     title = list_title(listing, playlists)
     kept = {pid: data for pid, data in playlists.items() if data}
     # "<" escaped, so the data can never close its <script> element
