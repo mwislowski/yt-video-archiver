@@ -235,7 +235,6 @@ class TestFetching:
 
     @pytest.mark.parametrize("target, kwargs, message", [
         ("fr", {}, "(available: de, pl)"),
-        ("en", {}, "language of the transcript itself"),
         ("pl", {"empty_translation": True}, "no translation into 'pl'"),
     ])
     def test_translation_not_there(self, fake_ydl, target, kwargs, message, capsys):
@@ -247,6 +246,12 @@ class TestFetching:
         assert transcript["missing"][target]["refused"] is False
         out = capsys.readouterr().out
         assert f"No translation into '{target}': " in out and "--page ovr" not in out
+
+    def test_no_translation_into_the_original_itself(self, fake_ydl, capsys):
+        # plain:en of an English video is the original: nothing to ask, nothing missing
+        transcript = yt2html.fetch_transcript(fake_ydl(), english_info(), ["en-GB", "de"])
+        assert list(transcript["translations"]) == ["de"] and "missing" not in transcript
+        assert "en-GB" not in capsys.readouterr().out
 
     def test_no_transcript(self, fake_ydl):
         info = {}
@@ -266,14 +271,20 @@ class TestSpec:
     @pytest.mark.parametrize("value, expected", [
         ("plain", [("plain", None)]),
         ("", [("plain", None)]),            # the option alone
-        ("timestamps,plain", [("timestamps", None), ("plain", None)]),
-        (" plain , bilingual:pl,bilingual:pt-BR ",
-         [("plain", None), ("bilingual", "pl"), ("bilingual", "pt-BR")]),
+        ("timed,plain", [("timed", None), ("plain", None)]),
+        (" plain , dual:pl,dual:pt-BR ",
+         [("plain", None), ("dual", "pl"), ("dual", "pt-BR")]),
         # any case of letters; codes in the usual notation, as YouTube writes them
-        ("Plain,TIMESTAMPS,Bilingual:PL,bilingual:pt-br,bilingual:ZH-HANS,bilingual:es-419",
-         [("plain", None), ("timestamps", None), ("bilingual", "pl"), ("bilingual", "pt-BR"),
-          ("bilingual", "zh-Hans"), ("bilingual", "es-419")]),
+        ("Plain,TIMED,Dual:PL,dual:pt-br,dual:ZH-HANS,dual:es-419",
+         [("plain", None), ("timed", None), ("dual", "pl"), ("dual", "pt-BR"),
+          ("dual", "zh-Hans"), ("dual", "es-419")]),
         (" ", [("plain", None)]),
+        # a language on every version; without one, the original, also later in the list
+        ("plain:pl,timed,timed:DE,plain", [("plain", "pl"), ("timed", None), ("timed", "de"),
+                                          ("plain", None)]),
+        ("plain,plain:en", [("plain", None), ("plain", "en")]),   # the same only if en is it
+        ("ovr", [("plain", None), ("ovr", None)]),               # the option alone, again
+        ("timed,OVR", [("timed", None), ("ovr", None)]),
     ])
     def test_valid(self, value, expected):
         assert yt2html.transcript_spec(value) == expected
@@ -284,9 +295,9 @@ class TestSpec:
             "pl", "pt-BR", "zh-Hans", "es-419", "fil"]
 
     @pytest.mark.parametrize("value", [
-        "plain,", "plain,plain", "none,plain", "bilingual", "bilingual:",
-        "bilingual:polish!", "plain:pl", "block", "bilingual:pl,bilingual:pl", "bilingual:pl,bilingual:PL",
-        "bilingual:jp",
+        "plain,", "plain,plain", "none,plain", "dual", "dual:", "plain:",
+        "dual:polish!", "block", "dual:pl,dual:pl", "dual:pl,dual:PL", "timed:pl,timed:PL",
+        "dual:jp", "timestamps", "bilingual:pl", "ovr,ovr", "ovr:yes",
     ])
     def test_invalid(self, value):
         with pytest.raises(argparse.ArgumentTypeError):
@@ -294,10 +305,16 @@ class TestSpec:
 
     @pytest.mark.parametrize("value, message", [
         # anything unknown, "none" too (without the option there is no transcript)
-        ("none", "'none' is not a parameter (use plain, timestamps or bilingual:CODE)"),
-        ("https://www.youtube.com/watch?v=x", "is not a parameter (use plain, timestamps or "
-                                              "bilingual:CODE); the video's address goes before --transcript"),
-        ("bilingual:jp", "'bilingual:jp': 'jp' is not a language code (e.g. pl, en, pt-BR)"),
+        ("none", "'none' is not a parameter (use plain, timed, dual:CODE or ovr, a version "
+                 "with :CODE for a language)"),
+        ("https://www.youtube.com/watch?v=x", "is not a parameter (use plain, timed, dual:CODE "
+                                              "or ovr, a version with :CODE for a language); "
+                                              "the video's address goes before --transcript"),
+        ("dual:jp", "'dual:jp': 'jp' is not a language code (e.g. pl, en, pt-BR)"),
+        ("plain:jp", "'plain:jp': 'jp' is not a language code"),
+        ("dual", "'dual' needs a language code, e.g. dual:pl"),
+        ("timed:", "'timed:': a language code goes after the colon"),
+        ("plain,PLAIN", "'plain' is given more than once"),
     ])
     def test_messages(self, value, message):
         with pytest.raises(argparse.ArgumentTypeError, match=re.escape(message)):
@@ -313,7 +330,7 @@ def sections(info, spec):
 class TestRendering:
     def test_default_plain_split_by_chapters(self, info):
         found, html = sections(info, None)
-        assert found == ["transcript"]
+        assert found == ["transcript original"]
         import re
         visible = re.sub(r"<span data-c=\"[0-9.]+\">|</span>", "", html)  # the text as shown
         assert "<h3>Intro</h3><p>Hello and welcome first line second line</p>" in visible
@@ -322,8 +339,9 @@ class TestRendering:
         assert '<p><span data-c="0">Hello and welcome</span> <span data-c=' in html
 
     def test_versions_in_given_order(self, info):
-        found, html = sections(info, [("timestamps", None), ("plain", None), ("bilingual", "pl")])
-        assert found == ["transcript with-timestamps", "transcript", "transcript bilingual"]
+        found, html = sections(info, [("timed", None), ("plain", None), ("dual", "pl")])
+        assert found == ["transcript with-timestamps original", "transcript original",
+                         "transcript bilingual"]
         assert "English, auto-generated, with timestamps" in html
         assert "Polish, auto-translated" in html
 
@@ -349,7 +367,7 @@ class TestSpeakerChanges:
         return yt2html.render_page(info, None, {}, dt.date(2026, 11, 7), transcript_spec=spec)
 
     def test_timestamps_and_bilingual(self, info):
-        html = self.render(info, [("timestamps", None), ("bilingual", "pl")])
+        html = self.render(info, [("timed", None), ("dual", "pl")])
         assert "&gt;&gt;" not in html
         assert f'<span class="text">{self.MARK} Hello and welcome</span>' in html
         assert f'<span class="text">first line {self.MARK} second voice</span>' in html
@@ -367,7 +385,7 @@ class TestSpeakerChanges:
 
 
 def test_bilingual_section_names_its_language(info):
-    _, html = sections(info, [("bilingual", "pl")])
+    _, html = sections(info, [("dual", "pl")])
     assert '<section class="transcript bilingual" data-lang="pl"><h2>Transcript</h2>' in html
 
 
@@ -483,7 +501,7 @@ class TestOriginalUncertain:
     def test_on_the_page(self, info):
         info.update(without_audio_tracks())
         info[yt2html.TRANSCRIPT_KEY]["original"] = True      # saved before the check
-        spec = [("plain", None), ("timestamps", None), ("bilingual", "fr")]
+        spec = [("plain", None), ("timed", None), ("dual", "fr")]
         info[yt2html.TRANSCRIPT_KEY]["translations"] = {
             "fr": {"language": "fr", "name": "French", "cues": info[yt2html.TRANSCRIPT_KEY]["cues"]}}
         html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5), transcript_spec=spec)
@@ -492,7 +510,7 @@ class TestOriginalUncertain:
                 'the captions YouTube opens with. Make the page again later; if YouTube asked to '
                 'confirm you are not a bot, with your browser&#x27;s cookies.</div>')
         assert html.count(note) == 1
-        assert re.search(r'<section class="transcript"><h2>Transcript[^\n]*?</h2>'
+        assert re.search(r'<section class="transcript original"><h2>Transcript[^\n]*?</h2>'
                          + re.escape(note), html)
         assert "--cookies" not in html.split("<code")[0]          # no option names on the page
         assert re.search(r"<dt>Transcript</dt><dd>English \(auto-generated; original language "
@@ -506,7 +524,7 @@ class TestOriginalUncertain:
         # a bilingual version YouTube could not give makes no section
         info.update(without_audio_tracks())
         html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5),
-                                   transcript_spec=[("bilingual", "it")])
+                                   transcript_spec=[("dual", "it")])
         assert 'class="note uncertain"' not in html
         assert ".transcript .note{color:var(--muted);font-size:12px;" in html   # grey
 
@@ -527,8 +545,9 @@ class TestOriginalUncertain:
         assert yt2html.main([str(data), "--json", "load", "-o", str(tmp_path), "--transcript"]) == 0
         warning = ("  Warning: the original language is uncertain: YouTube sent no audio tracks "
                    "to tell it from the dubs, so the transcript and the page's language are "
-                   "taken as 'en' (the captions YouTube opens with). Make the page again later; "
-                   "if YouTube asked you to confirm you're not a bot, try with --cookies.")
+                   "taken as 'en' (the captions YouTube opens with). If you know the original "
+                   "language, give it: --olang CODE; or make the page again later; if YouTube "
+                   "asked you to confirm you're not a bot, try with --cookies.")
         out = capsys.readouterr().out
         assert warning in out and out.index("Saved page:") < out.index(warning)
         # without a transcript: only the page's language

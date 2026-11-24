@@ -75,9 +75,9 @@ def test_merge_adds_the_translation_and_leaves_the_page(capsys, tmp_path, saved)
     assert f"Merging {srt.name} into {saved}" in out
     assert f"Updated metadata: {saved} (own translation into 'de', 3 lines)" in out
     assert (f'The page is unchanged; to show the translation: yt2html "{saved.name}" '
-            f'-o "{tmp_path}" --json load --transcript plain,bilingual:de') in out
+            f'-o "{tmp_path}" --json load --transcript plain,dual:de') in out
     # --json write then asks YouTube for nothing in that language
-    args = argparse.Namespace(transcript=[("plain", None), ("bilingual", "de")])
+    args = argparse.Namespace(transcript=[("plain", None), ("dual", "de")])
     assert yt2html.missing_for_update(after, args) == (False, [])
 
 
@@ -86,21 +86,21 @@ def test_the_page_then_from_the_data(capsys, tmp_path, saved):
     srt = own_srt(tmp_path, "de")
     assert run(capsys, "--json", "merge", str(srt), "-o", str(tmp_path))[0] == 0
     code, out = run(capsys, saved.name, "-o", str(tmp_path), "--json", "load",
-                    "--transcript", "plain,bilingual:de")
+                    "--transcript", "plain,dual:de")
     assert code == 0 and "Saved page:" in out
     html = page(tmp_path)
     assert "German, own translation" in html and "auto-translated" not in html
     assert "<span class=\"text\">Zeilen</span>" in html
-    assert row(html, "Transcript").endswith("2 versions: plain, bilingual with German "
+    assert row(html, "Transcript").endswith("2 versions: plain, dual with German "
                                             "(own translation)")
     assert row(html, "Page built").startswith(TODAY.strftime(yt2html.DATE_FORMAT))
     # the command makes the rest of the copy: the translation is not YouTube's
     command = re.search(r'<code class="command">(.*?)</code>', html).group(1)
     assert command.endswith("--transcript")
     assert "bilingual" not in command
-    # a page without bilingual:de does not show it
+    # a page without dual:de does not show it
     run(capsys, saved.name, "-o", str(tmp_path), "--json", "load",
-        "--transcript", "plain,bilingual:pl")
+        "--transcript", "plain,dual:pl")
     html = page(tmp_path)
     assert "own translation" not in html and "Polish, auto-translated" in html
 
@@ -237,31 +237,31 @@ def test_own_translations_under_the_languages_table(info):
     from test_about import video_formats_example
     info["formats"] = video_formats_example()
     own_info(info, de="2026-11-22", fr="2026-11-25")
-    spec = [("plain", None), ("bilingual", "fr"), ("bilingual", "pl"), ("bilingual", "de")]
+    spec = [("plain", None), ("dual", "fr"), ("dual", "pl"), ("dual", "de")]
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5), transcript_spec=spec)
     formats = re.search(r'<details class="formats-info">(.*?)</details>', html, re.S).group(1)
     lines = re.findall(r'<div class="translation">(.*?)</div>', formats)
     assert lines[-1] == ('own translations: <span class="chosen">de</span> (added 22.11.2026), '
                          '<span class="chosen">fr</span> (added 25.11.2026)')
     assert row(html, "Transcript").endswith(
-        "4 versions: plain, bilingual with FR (own translation), bilingual with Polish "
-        "(auto-translated), bilingual with DE (own translation)")
+        "4 versions: plain, dual with FR (own translation), dual with Polish "
+        "(auto-translated), dual with DE (own translation)")
     assert html.count(", own translation</span>") == 2 and "Polish, auto-translated" in html
     # only YouTube's translation in the command
-    assert '<code class="command">yt2html TESTVIDEO01 --page comments:all,cards:no --transcript plain,bilingual:pl</code>' in html
+    assert '<code class="command">yt2html TESTVIDEO01 --page comments:all,cards:no --transcript plain,dual:pl</code>' in html
     # what the page does not show is not named: neither in the line nor in the command
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5),
-                               transcript_spec=[("bilingual", "pl")])
+                               transcript_spec=[("dual", "pl")])
     assert "own translation" not in html and len(re.findall(
         r'<div class="translation">', html)) == 1
-    assert "--transcript bilingual:pl</code>" in html
+    assert "--transcript dual:pl</code>" in html
 
 
 def test_only_an_own_translation_shown(info):
     own_info(info, de="2026-11-22")
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5),
-                               transcript_spec=[("bilingual", "de")])
-    assert row(html, "Transcript").endswith("1 version: bilingual with DE (own translation)")
+                               transcript_spec=[("dual", "de")])
+    assert row(html, "Transcript").endswith("1 version: dual with DE (own translation)")
     # the command does not claim a version the page does not have
     assert '<code class="command">yt2html TESTVIDEO01 --page comments:all,cards:no</code>' in html
 
@@ -269,5 +269,5 @@ def test_only_an_own_translation_shown(info):
 def test_no_own_line_without_formats(info):
     own_info(info, de="2026-11-22")
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5),
-                               transcript_spec=[("bilingual", "de")])
+                               transcript_spec=[("dual", "de")])
     assert "none in the data" in html and "own translations:" not in html

@@ -385,7 +385,7 @@ def test_every_timestamp_can_play_the_local_copy(info):
     info["comments"][0]["text"] = "Best part at 1:23"
     info["description"] = "Starts at 0:42 sharp."
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6),
-                               transcript_spec=[("timestamps", None), ("bilingual", "pl")])
+                               transcript_spec=[("timed", None), ("dual", "pl")])
     import re
     links = re.findall(r'<a class="t" data-t="(\d+)" href="([^"]+)"', html)
     times = {int(t) for t, _ in links}
@@ -397,8 +397,8 @@ def test_every_timestamp_can_play_the_local_copy(info):
 
 def test_transcript_cues_carry_their_start(info):
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 6),
-                               transcript_spec=[("timestamps", None), ("plain", None),
-                                                ("bilingual", "pl")])
+                               transcript_spec=[("timed", None), ("plain", None),
+                                                ("dual", "pl")])
     assert '<div class="cue" data-c="0"><span class="time">' in html
     assert '<div class="bi-row" data-c="0"><span class="time">' in html
     assert '<p><span data-c="0">' in html

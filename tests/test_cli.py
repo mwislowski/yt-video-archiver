@@ -34,7 +34,7 @@ def test_defaults():
 
 def test_transcript_option_and_the_address(capsys):
     # with versions the order is free
-    args = yt2html.parse_args(["--transcript", "plain,timestamps", "URL1", "URL2"])
+    args = yt2html.parse_args(["--transcript", "plain,timed", "URL1", "URL2"])
     assert args.sources == ["URL1", "URL2"]
     # alone, the address goes first; else it is taken as the versions
     assert yt2html.parse_args(["URL1", "--transcript"]).sources == ["URL1"]
@@ -91,7 +91,7 @@ def test_output_folder_option(capsys, info_file, tmp_path):
 def test_bilingual_without_saved_translation_saves_nothing(capsys, info_file, tmp_path):
     out_dir = tmp_path / "pages"
     code, out = run(capsys, "--json", "load", str(info_file), "-o", str(out_dir),
-                    "--transcript", "bilingual:de")
+                    "--transcript", "dual:de")
     assert code == 1
     assert "no transcript translation into 'de'" in out
     assert not list(out_dir.glob("*.html"))
@@ -104,7 +104,7 @@ def test_no_transcript_without_the_option(capsys, info_file, tmp_path):
     html = next(out_dir.glob("*.html")).read_text("utf-8")
     assert 'class="transcript' not in html and "<dt>Transcript</dt><dd>left out</dd>" in html
     run(capsys, "--json", "load", str(info_file), "-o", str(out_dir), "--transcript")
-    assert '<section class="transcript"' in next(out_dir.glob("*.html")).read_text("utf-8")
+    assert '<section class="transcript original"' in next(out_dir.glob("*.html")).read_text("utf-8")
 
 
 def test_bilingual_missing_at_download_is_a_note(capsys, info, tmp_path):
@@ -117,10 +117,10 @@ def test_bilingual_missing_at_download_is_a_note(capsys, info, tmp_path):
     saved = out_dir / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
     code, _ = run(capsys, "--json", "load", str(saved), "-o", str(out_dir),
-                  "--transcript", "bilingual:de,bilingual:pl")
+                  "--transcript", "dual:de,dual:pl")
     html = next(out_dir.glob("*.html")).read_text("utf-8")
     assert code == 0 and html.count('class="transcript bilingual"') == 1 and 'data-lang="de"' not in html
-    assert ("; 1 version: bilingual with Polish (auto-translated); not available: bilingual:de "
+    assert ("; 1 version: dual with Polish (auto-translated); not available: dual:de "
             "(YouTube offers no translation of this transcript into &#x27;de&#x27; (available: pl))"
             in html)
 
@@ -134,7 +134,7 @@ def test_bilingual_for_a_video_without_captions(capsys, info, tmp_path, monkeypa
     monkeypatch.setattr(yt2html, "fetch_images", lambda *a, **k: {})
     monkeypatch.setattr(yt2html, "fetch_thumbnail", lambda info: None)
     code, _ = run(capsys, "https://www.youtube.com/watch?v=TESTVIDEO01", "-o", str(tmp_path),
-                  "--transcript", "bilingual:pl")
+                  "--transcript", "dual:pl")
     html = next(tmp_path.glob("*.html")).read_text("utf-8")
     assert code == 0 and "<dt>Transcript</dt><dd>none: the video has no captions</dd>" in html
 
@@ -142,7 +142,7 @@ def test_bilingual_for_a_video_without_captions(capsys, info, tmp_path, monkeypa
 def test_bilingual_with_saved_translation(capsys, info_file, tmp_path):
     out_dir = tmp_path / "pages"
     code, _ = run(capsys, "--json", "load", str(info_file), "-o", str(out_dir),
-                  "--transcript", "plain,bilingual:pl")
+                  "--transcript", "plain,dual:pl")
     html = next(out_dir.glob("*.html")).read_text(encoding="utf-8")
     assert code == 0 and "transcript bilingual" in html
 
@@ -242,9 +242,9 @@ def test_load_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
     (["--json", "merge", "--page", "ovr", "--index", "list.txt"], "so it cannot be used with "
      "--page, --index"),
     (["--json", "merge", "--page", "theme:dark"], "so it cannot be used with --page"),
-    (["--json", "merge", "--transcript", "plain,bilingual:pl"], "so it cannot be used with "
+    (["--json", "merge", "--transcript", "plain,dual:pl"], "so it cannot be used with "
      "--transcript; make the page then with: yt2html ID --json load --transcript "
-     "plain,bilingual:CODE"),
+     "plain,dual:CODE"),
     (["--json", "merge", "--index-only", "list.txt"], "so it cannot be used with --index-only"),
     (["--json", "merge", "--video-formats"], "--video-formats makes no page, so it cannot be "
      "used with --json merge"),

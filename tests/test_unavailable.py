@@ -131,7 +131,7 @@ def test_refresh_records_it_and_changes_nothing_else(capsys, saved, youtube, mon
     before = json.loads(saved.read_text("utf-8"))
     gone_on_refresh(monkeypatch)
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh",
-                    "--transcript", "bilingual:pl")
+                    "--transcript", "dual:pl")
     assert code == 0, out
     assert f"No longer on YouTube: {TERMINATED} (recorded)" in out
     assert youtube["extracted"] == 0          # the refused translation is not asked for again

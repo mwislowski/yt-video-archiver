@@ -128,6 +128,11 @@ TRANSLATIONS_KEY = "yt2html_translation_languages"
 # formats, which can come without any audio track (YOUTUBE.local.md 15.5).
 ORIGINAL_AUDIO_KEY = "yt2html_original_audio_language"
 
+# The original language set with --olang ("en"): it wins over everything the
+# program finds (transcript_language(), the video's main audio, the
+# Languages table); absent when not set.
+OLANG_KEY = "yt2html_original_language_set"
+
 # The transcript: {language, name, kind, cues: [{start, text}], translations:
 # {lang: {language, name, cues, own?}}, missing: {lang: {reason, refused, date}}}
 # (missing: the translations left out; refused ones are asked for again by
@@ -228,6 +233,8 @@ def fetch_formats(url: str, args: argparse.Namespace) -> dict:
         opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
+    if getattr(args, "olang", None):
+        info[OLANG_KEY] = args.olang
     info[DOWNLOAD_KEY] = {"yt2html": __version__,
                           "cookies_from_browser": browser_name(args.cookies_from_browser),
                           "deno": shutil.which("deno") is not None}
@@ -264,6 +271,8 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(url, download=False))
         info[ARCHIVED_KEY] = dt.date.today().isoformat()
+        if getattr(args, "olang", None):
+            info[OLANG_KEY] = args.olang
         info[DOWNLOAD_KEY] = {"yt2html": __version__,
                               "cookies_from_browser": browser_name(args.cookies_from_browser),
                               # yt-dlp needs a JavaScript runtime (by default Deno) for
@@ -275,7 +284,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
             add_watch_page_data(ydl, info, cards=not args.no_cards)
             if args.transcript:
                 info[TRANSCRIPT_KEY] = fetch_transcript(
-                    ydl, info, bilingual_languages(args.transcript),
+                    ydl, info, version_languages(args.transcript),
                     not_before=started + translation_wait())
         return info
 
@@ -1096,14 +1105,18 @@ def base_language(code: str | None) -> str:
 
 # What the watch page tells about the transcript's track and languages; a
 # fresh list of formats (yt-dlp alone) has none of it.
-PAGE_CHOICE_KEYS = (CAPTION_KEY, ORIGINAL_AUDIO_KEY, TRANSLATIONS_KEY)
+PAGE_CHOICE_KEYS = (CAPTION_KEY, ORIGINAL_AUDIO_KEY, TRANSLATIONS_KEY, OLANG_KEY)
 
 
 def with_page_choices(fresh: dict, page: dict | None) -> dict:
     """Fresh yt-dlp data with the watch page's PAGE_CHOICE_KEYS from `page`
     (saved data, or the page's data made now), for choosing the transcript's
     track and language as the page did."""
-    return {**fresh, **{key: (page or {}).get(key) for key in PAGE_CHOICE_KEYS}}
+    data = {**fresh, **{key: (page or {}).get(key) for key in PAGE_CHOICE_KEYS}}
+    data[OLANG_KEY] = fresh.get(OLANG_KEY) or (page or {}).get(OLANG_KEY)   # --olang now wins
+    if not data[OLANG_KEY]:
+        del data[OLANG_KEY]
+    return data
 
 
 def marked_original_language(info: dict) -> str | None:
@@ -1126,6 +1139,8 @@ def original_uncertain(info: dict) -> bool:
     recognised speech in more than one language (several "-orig" automatic
     captions: the video has dubs). Then the transcript's language is that of
     the captions the watch page opens with, which may be a dub's."""
+    if info.get(OLANG_KEY):   # set with --olang: no guess
+        return False
     origs = [lang for lang, fmts in (info.get("automatic_captions") or {}).items()
              if fmts and lang.endswith("-orig")]
     return len(origs) > 1 and not marked_original_language(info)
@@ -1145,6 +1160,8 @@ def transcript_language(info: dict) -> str | None:
     original, an English auto-dub, the English one's captions as default for
     yt-dlp's English request); so an audio marked as the original in another
     language wins (marked in yt-dlp's formats, else on the watch page)."""
+    if info.get(OLANG_KEY):   # --olang: the user knows best
+        return info[OLANG_KEY]
     auto = [lang for lang, fmts in (info.get("automatic_captions") or {}).items() if fmts]
     origs = [lang for lang in auto if lang.endswith("-orig")]
     default = (info.get(CAPTION_KEY) or {}).get("language")
@@ -1199,6 +1216,8 @@ def choose_caption_track(info: dict) -> tuple[str, str, list[dict]] | None:
             found = find(language)
             if found:
                 return found
+        if info.get(OLANG_KEY):   # --olang: that language or none
+            return None
     # Last resort (original language unknown): any author subtitles.
     if manual:
         lang = next(iter(manual))
@@ -1363,9 +1382,50 @@ def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
     return {"language": target, "name": name, "cues": cues}
 
 
-def bilingual_languages(spec: list[tuple[str, str | None]]) -> list[str]:
-    """Target languages of the bilingual versions in a --transcript spec."""
-    return [language for version, language in spec if version == "bilingual"]
+def version_languages(spec: list[tuple[str, str | None]]) -> list[str]:
+    """The languages a --transcript spec names, each once, in its order: the
+    translations to fetch (one in the original's language is the original
+    itself, left out when the transcript is known: resolve_versions())."""
+    return list(dict.fromkeys(language for version, language in spec
+                              if language and version != "ovr"))
+
+
+def wanted_translations(spec: list, transcript: dict | None) -> list[str]:
+    """version_languages() but the transcript's own language."""
+    original = (transcript or {}).get("language")
+    return [language for language in version_languages(spec)
+            if not (original and base_language(language) == base_language(original))]
+
+
+def version_text(version: str, language: str | None) -> str:
+    return version if language is None else f"{version}:{language}"
+
+
+def resolve_versions(spec: list, transcript: dict | None
+                     ) -> tuple[list[tuple[str, str | None]], list[str]]:
+    """The versions this video's page shows, and what changed on the way:
+    a code in the original's language (any region) is the original (None);
+    dual into it has nothing beside it, so it is timed; the same version
+    twice, as it turns out now, is shown once. Returns (versions, notes)."""
+    transcript = transcript or {}
+    original = transcript.get("language")
+    name = transcript.get("name") or original
+    versions, notes = [], []
+    for version, language in spec:
+        if version == "ovr":
+            continue
+        own = language is None or (original and base_language(language) == base_language(original))
+        shown = "timed" if version == "dual" and own else version
+        if shown != version:
+            notes.append(f"{version_text(version, language)}: the original is {name}; "
+                         f"shown as timed")
+        entry = (shown, None if own else language)
+        if entry in versions:
+            notes.append(f"{version_text(version, language)}: the same as "
+                         f"{version_text(*entry) if entry[1] else entry[0]}; shown once")
+            continue
+        versions.append(entry)
+    return versions, notes
 
 
 def translations_of(transcript: dict) -> dict[str, dict]:
@@ -1375,10 +1435,10 @@ def translations_of(transcript: dict) -> dict[str, dict]:
 
 def own_shown(transcript: dict | None, spec: list | None) -> list[tuple[str, str]]:
     """[(language, day added)] of the translations of one's own (--json merge)
-    that the page shows: those of its bilingual versions."""
+    that the page shows, in any version."""
     translations = translations_of(transcript or {})
     return [(language, translations[language]["own"].get("date") or "")
-            for language in bilingual_languages(spec or [])
+            for language in version_languages(spec or [])
             if (translations.get(language) or {}).get("own")]
 
 
@@ -1401,6 +1461,9 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
         log(f"No transcript: {reason}.")
 
     track = choose_caption_track(info)
+    if not track and info.get(OLANG_KEY):
+        return unavailable(f"no captions in '{info[OLANG_KEY]}', the original language set "
+                           f"with --olang")
     if not track:
         return unavailable("the video has no captions")
     kind, lang, formats = track
@@ -1420,6 +1483,8 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     transcript = {"language": lang, "name": name, "kind": kind, "cues": cues,
                   "original": (bool(original) and base_language(original) == base_language(lang)
                                and not original_uncertain(info))}
+    translate_to = [target for target in translate_to or []
+                    if base_language(target) != base_language(lang)]   # the original itself
     if translate_to:
         add_translations(ydl, info, transcript, url, translate_to, not_before)
     return transcript
@@ -2278,24 +2343,60 @@ def render_license(license_info: dict) -> str:
 
 def render_transcripts(transcript: dict, chapters: list[dict], video_id: str,
                        spec: list[tuple[str, str | None]]) -> list[str]:
-    """One transcript section per version, in the order of the spec.
+    """One transcript section per version, in the order of the spec as this
+    video resolves it (resolve_versions()); a version in a language the data
+    have no translation into is left out (the Transcript row says why).
 
-    When more than one plain/timestamped version is shown, the timestamped one
-    gets "with timestamps" in its grey note so the two can be told apart.
+    The original's sections are marked "original" (the lines under the video
+    come from them); a page without one gets the original as a hidden
+    section for that, so they are always the original's. A translation's
+    sections carry its language (the buttons beside Subtitles). When more
+    than one plain or timed version is shown, the timed ones get "with
+    timestamps" in their grey note.
     """
-    several = sum(version != "bilingual" for version, _ in spec) > 1
+    versions, _ = resolve_versions(spec, transcript)
     translations = translations_of(transcript)
+    versions = [(v, lang) for v, lang in versions if lang is None or lang in translations]
+    several = sum(version != "dual" for version, _ in versions) > 1
     sections = []
-    for version, language in spec:
-        if version == "plain":
-            sections.append(render_transcript(transcript, chapters, video_id, False))
-        elif version == "timestamps":
-            sections.append(render_transcript(transcript, chapters, video_id, True,
-                                              note_suffix="with timestamps" if several else ""))
-        elif language in translations:   # a bilingual version YouTube could not give: none
+    for version, language in versions:
+        if version == "dual":
             sections.append(render_bilingual_transcript(transcript, translations[language],
                                                         chapters, video_id))
+            continue
+        timed = version == "timed"
+        suffix = "with timestamps" if timed and several else ""
+        if language is None:
+            sections.append(render_transcript(transcript, chapters, video_id, timed,
+                                              note_suffix=suffix))
+        else:
+            sections.append(render_transcript(translated_transcript(transcript,
+                                                                    translations[language]),
+                                              chapters, video_id, timed, note_suffix=suffix))
+    if versions and all(language is not None for _, language in versions):
+        sections.append(render_transcript(transcript, chapters, video_id, True, hidden=True))
     return sections
+
+
+def translated_transcript(transcript: dict, translation: dict) -> dict:
+    """A translation as a transcript of its own (plain:CODE, timed:CODE): the
+    original's lines and times with the translated text (translated_texts())."""
+    cues = transcript.get("cues") or []
+    return {"language": translation.get("language"), "translation": True,
+            "name": f'{translation.get("name") or translation.get("language")}, '
+                    + ("own translation" if translation.get("own") else "auto-translated"),
+            "cues": [{"start": cue["start"], "text": text}
+                     for cue, text in zip(cues, translated_texts(cues, translation))]}
+
+
+def translated_texts(cues: list[dict], translation: dict) -> list[str]:
+    """The translation's text for each of the original's lines (matched by
+    their start, align_translation()), with the original's change of speaker
+    (">>") where the translation lost it: one rule for every version that
+    shows a translation."""
+    texts = align_translation(cues, translation.get("cues") or [])
+    return [f">> {text}" if ">>" in (cue.get("text") or "") and ">>" not in text else text
+            for cue, text in zip(cues, texts)]
 
 
 # YouTube's automatic captions start a new speaker's words with ">>" (">>>" for
@@ -2370,7 +2471,7 @@ def render_bilingual_transcript(transcript: dict, translation: dict,
                                 chapters: list[dict], video_id: str) -> str:
     """Timestamped transcript with the translation in a second column."""
     cues = transcript.get("cues") or []
-    translated = dict(zip(map(id, cues), align_translation(cues, translation.get("cues") or [])))
+    translated = dict(zip(map(id, cues), translated_texts(cues, translation)))
     original_label = transcript_note(transcript)
     target_label = (f'{translation.get("name") or translation.get("language")}, '
                     + ("own translation" if translation.get("own") else "auto-translated"))
@@ -2381,10 +2482,8 @@ def render_bilingual_transcript(transcript: dict, translation: dict,
         if group["title"] is not None:
             parts.append(f'<h3>{esc(group["title"])}</h3>')
         for cue in group["cues"]:
-            original, speaker = speaker_html(cue["text"])
-            translated_html, marked = speaker_html(translated[id(cue)])
-            if speaker and not marked:  # the translation keeps the speaker change
-                translated_html = f"{SPEAKER_MARK} {translated_html}"
+            original, _ = speaker_html(cue["text"])
+            translated_html, _ = speaker_html(translated[id(cue)])
             parts.append(f'<div class="bi-row" data-c="{cue_start(cue)}"><span class="time">'
                          f'{time_link(video_id, cue["start"])}</span>'
                          f'<span class="text">{original}</span>'
@@ -2396,11 +2495,14 @@ def render_bilingual_transcript(transcript: dict, translation: dict,
 
 
 def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
-                      timestamps: bool, note_suffix: str = "") -> str:
+                      timestamps: bool, note_suffix: str = "", hidden: bool = False) -> str:
     """Transcript, split under chapter headings when the video has chapters.
 
     Without timestamps each part is one continuous text (cues joined with
     spaces, no added paragraphs); with timestamps every cue is its own line.
+    The original's section is marked "original" (`hidden`: only there for
+    the lines under the video); a translation's (translated_transcript())
+    carries its language.
     """
     parts = []
     for group in group_by_chapters(transcript.get("cues") or [], chapters):
@@ -2425,7 +2527,12 @@ def render_transcript(transcript: dict, chapters: list[dict], video_id: str,
     if note_suffix:
         note = f"{note}, {note_suffix}" if note else note_suffix
     css = "transcript with-timestamps" if timestamps else "transcript"
-    return (f'<section class="{css}"><h2>Transcript{note_html(note)}</h2>'
+    if transcript.get("translation"):
+        attributes = f' data-lang="{esc(transcript.get("language") or "")}"'
+    else:
+        css += " original"
+        attributes = " hidden" if hidden else ""
+    return (f'<section class="{css}"{attributes}><h2>Transcript{note_html(note)}</h2>'
             f'{"".join(parts)}</section>')
 
 
@@ -2448,8 +2555,9 @@ def uncertain_warning(info: dict) -> str:
             else "the page's language is")
     return (f"  Warning: the original language is uncertain: YouTube sent no audio tracks to "
             f"tell it from the dubs, so {what} taken as '{language}' (the captions YouTube "
-            f"opens with). Make the page again later; if YouTube asked you to confirm you're "
-            f"not a bot, try with --cookies.")
+            f"opens with). If you know the original language, give it: --olang CODE; or make "
+            f"the page again later; if YouTube asked you to confirm you're not a bot, try with "
+            f"--cookies.")
 
 
 def comment_status(info: dict) -> str:
@@ -2696,18 +2804,31 @@ PLAYER_JS = r"""
   });
 
   // Transcripts and chapters: each transcript version is a list of cues.
-  var lists = all('section.transcript').map(function (section) {
+  var everyList = all('section.transcript').map(function (section) {
     var els = all('[data-c]', section);
     return {section: section, els: els, times: els.map(function (el) { return Number(el.dataset.c); })};
   }).filter(function (list) { return list.els.length; });
+  // Follow goes through those on the page (a hidden one only feeds the subtitles).
+  var lists = everyList.filter(function (list) { return !list.section.hidden; });
   function timed(list) {
     return list.section.classList.contains('with-timestamps') || list.section.classList.contains('bilingual');
   }
-  // Under the video: the first transcript with timestamps, else the continuous one.
-  var source = lists.filter(timed)[0] || lists[0];
-  // Translations: one per bilingual transcript, in page order, chosen by the
-  // language buttons (none at first).
-  var bilinguals = lists.filter(function (l) { return l.section.classList.contains('bilingual'); });
+  // Under the video always the original, as the audio: its first transcript
+  // with timestamps (dual included), else its continuous one, else the hidden one.
+  var originals = everyList.filter(function (l) {
+    return l.section.classList.contains('original') || l.section.classList.contains('bilingual');
+  });
+  var source = originals.filter(timed)[0] || originals[0];
+  // Translations: one per language, in page order (a dual transcript's in its
+  // second column), chosen by the language buttons (none at first).
+  var seenLangs = {};
+  var bilinguals = lists.filter(function (l) {
+    var lang = l.section.dataset.lang;
+    if (!lang || seenLangs[lang]) return false;
+    seenLangs[lang] = true;
+    return true;
+  });
+  function column(list) { return list.section.classList.contains('bilingual') ? 1 : 0; }
   // subtitles: 0 off, 1 the sentence only, 2 and 3 with 1 or 2 lines before and after
   var language = -1, subtitles = 0, showChapters = false;
   var chapters = all('#chapters li').filter(function (li) { return li.querySelector('a.t[data-t]'); });
@@ -2821,7 +2942,7 @@ PLAYER_JS = r"""
       boxPart.next2.textContent = context >= 2 ? cue(i + 2) : '';
       var translation = bilinguals[language];
       var j = translation ? indexAt(translation.times, t) : -1;
-      boxPart.translation.textContent = j >= 0 ? textOf(translation.els[j], 1) : '';
+      boxPart.translation.textContent = j >= 0 ? textOf(translation.els[j], column(translation)) : '';
     }
     if (follow >= 0) placeFollow(false);
   }
@@ -3275,6 +3396,8 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
     if TRANSCRIPT_KEY in info and spec:   # the option alone means plain
         versions = format_transcript_spec(spec)
         parts += ["--transcript"] + ([versions] if versions != "plain" else [])
+    if info.get(OLANG_KEY):
+        parts += ["--olang", info[OLANG_KEY]]
     browser = (info.get(DOWNLOAD_KEY) or {}).get("cookies_from_browser")
     if browser:
         parts += ["--cookies-from-browser", browser]
@@ -3365,6 +3488,8 @@ def about_transcript(info: dict, spec: list) -> str:
     features = (f"original language, {kind}"
                 if transcript.get("original", True) and not original_uncertain(info)
                 else f"{kind}; original language unknown")
+    if info.get(OLANG_KEY):
+        features += ", the original set in the command"
     name = transcript.get("name") or transcript.get("language") or ""
     translations = translations_of(transcript)
 
@@ -3373,17 +3498,22 @@ def about_transcript(info: dict, spec: list) -> str:
         kind = "own translation" if translation.get("own") else "auto-translated"
         return f'{esc(translation.get("name") or language)} ({kind})'
 
-    versions = [f"bilingual with {translated(language)}" if version == "bilingual" else version
-                for version, language in spec if version != "bilingual" or language in translations]
+    resolved, notes = resolve_versions(spec, transcript)
+    versions = [version if language is None else
+                f"dual with {translated(language)}" if version == "dual" else
+                f"{version} in {translated(language)}"
+                for version, language in resolved if language is None or language in translations]
     text = f"{esc(name)} ({features}); {plural(len(versions), 'version')}: {', '.join(versions)}"
     missing = transcript.get("missing") or {}
-    absent = [language for version, language in spec
-              if version == "bilingual" and language not in translations]
-    if absent:   # "not available: bilingual:fi (YouTube offers no translation …)"
+    absent = [(version, language) for version, language in resolved
+              if language is not None and language not in translations]
+    if absent:   # "not available: dual:fi (YouTube offers no translation …)"
         text += "; not available: " + ", ".join(
-            f"bilingual:{esc(language)}" + (f" ({esc(missing_text(missing[language]))})"
+            f"{version}:{esc(language)}" + (f" ({esc(missing_text(missing[language]))})"
                                             if language in missing else "")
-            for language in absent)
+            for version, language in absent)
+    if notes:
+        text += "; " + "; ".join(esc(note) for note in notes)
     return text
 
 
@@ -3649,6 +3779,10 @@ class FormatChoice:
                                  or f.get("language_preference") == 10 for f in self.audio)
         self.original = next((self.track(f) for f in self.audio
                               if self.role_of(f) == "original"), None)
+        if info.get(OLANG_KEY):   # --olang: the track in that language is the original
+            self.original = next((self.track(f) for f in self.audio
+                                  if base_language(audio_language(f)) == base_language(info[OLANG_KEY])
+                                  and self.role_of(f) != "descriptive"), self.original)
         # The main audio: the original (aac, else any codec); else an ordinary
         # track, an audio description only when there is nothing else; never
         # a Premium format.
@@ -4790,7 +4924,12 @@ def missing_for_update(info: dict, args: argparse.Namespace) -> tuple[bool, list
     refused are asked for again; those it does not have are not."""
     if not args.transcript:
         return False, []
-    wanted = bilingual_languages(args.transcript)
+    if getattr(args, "transcript_ovr", False):   # downloaded again, whatever is saved
+        own = {language for language, entry
+               in translations_of(info.get(TRANSCRIPT_KEY) or {}).items() if entry.get("own")}
+        return True, [language for language in version_languages(args.transcript)
+                      if language not in own]   # (kept if they fit: keep_own_translations())
+    wanted = wanted_translations(args.transcript, info.get(TRANSCRIPT_KEY))
     if TRANSCRIPT_KEY not in info:
         return True, wanted
     transcript = info[TRANSCRIPT_KEY]
@@ -4833,13 +4972,17 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
         data = with_page_choices(fresh, info)
         not_before = started + translation_wait()
         if whole:
+            own = {language: entry for language, entry
+                   in translations_of(info.get(TRANSCRIPT_KEY) or {}).items() if entry.get("own")}
             transcript = fetch_transcript(ydl, data, targets, not_before)
             info[TRANSCRIPT_KEY] = transcript
             if transcript is None:
                 info[TRANSCRIPT_MISSING_KEY] = data.get(TRANSCRIPT_MISSING_KEY)
                 return []
+            keep_own_translations(transcript, own)
             return ["transcript"] + [f"translation {language}"
-                                     for language in translations_of(transcript)]
+                                     for language, entry in translations_of(transcript).items()
+                                     if not entry.get("own")]
         transcript = info[TRANSCRIPT_KEY]
         before = set(translations_of(transcript))
         track = choose_caption_track(data)
@@ -4855,6 +4998,26 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
         add_translations(ydl, data, transcript, url, targets, not_before)
         return [f"translation {language}" for language in translations_of(transcript)
                 if language not in before]
+
+
+def keep_own_translations(transcript: dict, own: dict) -> None:
+    """--transcript ovr: the translations of one's own that still fit the
+    transcript downloaded again (the same lines at the same times) are kept;
+    the others are dropped, with a message (their SRT file can be fixed and
+    merged again)."""
+    for language, entry in own.items():
+        if base_language(language) == base_language(transcript.get("language")):
+            log(f"  Own translation into '{language}' dropped: the transcript is now in that "
+                f"language.")
+            continue
+        try:
+            check_own_cues(entry.get("cues") or [], transcript)
+        except ValueError as problem:
+            log(f"  Own translation into '{language}' dropped: it no longer fits the "
+                f"transcript ({problem}); fix {entry.get('own', {}).get('file') or 'its file'} "
+                f"and merge it again.")
+            continue
+        transcript.setdefault("translations", {})[language] = entry
 
 
 def note_update(info: dict, record: dict, added: list[str] = (), refreshed: bool = False,
@@ -5095,7 +5258,7 @@ def merge_own_translation(source: str, args: argparse.Namespace,
         f"{plural(len(cues), 'line')})")
     folder = "" if args.output_dir == DEFAULT_OUTPUT_DIR else f' -o "{args.output_dir}"'
     log(f"  The page is unchanged; to show the translation: yt2html \"{data_path.name}\"{folder} "
-        f"--json load --transcript plain,bilingual:{language}")
+        f"--json load --transcript plain,dual:{language}")
     return data_path
 
 
@@ -5160,6 +5323,16 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     if info.get("_type") in ("playlist", "multi_video"):
         raise ValueError(PLAYLIST_ERROR)
     record = outcome.setdefault("record", {})   # this run's entry in UPDATES_KEY
+    if updating and args.olang and info.get(OLANG_KEY) != args.olang:
+        # --olang with saved data: recorded; a transcript in another language stays
+        # unless --transcript ovr downloads it again (then in the language set)
+        info[OLANG_KEY] = args.olang
+        note_update(info, record, [f"original language {args.olang}"])
+        saved = (info.get(TRANSCRIPT_KEY) or {}).get("language")
+        if saved and base_language(saved) != base_language(args.olang) \
+                and not args.transcript_ovr:
+            log(f"  Warning: the saved transcript is in '{saved}', not in '{args.olang}' "
+                f"(--olang); --transcript ovr downloads it again in '{args.olang}'.")
     if updating:
         fresh = started = None
         gone = False
@@ -5190,13 +5363,16 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         if whole or targets:
             note_update(info, record, update_transcript(info, args, whole, targets, fresh,
                                                         started))
+    for note in resolve_versions(args.transcript, info.get(TRANSCRIPT_KEY))[1]:
+        log(f"  Transcript: {note}.")
     # --json write with nothing missing in the data: a page that is there stays
     # as it is (with --video, unless files are added: then it is made again)
-    idle = updating and not args.refresh_json and not (whole or targets)
+    idle = updating and not args.refresh_json and not (whole or targets) and not record
 
     saved = info.get(TRANSCRIPT_KEY) or {}
     known = set(translations_of(saved)) | set(saved.get("missing") or {})
-    for language in bilingual_languages(args.transcript) if args.load_json else []:
+    for language in (wanted_translations(args.transcript, info.get(TRANSCRIPT_KEY))
+                     if args.load_json else []):
         if language not in known:
             raise TranscriptError(f"no transcript translation into '{language}' "
                                   f"in the data; nothing was saved.")
@@ -5512,6 +5688,10 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     # translation languages; the fresh list has neither
     data = with_page_choices(fresh, page_info)
     choice = video_choice(data)
+    if choice is not None and data.get(OLANG_KEY) and base_language(
+            (choice.original or ("",))[0]) != base_language(data[OLANG_KEY]):
+        log(f"  Note: no audio track in '{data[OLANG_KEY]}' (--olang); the video's own audio "
+            f"is taken.")
     if choice is None:
         raise VideoSkipped("no video or audio formats in the list (YouTube sometimes sends "
                            "none for a while; try again later).")
@@ -5936,20 +6116,22 @@ def apply_page_spec(args: argparse.Namespace) -> None:
     args.no_avatars, args.theme = not spec["avatars"], spec["theme"]
 
 
-TRANSCRIPT_VERSIONS = ("plain", "timestamps", "bilingual")
+TRANSCRIPT_VERSIONS = ("plain", "timed", "dual")
 
 
 def transcript_spec(value: str) -> list[tuple[str, str | None]]:
     """Parse --transcript: "" (the option alone: plain) or comma-separated
-    versions, "plain,timestamps,bilingual:pl". Without the option there is no
-    transcript ([], the parser's default).
+    versions, each with a language code or without one (the original):
+    "plain,timed:pl,dual:de"; and "ovr" (the saved transcript downloaded
+    again, with --json). Without the option there is no transcript ([], the
+    parser's default).
 
-    Returns the versions in the given order as (version, language) pairs.
-    Any case of letters ("Plain", "bilingual:PT-br"). Raises ArgumentTypeError
-    (before anything is fetched) for unknown versions ("none" too: without
-    the option there is no transcript), also for an address
-    taken as versions ("--transcript URL"), a bilingual version without a
-    language code, a language on any other version and repeated versions.
+    Returns the versions in the given order as (version, language) pairs,
+    ovr as ("ovr", None). Any case of letters ("Plain", "dual:PT-br").
+    Raises ArgumentTypeError (before anything is fetched) for unknown
+    versions ("none" too: without the option there is no transcript), also
+    for an address taken as versions ("--transcript URL"), dual without a
+    language code and a version given twice in the same words.
     """
     if not value.strip():
         return [("plain", None)]
@@ -5958,23 +6140,33 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
         raise argparse.ArgumentTypeError(f"empty item in '{value}' (check the commas)")
     spec = []
     for item in items:
-        version, _, language = item.partition(":")
-        if version not in TRANSCRIPT_VERSIONS:
+        version, colon, language = item.partition(":")
+        if item == "ovr":
+            entry = ("ovr", None)
+        elif version not in TRANSCRIPT_VERSIONS:
             raise argparse.ArgumentTypeError(
-                f"'{item}' is not a parameter (use plain, timestamps or bilingual:CODE); "
-                f"the video's address goes before --transcript")
-        if version == "bilingual":
-            if not language:
-                raise argparse.ArgumentTypeError(
-                    "'bilingual' needs a language code, e.g. bilingual:pl")
-            check_code(language, item)
-        elif language or ":" in item:
-            raise argparse.ArgumentTypeError(f"'{version}' takes no language ('{item}')")
-        entry = (version, standard_code(language) if language else None)
+                f"'{item}' is not a parameter (use plain, timed, dual:CODE or ovr, a version "
+                f"with :CODE for a language); the video's address goes before --transcript")
+        elif version == "dual" and not language:
+            raise argparse.ArgumentTypeError("'dual' needs a language code, e.g. dual:pl")
+        elif colon and not language:
+            raise argparse.ArgumentTypeError(f"'{item}': a language code goes after the colon")
+        else:
+            if language:
+                check_code(language, item)
+            entry = (version, standard_code(language) if language else None)
         if entry in spec:
             raise argparse.ArgumentTypeError(f"'{item}' is given more than once")
         spec.append(entry)
+    if spec == [("ovr", None)]:
+        spec.insert(0, ("plain", None))   # "ovr" alone: the option alone, again
     return spec
+
+
+def olang_code(value: str) -> str:
+    """--olang: a language code, written the usual way."""
+    check_code(value.strip(), value.strip())
+    return standard_code(value.strip())
 
 
 def check_code(code: str, item: str) -> None:
@@ -6178,7 +6370,7 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
 # Options --index-only refuses: they download or shape the video pages,
 # and it only makes the index from what is in the folder.
 INDEX_ONLY_REFUSES = (("--video", "video"), ("--transcript", "transcript"),
-                      ("--json", "json"), ("--page", "page"))
+                      ("--json", "json"), ("--page", "page"), ("--olang", "olang"))
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -6215,12 +6407,18 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--transcript", nargs="?", const="", type=transcript_spec, default=[],
         metavar="VERSIONS",
         help="also add the transcript (without this option the page has none): alone, "
-             "as continuous text; or versions, comma-separated, shown in this order: "
-             "plain (continuous text), timestamps (one line per caption), bilingual:CODE "
-             "(timestamps with YouTube's translation into that language in a second "
-             "column, e.g. bilingual:pl; left out with a note if YouTube has "
-             "none or refuses it; or your own translation merged with --json merge). "
-             "Write the address first: yt2html URL --transcript plain,bilingual:pl")
+             "as continuous text in the original language; or versions, comma-separated, "
+             "shown in this order: plain (continuous text), timed (one line per caption), "
+             "dual:CODE (timed, with the translation into that language beside it), each "
+             "with :CODE for a language (plain:pl, timed:de: YouTube's translation, or your "
+             "own merged with --json merge) or without, for the original; ovr (with --json: "
+             "the saved transcript downloaded again). A translation YouTube has not or refuses "
+             "is left out with a note. Write the address first: yt2html URL --transcript "
+             "plain,dual:pl")
+    parser.add_argument(
+        "--olang", type=olang_code, default=None, metavar="CODE",
+        help="the video's original language, when you know it better than YouTube shows it: "
+             "the transcript is in it, the video's main audio and the Languages table follow it")
     parser.add_argument(
         "--json", type=json_parameter, default=None, action=Once, metavar="PARAMETER",
         help="the saved data next to the page ('Title [ID].info.json': yt-dlp's data and what "
@@ -6288,6 +6486,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     apply_page_spec(args)
     apply_json_parameter(args)
+    args.transcript_ovr = ("ovr", None) in args.transcript
+    args.transcript = [entry for entry in args.transcript if entry[0] != "ovr"]
     # the options that only write a list file: (what they do, what may go with them)
     alone = {"reverse": ("only writes the list of an index page", ()),
              "reverse_details": ("only writes the list of an index page", ()),
@@ -6315,6 +6515,22 @@ def parse_args(argv=None) -> argparse.Namespace:
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
+    if args.transcript_ovr and args.json not in ("write", "refresh"):
+        parser.error("--transcript ovr downloads the saved transcript again, so it needs "
+                     "--json write or --json refresh (without saved data the transcript is "
+                     "downloaded anyway)")
+    if args.olang and args.json in ("load", "merge"):
+        parser.error(f"--olang chooses what is downloaded, so it cannot be used with --json "
+                     f"{args.json}; use --json write --transcript ovr to download the "
+                     f"transcript again in that language")
+    for version, language in args.transcript if args.olang else []:
+        if language and base_language(language) == base_language(args.olang):
+            if version == "dual":
+                parser.error(f"dual:{language} is the original itself (--olang {args.olang}): "
+                             f"nothing to put beside it; use timed")
+            if (version, None) in args.transcript:
+                parser.error(f"{version} and {version}:{language} are the same transcript "
+                             f"(--olang {args.olang}); give one of them")
     if args.video_formats:
         used = [name for name, on in (
             ("--page", args.page is not None), ("--index", args.index is not None),
@@ -6335,7 +6551,7 @@ def parse_args(argv=None) -> argparse.Namespace:
             parser.error(f"--json merge only merges SRT files into the saved data and makes "
                          f"no page, so it cannot be used with {', '.join(used)}"
                          + ("; make the page then with: yt2html ID --json load --transcript "
-                            "plain,bilingual:CODE" if args.transcript else ""))
+                            "plain,dual:CODE" if args.transcript else ""))
     if args.overwrite and args.json in ("load", "refresh"):
         parser.error(f"--page ovr downloads everything again from YouTube and --json "
                      f"{args.json} uses the saved data; use one of them")

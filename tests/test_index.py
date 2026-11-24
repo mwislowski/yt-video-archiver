@@ -1042,7 +1042,8 @@ def test_index_option_errors(capsys, argv, message):
                                            yt2html.INDEX_ONLY_REFUSES])
 def test_every_refused_option(capsys, name, refused):
     value = {"page": ["--page", "comments:5"], "video": ["--video"],
-             "transcript": ["--transcript"], "json": ["--json", "load"]}.get(refused, [name])
+             "transcript": ["--transcript"], "json": ["--json", "load"],
+             "olang": ["--olang", "en"]}.get(refused, [name])
     with pytest.raises(SystemExit):
         yt2html.parse_args(["--index-only", "a.txt", *value])
     assert f"cannot be used with {name} (" in capsys.readouterr().err

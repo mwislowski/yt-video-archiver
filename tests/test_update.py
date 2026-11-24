@@ -29,7 +29,7 @@ def row(html, name):
 def test_a_refused_translation_is_added(capsys, saved, youtube):
     before = json.loads(saved.read_text("utf-8"))
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                    "--transcript", "bilingual:pl,bilingual:de,bilingual:fr,bilingual:it")
+                    "--transcript", "dual:pl,dual:de,dual:fr,dual:it")
     assert code == 0 and youtube["extracted"] == 1
     assert "Fetching the video's data (no comments) for what is missing..." in out
     # German: YouTube did not offer it, so it is not asked for again
@@ -58,7 +58,7 @@ def test_a_refused_translation_is_added(capsys, saved, youtube):
     assert row(html, "Page built").endswith(f"from the saved data, with yt2html {yt2html.__version__}")
     # the same again: all there now, YouTube is not asked
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                    "--transcript", "bilingual:pl,bilingual:fr")
+                    "--transcript", "dual:pl,dual:fr")
     assert code == 0 and youtube["extracted"] == 1
     assert ("Nothing missing in the saved data; the page stays as it is: " in out
             and "(--json load makes it again from the data)" in out)
@@ -67,14 +67,14 @@ def test_a_refused_translation_is_added(capsys, saved, youtube):
 def test_refused_again(capsys, saved, youtube):
     youtube["fail_translations"] = 1
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                    "--transcript", "bilingual:pl")
+                    "--transcript", "dual:pl")
     assert code == 0                    # decision C: the page counts as finished
     assert "to add the translation later: --json write (keeps the comments)" in out
     data = json.loads(saved.read_text("utf-8"))
     assert data[yt2html.TRANSCRIPT_KEY]["missing"]["pl"]["date"] == dt.date.today().isoformat()
     assert yt2html.UPDATES_KEY not in data                      # nothing added
     html = page(saved.parent).read_text("utf-8")
-    assert (f"not available: bilingual:pl (YouTube refused to send it (HTTP 429 Too Many "
+    assert (f"not available: dual:pl (YouTube refused to send it (HTTP 429 Too Many "
             f"Requests), {TODAY})") in html
     assert "; updated" not in row(html, "Downloaded")
 
@@ -82,14 +82,14 @@ def test_refused_again(capsys, saved, youtube):
 def test_nothing_missing_asks_youtube_nothing(capsys, saved, youtube):
     # data without a page: the page from the data, YouTube not asked
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                    "--transcript", "timestamps")
+                    "--transcript", "timed")
     assert code == 0 and youtube["extracted"] == 0, out
     assert page(saved.parent).exists() and "Saved page: " in out
     assert yt2html.UPDATES_KEY not in json.loads(saved.read_text("utf-8"))
     # data and page: nothing missing, both stay as they are
     data, html = saved.stat().st_mtime_ns, page(saved.parent).stat().st_mtime_ns
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                    "--transcript", "plain,timestamps", "--page", "theme:dark")
+                    "--transcript", "plain,timed", "--page", "theme:dark")
     assert code == 0 and youtube["extracted"] == 0
     assert "Nothing missing in the saved data; the page stays as it is: " in out
     assert "Saved page" not in out and "Downloading thumbnail" not in out
@@ -101,7 +101,7 @@ def test_the_whole_transcript_when_the_data_have_none(capsys, saved, youtube):
     del data[yt2html.TRANSCRIPT_KEY]
     saved.write_text(json.dumps(data), encoding="utf-8")
     code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                  "--transcript", "plain,bilingual:pl")
+                  "--transcript", "plain,dual:pl")
     data = json.loads(saved.read_text("utf-8"))
     assert code == 0 and data[yt2html.TRANSCRIPT_KEY]["cues"]
     assert data[yt2html.UPDATES_KEY][0]["added"] == ["transcript", "translation pl"]
@@ -131,7 +131,7 @@ def test_the_transcripts_track_gone(capsys, saved, youtube, monkeypatch):
     monkeypatch.setattr(yt2html, "choose_caption_track",
                         lambda info: ("manual", "en", caption_formats("English")))
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                    "--transcript", "bilingual:pl,bilingual:it")
+                    "--transcript", "dual:pl,dual:it")
     assert code == 0
     reason = "the transcript's captions (English) are not in YouTube's data now"
     assert f"No translation into pl, it: {reason}." in out
@@ -141,7 +141,7 @@ def test_the_transcripts_track_gone(capsys, saved, youtube, monkeypatch):
 
 def test_the_page_shows_fewer_comments_the_data_keep_all(capsys, saved, youtube):
     code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                  "--transcript", "bilingual:pl", "--page", "comments:2")
+                  "--transcript", "dual:pl", "--page", "comments:2")
     assert code == 0
     assert len(json.loads(saved.read_text("utf-8"))["comments"]) == 7
     html = page(saved.parent).read_text("utf-8")
@@ -162,7 +162,7 @@ def test_a_data_file_is_updated_under_its_name(capsys, saved, youtube, tmp_path)
     renamed = saved.with_name("Old name [TESTVIDEO01].info.json")
     saved.rename(renamed)
     code, out = run(capsys, str(saved.parent / "*.info.json"), "-o", str(saved.parent),
-                    "--json", "write", "--transcript", "bilingual:pl")
+                    "--json", "write", "--transcript", "dual:pl")
     assert code == 0 and f"Updated metadata: {renamed}" in out
     assert "translation" in json.loads(renamed.read_text("utf-8"))[yt2html.UPDATES_KEY][0]["added"][0]
     assert page(saved.parent).exists() and list(saved.parent.glob("*.info.json")) == [renamed]
@@ -228,7 +228,7 @@ def test_update_with_a_list_file(capsys, saved, youtube, tmp_path):
     # the saved data are found by the video's id in the output folder
     (tmp_path / "list.txt").write_text("TESTVIDEO01\n", encoding="utf-8")
     code, out = run(capsys, "--index", str(tmp_path / "list.txt"), "-o", str(saved.parent),
-                    "--json", "write", "--transcript", "bilingual:pl")
+                    "--json", "write", "--transcript", "dual:pl")
     assert code == 0 and f"Reading {saved}" in out
     assert yt2html.UPDATES_KEY in json.loads(saved.read_text("utf-8"))
     assert (saved.parent / "list.html").is_file()
@@ -361,7 +361,7 @@ def test_a_refresh_without_a_limit_completes_limited_comments(info):
 
 def test_refresh(capsys, saved, youtube, refreshed):
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh",
-                    "--transcript", "bilingual:pl")
+                    "--transcript", "dual:pl")
     assert code == 0, out
     assert "Fetching TESTVIDEO01 (to refresh the saved data)" in out
     # the transcript as saved; the translation from the same data (no second fetch)
@@ -528,7 +528,7 @@ def test_saved_data_survive_an_interrupted_save(capsys, saved, youtube, monkeypa
         raise KeyboardInterrupt
     monkeypatch.setattr(yt2html.os, "replace", interrupted)
     assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                         "--transcript", "bilingual:pl"]) == 130  # as after Ctrl+C
+                         "--transcript", "dual:pl"]) == 130  # as after Ctrl+C
     assert saved.read_bytes() == before                       # the old data, whole
 
 

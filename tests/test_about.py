@@ -128,13 +128,13 @@ def test_fetch_info_keeps_the_download_settings(monkeypatch, info):
                                              "deno": False}
     monkeypatch.setattr(yt2html.shutil, "which", lambda name: name == "deno" and "/bin/deno")
     assert yt2html.fetch_info("u", args)[yt2html.DOWNLOAD_KEY]["deno"] is True
-    # --transcript bilingual: translations a random 70-100 s after fetching started
+    # --transcript dual: translations a random 70-100 s after fetching started
     asked = []
     monkeypatch.setattr(yt2html, "fetch_transcript",
                         lambda ydl, i, languages, not_before: asked.append((languages, not_before)))
     monkeypatch.setattr(yt2html.time, "monotonic", lambda: 1000.0)
     monkeypatch.setattr(yt2html.random, "uniform", lambda a, b: a + b)
-    yt2html.fetch_info("u", yt2html.parse_args(["u", "--transcript", "bilingual:pl"]))
+    yt2html.fetch_info("u", yt2html.parse_args(["u", "--transcript", "dual:pl"]))
     assert asked == [(["pl"], 1170.0)]
 
 
@@ -167,10 +167,10 @@ def test_command_names_all_comments_now_that_the_default_is_a_limit(info):
 def test_command_has_the_settings_that_shaped_the_page(info):
     info[yt2html.LIMIT_KEY] = 500
     info[yt2html.DOWNLOAD_KEY] = {"yt2html": "0.6.0", "cookies_from_browser": "firefox"}
-    html = render(info, transcript_spec=[("timestamps", None), ("bilingual", "pl")],
+    html = render(info, transcript_spec=[("timed", None), ("dual", "pl")],
                   theme="light", show_snapshot=False, no_avatars=True)
     assert command(html) == ("yt2html TESTVIDEO01 --page comments:500,snap:no,cards:no,"
-                             "avatars:no,theme:light --transcript timestamps,bilingual:pl "
+                             "avatars:no,theme:light --transcript timed,dual:pl "
                              "--cookies-from-browser firefox")
 
 
@@ -218,10 +218,10 @@ def test_command_of_a_page_built_from_saved_data(capsys, tmp_path, info):
     saved = tmp_path / "p" / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
     yt2html.main(["--json", "load", str(saved), "-o", str(tmp_path / "p"), "--transcript",
-                  "timestamps", "--page", "theme:dark,cards:no"])
+                  "timed", "--page", "theme:dark,cards:no"])
     html = next((tmp_path / "p").glob("*.html")).read_text("utf-8")
     assert command(html) == ("yt2html TESTVIDEO01 --page comments:50,cards:no,theme:dark "
-                             "--transcript timestamps")
+                             "--transcript timed")
     assert row(html, "Page built").endswith(f"from the saved data, with yt2html {yt2html.__version__}")
     assert "--json load" not in html and str(tmp_path) not in html
 
@@ -404,16 +404,16 @@ def test_transcript_language_features_and_versions(info):
     info[yt2html.TRANSCRIPT_KEY]["translations"] = saved
     info[yt2html.TRANSCRIPT_KEY]["translations"]["de"] = {"language": "de", "name": "German",
                                                           "cues": []}
-    spec = [("timestamps", None), ("bilingual", "pl"), ("bilingual", "de")]
+    spec = [("timed", None), ("dual", "pl"), ("dual", "de")]
     assert row(render(info, transcript_spec=spec), "Transcript") == (
-        "English (original language, auto-generated); 3 versions: timestamps, "
-        "bilingual with Polish (auto-translated), bilingual with German (auto-translated)")
+        "English (original language, auto-generated); 3 versions: timed, "
+        "dual with Polish (auto-translated), dual with German (auto-translated)")
 
 
 def test_the_row_describes_the_page_not_the_saved_data(info):
     # a translation kept in the saved data but not shown is not mentioned
-    assert row(render(info, transcript_spec=[("timestamps", None)]), "Transcript") == \
-        "English (original language, auto-generated); 1 version: timestamps"
+    assert row(render(info, transcript_spec=[("timed", None)]), "Transcript") == \
+        "English (original language, auto-generated); 1 version: timed"
 
 
 def test_author_subtitles_of_an_unknown_original_language(info):
@@ -1225,7 +1225,7 @@ def test_video_formats_option_excludes_page_options(capsys):
     assert ("--video-formats makes no page, so it cannot be used with --page, --json write"
             in capsys.readouterr().err)
     for option in (["--page", "ovr"], ["--index", "a.txt"], ["--index-only", "a.txt"], ["--json", "write"],
-                   ["--page"], ["--page", "comments:5"], ["--transcript", "timestamps"]):
+                   ["--page"], ["--page", "comments:5"], ["--transcript", "timed"]):
         with pytest.raises(SystemExit):
             yt2html.parse_args(["u", "--video-formats", *option])
         assert f"cannot be used with {option[0]}" in capsys.readouterr().err
