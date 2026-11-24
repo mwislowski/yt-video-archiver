@@ -1186,7 +1186,8 @@ def test_reverse_details_write_what_the_rows_show(tmp_path, capsys):
     text = "= Mine\n= !date: 3.8.19 !lang: EN\nMój klip & co.webm\n" + REVERSE_LIST
     (tmp_path / "series.html").write_text(html(tmp_path, text, playlists), "utf-8")
     target = tmp_path / "back.txt"
-    assert yt2html.main(["--reverse-details", str(tmp_path / "series.html"), str(target)]) == 0
+    assert yt2html.main(["--reverse", str(tmp_path / "series.html"), str(target),
+                         "details:title,date,lang"]) == 0
     assert target.read_bytes() == REVERSED_DETAILS.encode("utf-8")       # no BOM, LF
     assert f"Saved list: {target} (10 videos)" in capsys.readouterr().out
     # it reads back, and the index made from it shows the same
@@ -1194,8 +1195,8 @@ def test_reverse_details_write_what_the_rows_show(tmp_path, capsys):
     assert index.reverse_details(again) == REVERSED_DETAILS.splitlines()
     # !dates: no: the index shows no dates, so none are written
     (tmp_path / "plain.html").write_text(html(tmp_path, "!dates: no\n" + text, playlists), "utf-8")
-    assert yt2html.main(["--reverse-details", str(tmp_path / "plain.html"),
-                         str(tmp_path / "plain.txt")]) == 0
+    assert yt2html.main(["--reverse", str(tmp_path / "plain.html"),
+                         str(tmp_path / "plain.txt"), "DETAILS:Title,Date,Lang"]) == 0
     written = (tmp_path / "plain.txt").read_text("utf-8")
     assert "!date" not in written and "= !lang: en\nMój klip" in written
 
@@ -1229,26 +1230,61 @@ def test_reverse_errors(tmp_path, capsys, make, args, message):
 
 @pytest.mark.parametrize("extra, named", [(["URL"], "a URL"), (["-o", "out"], "-o"),
                                           (["--page", "theme:dark"], "--page"),
-                                          (["--page"], "--page")])
+                                          (["--page"], "--page"), (["--take", "5"], "--take")])
 def test_reverse_takes_nothing_else_and_is_not_in_help(capsys, extra, named):
-    for option in ("--reverse", "--reverse-details"):
-        with pytest.raises(SystemExit):
-            yt2html.main([option, "a.html", "b.txt", *extra])
-        assert (f"{option} only writes the list of an index page, so it cannot be used with "
-                f"{named}") in capsys.readouterr().err
+    with pytest.raises(SystemExit):   # (after it, a URL would be its third value)
+        yt2html.main([*extra, "--reverse", "a.html", "b.txt"] if extra == ["URL"] else
+                     ["--reverse", "a.html", "b.txt", *extra])
+    assert (f"--reverse only writes the list of an index page, so it cannot be used with "
+            f"{named}") in capsys.readouterr().err
     with pytest.raises(SystemExit):
         yt2html.main(["--help"])
     assert "--reverse" not in capsys.readouterr().out
 
 
-def test_the_two_reverses_do_not_go_together(tmp_path, capsys):
+def test_the_old_reverse_details_is_gone(capsys):
     with pytest.raises(SystemExit):
-        yt2html.main(["--reverse", "a.html", "b.txt", "--reverse-details", "a.html", "c.txt"])
-    assert "--reverse only writes the list of an index page, so it cannot be used with " \
-           "--reverse-details" in capsys.readouterr().err
+        yt2html.main(["--reverse-details", "a.html", "b.txt"])
+    assert "unrecognized arguments: --reverse-details" in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        yt2html.main(["--reverse-details", "a.htm", "b.txt"])
-    assert "--reverse-details takes the index page itself" in capsys.readouterr().err
+        yt2html.main(["--reverse", "a.html", "b.txt", "--reverse", "a.html", "c.txt"])
+    assert "--reverse is given more than once" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("details, lines", [
+    ("details:no", REVERSED),
+    ("details:title", ["= My title", "TESTVIDEO01", "", "= Title of TESTVIDEO02", "TESTVIDEO02"]),
+    ("details:lang,date", ["= !lang: pl !date: 03.05.2024", "TESTVIDEO01", "", "= !lang: pl",
+                           "TESTVIDEO02"]),
+    # "= title" on its own line above, wherever title stands
+    ("details:date,title", ["= My title", "= !date: 03.05.2024", "TESTVIDEO01", "",
+                            "= Title of TESTVIDEO02", "TESTVIDEO02"]),
+])
+def test_reverse_details_as_asked(tmp_path, details, lines):
+    playlists = reverse_folder(tmp_path)
+    page(tmp_path, "TESTVIDEO01", published="2024-05-03")
+    (tmp_path / "series.html").write_text(html(tmp_path, REVERSE_LIST, playlists), "utf-8")
+    target = tmp_path / "back.txt"
+    assert yt2html.main(["--reverse", str(tmp_path / "series.html"), str(target), details]) == 0
+    written = target.read_text("utf-8").splitlines()
+    assert written[:len(lines)] == lines
+
+
+@pytest.mark.parametrize("values, message", [
+    (["details:"], "the third value is details:title,date,lang (any of them) or details:no"),
+    (["details:title,"], "the third value is details:"),
+    (["title,date"], "the third value is details:"),
+    (["details:no,date"], "'details:no,date': no goes alone (no details at all)"),
+    (["details:title,year"], "'year' is not a detail (title, date or lang)"),
+    (["details:date,Date"], "'details:date,Date': date is given more than once"),
+    (["details:date", "more"], "--reverse takes the index page, the list file and, if you "
+                               "like, details:title,date,lang"),
+])
+def test_reverse_details_errors(tmp_path, capsys, values, message):
+    with pytest.raises(SystemExit):
+        yt2html.main(["--reverse", str(tmp_path / "a.html"), str(tmp_path / "x.txt"), *values])
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "x.txt").exists()
 
 
 # Videos a playlist no longer has, kept in the folder -------------------------------------

@@ -1347,11 +1347,12 @@ def write_index(args: argparse.Namespace, playlists: dict[str, dict | None]) -> 
 
 
 # --------------------------------------------------------------------------
-# --reverse INDEX LIST: an unofficial option (the user's, 20.11.2026; not in
-# --help, the README, DEVELOPMENT or the CHANGELOG; described in his notes):
-# the videos of an index page, one line each, written to a list file.
-# --reverse-details INDEX LIST (22.11.2026): the same, each video under "="
-# lines with what its row shows: title, date and language.
+# --reverse INDEX LIST [details:…]: an unofficial option (the user's,
+# 20.11.2026; not in --help, the README, DEVELOPMENT or the CHANGELOG;
+# described in his notes): the videos of an index page, one line each,
+# written to a list file; with details:title,date,lang (22.11.2026, as
+# --reverse-details until 24.11.2026) each video under "=" lines with what
+# its row shows of them.
 # --------------------------------------------------------------------------
 
 ROW_LINE = re.compile(r'<div class="line">(.*?)</div>')
@@ -1406,30 +1407,60 @@ def reverse_lines(page_html: str) -> list[str]:
     return [ref for ref, *_ in reverse_rows(page_html)]
 
 
-def reverse_details(page_html: str) -> list[str]:
-    """--reverse-details: each video's line under its "= title" and its
-    "= !date: … !lang: …" line (each only when the row shows something for
+REVERSE_DETAILS = ("title", "date", "lang")
+
+
+def reverse_details_spec(text: str) -> tuple[str, ...]:
+    """--reverse's third value: details:title,date,lang (any of them, each
+    once, any case) or details:no (the default: none); () for no."""
+    head, _, value = text.partition(":")
+    names = [name.strip().lower() for name in value.split(",")]
+    if head.strip().lower() != "details" or not all(names):
+        raise ListFileError(f"--reverse: '{text}': the third value is details:title,date,lang "
+                            f"(any of them) or details:no")
+    if names == ["no"]:
+        return ()
+    for name in names:
+        if name == "no":
+            raise ListFileError(f"--reverse: '{text}': no goes alone (no details at all)")
+        if name not in REVERSE_DETAILS:
+            raise ListFileError(f"--reverse: '{text}': '{name}' is not a detail (title, date "
+                                f"or lang)")
+        if names.count(name) > 1:
+            raise ListFileError(f"--reverse: '{text}': {name} is given more than once")
+    return tuple(names)
+
+
+def reverse_details(page_html: str, details: tuple[str, ...] = REVERSE_DETAILS) -> list[str]:
+    """--reverse with details: each video's line under its "= title" line
+    (with title) and its "= !date: … !lang: …" line, date and lang in the
+    order given (each only when asked for and the row shows something for
     it), the videos apart by a blank line."""
     out = []
     for ref, title, date, language in reverse_rows(page_html):
-        details = " ".join(f"!{key}: {value}" for key, value in (("date", date), ("lang", language))
-                           if value)
+        shown = {"date": date, "lang": language}
+        line = " ".join(f"!{key}: {shown[key]}" for key in details
+                        if key in shown and shown[key])
         out += [""] if out else []
-        out += [f"= {title}"] if title else []
-        out += [f"= {details}"] if details else []
+        out += [f"= {title}"] if title and "title" in details else []
+        out += [f"= {line}"] if line else []
         out.append(ref)
     return out
 
 
-def reverse_index(page_name: str, list_name: str, option: str = "--reverse"
+def reverse_index(page_name: str, list_name: str, *more: str
                   ) -> tuple[list[str], int, Path, Path | None]:
-    """--reverse / --reverse-details: the lines, the number of videos and
+    """--reverse INDEX LIST [details:…]: the lines, the number of videos and
     where they go: the list's name, or, when that file exists, the name with
     "-1" before its extension (then the taken name is returned too); both
     taken is an error, as are a page that is not an index made by yt2html
     and an index without videos."""
+    if len(more) > 1:
+        raise ListFileError("--reverse takes the index page, the list file and, if you like, "
+                            "details:title,date,lang")
+    details = reverse_details_spec(more[0]) if more else ()
     if not page_name.lower().endswith(".html"):
-        raise ListFileError(f"{option} takes the index page itself, e.g. index.html "
+        raise ListFileError(f"--reverse takes the index page itself, e.g. index.html "
                             f"(not {page_name})")
     path = Path(page_name)
     try:
@@ -1442,7 +1473,7 @@ def reverse_index(page_name: str, list_name: str, option: str = "--reverse"
     count = len(reverse_lines(text))
     if not count:
         raise ListFileError(f"no videos in '{page_name}'; nothing was written")
-    lines = reverse_details(text) if option == "--reverse-details" else reverse_lines(text)
+    lines = reverse_details(text, details) if details else reverse_lines(text)
     return (lines, count, *list_target(list_name))
 
 
@@ -1470,23 +1501,22 @@ def write_reverse(lines: list[str], count: int, target: Path, taken: Path | None
 
 
 # --------------------------------------------------------------------------
-# --channel-list CHANNEL LIST PERIOD: an unofficial option (the user's,
-# 22.11.2026; not in --help, the README, DEVELOPMENT or the CHANGELOG;
-# described in his notes, 5.4): some videos of a channel, chosen by their
-# publication dates or as the newest N, written to a list file, without
-# downloading them; never the whole channel.
+# --channel CHANNEL LIST PERIOD: an unofficial option (the user's, 22.11.2026,
+# --channel-list until 24.11.2026; not in --help, the README, DEVELOPMENT or
+# the CHANGELOG; described in his notes, 5.4): some videos of a channel,
+# chosen by their publication dates or as the newest N, written to a list
+# file, without downloading them; at most --take of them (the videos to check
+# for a period, N for the newest N).
 # --------------------------------------------------------------------------
 
 LAST = re.compile(r"last:(\d+)", re.I)
-LAST_MAX = 500              # last:N at most
-CANDIDATES_MAX = 100        # videos whose exact date is asked for, one request each
-READ_MAX = 5000             # videos of the channel's list read at most
-CHECK_PAUSE = (2, 5)        # seconds between those requests, chosen at random
+CHECK_PAUSE = (2, 5)        # seconds between the date requests, chosen at random
+PROGRESS_EVERY = 1000       # videos of the channel's list read between progress lines
 CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
 CHANNEL_ADDRESS = re.compile(r"(https?://(?:www\.|m\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+"
                              r"|c/[^/?#]+|user/[^/?#]+))(?:[/?#].*)?", re.I)
 PERIOD_FORMS = ("DD.MM.YYYY, MM.YYYY or YYYY, or two of them joined by - (a range), "
-                f"or last:N for the newest N videos (N up to {LAST_MAX})")
+                "or last:N for the newest N videos")
 
 
 def channel_videos_url(text: str) -> str:
@@ -1504,8 +1534,8 @@ def channel_videos_url(text: str) -> str:
     if found:
         return found.group(1) + "/videos"
     if core.video_id_from_url(text) or core.playlist_id_from_url(text):
-        raise ListFileError(f"--channel-list takes a channel, not a video or playlist: {text}")
-    raise ListFileError(f"--channel-list: not a YouTube channel: {text} (e.g. "
+        raise ListFileError(f"--channel takes a channel, not a video or playlist: {text}")
+    raise ListFileError(f"--channel: not a YouTube channel: {text} (e.g. "
                         "https://www.youtube.com/@name, @name or a channel id UC…)")
 
 
@@ -1524,13 +1554,14 @@ def period_of(text: str, today: dt.date | None = None) -> tuple[dt.date, dt.date
 
 
 def channel_choice(text: str, today: dt.date | None = None) -> int | tuple[dt.date, dt.date]:
-    """The third value of --channel-list: N of last:N, or the first and last
-    day of the period. Raises ListFileError."""
+    """The third value of --channel: N of last:N (at most --take: checked by
+    the caller), or the first and last day of the period. Raises
+    ListFileError."""
     found = LAST.fullmatch(text.strip())
     if found:
         number = int(found.group(1))
-        if not 1 <= number <= LAST_MAX:
-            raise ListFileError(f"--channel-list: {text}: last:N takes N from 1 to {LAST_MAX}")
+        if number < 1:
+            raise ListFileError(f"--channel: {text}: last:N takes N of 1 or more")
         return number
     sides = re.split(r"\s*[-–]\s*", text.strip())
     try:
@@ -1538,9 +1569,9 @@ def channel_choice(text: str, today: dt.date | None = None) -> int | tuple[dt.da
             raise ValueError
         start, end = period_of(sides[0], today)[0], period_of(sides[-1], today)[1]
     except ValueError:
-        raise ListFileError(f"--channel-list: {text}: not a period ({PERIOD_FORMS})") from None
+        raise ListFileError(f"--channel: {text}: not a period ({PERIOD_FORMS})") from None
     if start > end:
-        raise ListFileError(f"--channel-list: {text}: the period ends before it starts")
+        raise ListFileError(f"--channel: {text}: the period ends before it starts")
     return start, end
 
 
@@ -1621,13 +1652,16 @@ def exact_day(video_id: str, args: argparse.Namespace) -> dt.date | None:
 
 
 def channel_list(args: argparse.Namespace) -> int:
-    """--channel-list: read the channel's list, choose, write the list file;
-    the exit code."""
-    url, choice, target, taken = args.channel
+    """--channel: read the channel's list, choose, write the list file; the
+    exit code. The list is read as far as the choice needs, with a line of
+    progress every PROGRESS_EVERY videos (no limit: a long channel takes long,
+    Ctrl+C stops it and writes nothing)."""
+    url, choice, target, taken = args.channel_job
+    limit = getattr(args, "take_limit", None)
     period = None if isinstance(choice, int) else choice
     # [id, title, exact day (last:N: the approximate one as a comment) or None,
     #  the list's approximate day or None]
-    chosen, read, stopped = [], 0, False
+    chosen, read = [], 0
     core.log(f"Reading the videos of {url} (newest first)...")
     try:
         entries = fetch_channel(url, args)
@@ -1638,6 +1672,10 @@ def channel_list(args: argparse.Namespace) -> int:
                 continue
             read += 1
             approximate = (approximate_day(entry) or [None])[0]
+            if read % PROGRESS_EVERY == 0:
+                core.log(f"Reading the channel's list: {read:,} videos"
+                         + (f", now at {approximate.strftime('%m.%Y')}" if approximate else "")
+                         + "...")
             if period is None:
                 chosen.append([video_id, entry.get("title"), approximate_comment(entry),
                                approximate])
@@ -1649,9 +1687,6 @@ def channel_list(args: argparse.Namespace) -> int:
                 break                           # older from here on
             if not days or days[0] <= period[1]:
                 chosen.append([video_id, entry.get("title"), None, approximate])
-            if read >= READ_MAX:
-                stopped = True
-                break
         entries.close()
     except KeyboardInterrupt:
         core.log("Interrupted (Ctrl+C) while reading the channel: nothing was written.")
@@ -1659,14 +1694,14 @@ def channel_list(args: argparse.Namespace) -> int:
     except yt_dlp.utils.DownloadError:
         core.log(f"FAILED: {url}")              # yt-dlp has already said why
         return 1
-    if stopped:
-        core.log(f"Note: stopped after {READ_MAX} videos of the list; older ones were not read.")
     if period:
         core.log(f"Read {core.plural(read, 'video')} of the list; "
                  f"{core.plural(len(chosen), 'video')} may be from the period.")
-        if len(chosen) > CANDIDATES_MAX:
-            core.log(f"That is more than {CANDIDATES_MAX} to check one by one (a request each); "
-                     "give a shorter period. Nothing was written.")
+        if limit is not None and len(chosen) > limit:
+            default = " (the default)" if getattr(args, "take", None) is None else ""
+            core.log(f"That is more than --take {limit}{default} to check one by one (a "
+                     f"request each); give --take {len(chosen)} or --take all, or a shorter "
+                     f"period. Nothing was written.")
             return 1
         if chosen:
             core.log(f"Checking the date of each, with a pause of {CHECK_PAUSE[0]}–"
@@ -1693,11 +1728,9 @@ def channel_list(args: argparse.Namespace) -> int:
         return 0
     name = channel.get("channel") or channel.get("uploader") or channel.get("title") or url
     lines = [f"# {name}",
-             f"// {url}, {args.channel_list[2]}: made by yt2html --channel-list on "
+             f"// {url}, {args.channel[2]}: made by yt2html --channel on "
              f"{dt.date.today().strftime(core.DATE_FORMAT)}; titles as YouTube lists them "
              "(may be translated), so in comments; oldest first"]
-    if stopped:
-        lines.append(f"// stopped after {READ_MAX} videos of the list; older ones were not read")
     # the date on a line of its own under the title (the user, 22.11.2026): an exact
     # one as "= !date:" (the page's own date: nothing changes, and a row not yet
     # downloaded shows it), the list's approximate one as a comment

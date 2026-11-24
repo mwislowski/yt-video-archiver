@@ -6643,15 +6643,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "files that are already there); subtitles as SRT files: "
                              "--transcript srt. "
                              "Write the address first: yt2html URL --video 720p30")
-    # unofficial (the user's, 20.11.2026): the videos of an index page written
-    # to a list file; not in --help (yt2html_index.reverse_index()); with
-    # details (22.11.2026), each video's title, date and language on "=" lines
-    parser.add_argument("--reverse", nargs=2, metavar=("INDEX", "LIST"), help=argparse.SUPPRESS)
-    parser.add_argument("--reverse-details", nargs=2, metavar=("INDEX", "LIST"),
+    # unofficial (the user's, 20.11.2026): --reverse INDEX LIST [details:...], the
+    # videos of an index page written to a list file; not in --help
+    # (yt2html_index.reverse_index()); details:title,date,lang (22.11.2026, one
+    # option since 24.11.2026): each video's title, date and language on "=" lines
+    parser.add_argument("--reverse", nargs="+", action=Once, metavar="VALUE",
                         help=argparse.SUPPRESS)
-    # unofficial (the user's, 22.11.2026): some videos of a channel, by their
-    # dates or the newest N, written to a list file (yt2html_index.channel_list())
-    parser.add_argument("--channel-list", nargs=3, metavar=("CHANNEL", "LIST", "PERIOD"),
+    # unofficial (the user's, 22.11.2026): --channel CHANNEL LIST PERIOD, some
+    # videos of a channel, by their dates or the newest N, written to a list
+    # file (yt2html_index.channel_list()); at most --take of them
+    parser.add_argument("--channel", nargs=3, action=Once, metavar=("CHANNEL", "LIST", "PERIOD"),
                         help=argparse.SUPPRESS)
     parser.add_argument(
         "--take", type=take_value, default=None, action=Once, metavar="N",
@@ -6674,12 +6675,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     args.transcript = [entry for entry in args.transcript if entry[0] != "ovr"]   # srt stays
     # the options that only write a list file: (what they do, what may go with them)
     alone = {"reverse": ("only writes the list of an index page", ()),
-             "reverse_details": ("only writes the list of an index page", ()),
-             "channel_list": ("only writes a list of a channel's videos",
-                              ("cookies",))}
+             "channel": ("only writes a list of a channel's videos", ("cookies", "take"))}
     special = next((dest for dest in alone if getattr(args, dest) is not None), None)
     if special:
-        option = "--" + special.replace("_", "-")
+        option = "--" + special
         what, allowed = alone[special]
         used = [action.option_strings[0] if action.option_strings else "a URL"
                 for action in parser._actions
@@ -6689,13 +6688,19 @@ def parse_args(argv=None) -> argparse.Namespace:
             parser.error(f"{option} {what}, so it cannot be used with {', '.join(used)}")
         import yt2html_index   # (here: that module imports this one)
         try:
-            if special == "channel_list":
-                channel, name, period = args.channel_list
-                args.channel = (yt2html_index.channel_videos_url(channel),
-                                yt2html_index.channel_choice(period),
-                                *yt2html_index.list_target(name))
+            if special == "channel":
+                channel, name, period = args.channel
+                choice = yt2html_index.channel_choice(period)
+                if isinstance(choice, int) and args.take_limit is not None \
+                        and choice > args.take_limit:
+                    raise yt2html_index.ListFileError(
+                        f"--channel: last:{choice} puts {choice} videos in the list, more than "
+                        f"--take {args.take_limit}{' (the default)' if args.take is None else ''};"
+                        f" give --take {choice} or --take all")
+                args.channel_job = (yt2html_index.channel_videos_url(channel), choice,
+                                    *yt2html_index.list_target(name))
             else:
-                args.reversed = yt2html_index.reverse_index(*getattr(args, special), option)
+                args.reversed = yt2html_index.reverse_index(*args.reverse)
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
@@ -6790,7 +6795,7 @@ def readable_output() -> None:
 def main(argv=None) -> int:
     readable_output()
     args = parse_args(argv)
-    if getattr(args, "channel", None):
+    if getattr(args, "channel_job", None):
         import yt2html_index
         return yt2html_index.channel_list(args)
     if getattr(args, "reversed", None):

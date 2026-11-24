@@ -1,6 +1,7 @@
-"""--channel-list CHANNEL LIST PERIOD: an unofficial option (the user's,
-22.11.2026; not in --help or the README): some videos of a channel, by their
-publication dates or the newest N, written to a list file."""
+"""--channel CHANNEL LIST PERIOD: an unofficial option (the user's, 22.11.2026,
+--channel-list until 24.11.2026; not in --help or the README): some videos of a
+channel, by their publication dates or the newest N, written to a list file;
+at most --take of them."""
 
 import datetime as dt
 
@@ -57,7 +58,7 @@ def channel(monkeypatch):
 
 
 def run(capsys, *argv):
-    code = yt2html.main(["--channel-list", *argv])
+    code = yt2html.main(["--channel", *argv])
     return code, capsys.readouterr().out
 
 
@@ -90,7 +91,7 @@ def test_not_channels(given, message):
 
 
 @pytest.mark.parametrize("given, chosen", [
-    ("last:20", 20), ("LAST:1", 1), ("last:500", 500),
+    ("last:20", 20), ("LAST:1", 1), ("last:5000", 5000),   # the limit: --take, apart
     ("03.05.2019", (dt.date(2019, 5, 3), dt.date(2019, 5, 3))),
     ("3.5.19", (dt.date(2019, 5, 3), dt.date(2019, 5, 3))),
     ("02.2024", (dt.date(2024, 2, 1), dt.date(2024, 2, 29))),
@@ -105,7 +106,7 @@ def test_periods(given, chosen):
 
 
 @pytest.mark.parametrize("given, message", [
-    ("last:0", "last:N takes N from 1 to 500"), ("last:501", "last:N takes N from 1 to 500"),
+    ("last:0", "last:N takes N of 1 or more"),
     ("last 20", "not a period"), ("20", "not a period"), ("2027", "not a period"),
     ("31.02.2019", "not a period"), ("2019-", "not a period"), ("2019-2020-2021", "not a period"),
     ("", "not a period"), ("2020-2019", "the period ends before it starts"),
@@ -121,25 +122,29 @@ def test_not_periods(given, message):
                                           (["--json", "write"], "--json")])
 def test_it_takes_nothing_else_but_cookies(capsys, tmp_path, extra, named):
     with pytest.raises(SystemExit):
-        yt2html.main(["--channel-list", "@x", str(tmp_path / "x.txt"), "2019", *extra])
-    assert (f"--channel-list only writes a list of a channel's videos, so it cannot be used "
+        yt2html.main(["--channel", "@x", str(tmp_path / "x.txt"), "2019", *extra])
+    assert (f"--channel only writes a list of a channel's videos, so it cannot be used "
             f"with {named}") in capsys.readouterr().err
-    args = yt2html.parse_args(["--channel-list", "@x", str(tmp_path / "x.txt"), "2019",
-                               "--cookies", "firefox"])
-    assert args.channel[0] == "https://www.youtube.com/@x/videos"
+    args = yt2html.parse_args(["--channel", "@x", str(tmp_path / "x.txt"), "2019",
+                               "--cookies", "firefox", "--take", "300"])
+    assert args.channel_job[0] == "https://www.youtube.com/@x/videos"
+    assert args.take_limit == 300
     with pytest.raises(SystemExit):
         yt2html.main(["--help"])
-    assert "--channel-list" not in capsys.readouterr().out
+    assert "--channel" not in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        yt2html.main(["--channel-list", "@x", str(tmp_path / "x.txt"), "2019"])
+    assert "unrecognized arguments: --channel-list" in capsys.readouterr().err
 
 
 def test_wrong_values_stop_before_any_request(capsys, tmp_path, channel):
     for argv, message in ((["watch?v", "a.txt", "2019"], "not a YouTube channel"),
                           (["@x", "a.txt", "sometime"], "not a period")):
         with pytest.raises(SystemExit):
-            yt2html.main(["--channel-list", *argv])
+            yt2html.main(["--channel", *argv])
         assert message in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        yt2html.main(["--channel-list", "@x"])          # three values, always
+        yt2html.main(["--channel", "@x"])          # three values, always
     assert "url" not in channel
 
 
@@ -154,7 +159,7 @@ def test_the_newest_n(tmp_path, capsys, channel):
     code, out = run(capsys, "@somebody", str(target), "last:2")
     assert code == 0 and channel["url"] == CHANNEL
     text = target.read_text("utf-8")
-    assert text == (f"# Some Body\n// {CHANNEL}, last:2: made by yt2html --channel-list on "
+    assert text == (f"# Some Body\n// {CHANNEL}, last:2: made by yt2html --channel on "
                     f"{dt.date.today().strftime('%d.%m.%Y')}; titles as YouTube lists them "
                     "(may be translated), so in comments; oldest first\n"
                     f"\n// Video 3\n// ~{(TODAY - dt.timedelta(days=40)).strftime('%m.%Y')}"
@@ -207,29 +212,66 @@ def test_a_period_in_two_steps(tmp_path, capsys, channel):
     assert [(i.ref, i.date) for i in listing.items()] == [
         ("CHANNELVI06", None), ("CHANNELVI05", None),
         ("CHANNELVI03", f"01.06.{year}"), ("CHANNELVI04", f"07.07.{year}")]
-    assert f", {year}: made by yt2html --channel-list on " in target.read_text("utf-8")
+    assert f", {year}: made by yt2html --channel on " in target.read_text("utf-8")
     assert period == index.channel_choice(str(year))
 
 
-def test_more_videos_to_check_than_the_limit(tmp_path, capsys, channel, monkeypatch):
-    monkeypatch.setattr(index, "CANDIDATES_MAX", 3)
+def test_more_videos_to_check_than_take(tmp_path, capsys, channel):
     channel["entries"] = [entry(n, 2) for n in range(1, 5)]
-    code, out = run(capsys, "@somebody", str(tmp_path / "list.txt"), str(TODAY.year))
+    code, out = run(capsys, "@somebody", str(tmp_path / "list.txt"), str(TODAY.year),
+                    "--take", "3")
     assert code == 1 and channel["asked"] == []
-    assert ("4 videos may be from the period." in out and "That is more than 3 to check one by "
-            "one (a request each); give a shorter period. Nothing was written." in out)
+    assert ("4 videos may be from the period." in out and "That is more than --take 3 to check "
+            "one by one (a request each); give --take 4 or --take all, or a shorter period. "
+            "Nothing was written." in out)
     assert not (tmp_path / "list.txt").exists()
+    channel["days"] = {f"CHANNELVI0{n}": TODAY for n in range(1, 5)}
+    code, out = run(capsys, "@somebody", str(tmp_path / "list.txt"), str(TODAY.year),
+                    "--take", "4")
+    assert code == 0 and len(channel["asked"]) == 4
 
 
-def test_reading_stops_at_the_limit(tmp_path, capsys, channel, monkeypatch):
-    monkeypatch.setattr(index, "READ_MAX", 3)
-    channel["entries"] = [entry(n, 1) for n in range(1, 6)]
-    channel["days"] = {f"CHANNELVI0{n}": TODAY for n in range(1, 6)}
+def test_the_default_take_for_a_period(tmp_path, capsys, channel):
+    channel["entries"] = [entry(n, 2) for n in range(1, 102)]
     code, out = run(capsys, "@somebody", str(tmp_path / "list.txt"), str(TODAY.year))
-    assert code == 0 and channel["read"] == 3
-    assert "Note: stopped after 3 videos of the list; older ones were not read." in out
-    assert ("// stopped after 3 videos of the list; older ones were not read\n"
-            in (tmp_path / "list.txt").read_text("utf-8"))
+    assert code == 1 and "That is more than --take 100 (the default) to check" in out
+    channel["days"] = {e["id"]: TODAY for e in channel["entries"]}
+    code, out = run(capsys, "@somebody", str(tmp_path / "list.txt"), str(TODAY.year),
+                    "--take", "all")
+    assert code == 0 and len(channel["asked"]) == 101
+
+
+@pytest.mark.parametrize("extra, message", [
+    ([], "--channel: last:101 puts 101 videos in the list, more than --take 100 (the default);"
+         " give --take 101 or --take all"),
+    (["--take", "50"], "more than --take 50; give --take 101 or --take all"),
+])
+def test_the_newest_n_up_to_take(capsys, tmp_path, channel, extra, message):
+    with pytest.raises(SystemExit):
+        yt2html.main(["--channel", "@x", str(tmp_path / "x.txt"), "last:101", *extra])
+    assert message in capsys.readouterr().err and "url" not in channel
+    channel["entries"] = [entry(n, n) for n in range(1, 103)]
+    code, out = run(capsys, "@x", str(tmp_path / "x.txt"), "last:101", "--take", "all")
+    assert code == 0 and "(101 videos)" in out
+    code, out = run(capsys, "@x", str(tmp_path / "y.txt"), "last:101", "--take", "101")
+    assert code == 0 and "(101 videos)" in out
+
+
+def test_the_whole_list_is_read_with_progress(tmp_path, capsys, channel, monkeypatch):
+    monkeypatch.setattr(index, "PROGRESS_EVERY", 2)
+    channel["entries"] = [entry(1, 1), entry(2, 40), entry(3, None), entry(4, 400),
+                          entry(5, 401)]
+    channel["days"] = {f"CHANNELVI0{n}": TODAY for n in range(1, 6)}
+    code, out = run(capsys, "@somebody", str(tmp_path / "list.txt"), "2001-" + str(TODAY.year))
+    assert code == 0 and channel["read"] == 5               # no limit on the reading
+    month = (TODAY - dt.timedelta(days=40)).strftime("%m.%Y")
+    assert f"Reading the channel's list: 2 videos, now at {month}...\n" in out
+    assert "Reading the channel's list: 4 videos, now at " in out
+    assert out.count("Reading the channel's list:") == 2
+    assert "stopped" not in out + (tmp_path / "list.txt").read_text("utf-8")
+    monkeypatch.setattr(index, "PROGRESS_EVERY", 3)          # the third has no date
+    code, out = run(capsys, "@somebody", str(tmp_path / "other.txt"), "2001-" + str(TODAY.year))
+    assert "Reading the channel's list: 3 videos...\n" in out
 
 
 def test_nothing_in_the_period(tmp_path, capsys, channel):
@@ -318,7 +360,7 @@ def test_fetch_channel_reads_lazily_with_approximate_dates(monkeypatch):
             return {"_type": "playlist", "channel": "Some Body", "entries": entries()}
 
     monkeypatch.setattr(index.yt_dlp, "YoutubeDL", FakeYDL)
-    args = yt2html.parse_args(["--channel-list", "@somebody", "x.txt", "last:1",
+    args = yt2html.parse_args(["--channel", "@somebody", "x.txt", "last:1",
                                "--cookies", "firefox"])
     found = index.fetch_channel(CHANNEL, args)
     assert next(found)["channel"] == "Some Body"
