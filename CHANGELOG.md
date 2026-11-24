@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-24
+
 ### Changed
 
 - **All options follow one scheme** (see *How the options work* in the README): one option for each kind of file next to the page, `--page` (the page), `--transcript` (the transcript and its SRT files), `--video` (the video and its audio tracks) and `--json` (the saved data), each given once with its parameters in one comma-separated value; files that are there are skipped and `ovr` makes them again; a video's files stay in one folder; contradictory requests are errors before anything is downloaded. The old options are gone, not kept as other names, so an old command ends with argparse's `unrecognized arguments`. The new forms of the old options:
@@ -312,7 +314,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.8...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.8...v0.11.0
 [0.10.8]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.7...v0.10.8
 [0.10.7]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.6...v0.10.7
 [0.10.6]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.5...v0.10.6
