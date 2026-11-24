@@ -1226,10 +1226,12 @@ def choose_caption_track(info: dict) -> tuple[str, str, list[dict]] | None:
 
 
 def parse_json3_captions(data: dict) -> list[dict]:
-    """Caption cues from YouTube's json3 format: [{start (s), text}].
+    """Caption cues from YouTube's json3 format: [{start (s), end (s), text}].
 
     Line breaks inside a cue become spaces; events that hold only a line
-    break (used by automatic captions) are skipped.
+    break (used by automatic captions) are skipped. The end (start and
+    duration) is for the SRT files (--transcript srt); data saved before it
+    have none (cues_srt() takes the next line's start).
     """
     cues = []
     for event in data.get("events") or []:
@@ -1238,8 +1240,11 @@ def parse_json3_captions(data: dict) -> list[dict]:
             continue
         text = " ".join("".join(seg.get("utf8", "") for seg in segs).split())
         if text:
-            cues.append({"start": round((event.get("tStartMs") or 0) / 1000, 3),
-                         "text": text})
+            start = event.get("tStartMs") or 0
+            cue = {"start": round(start / 1000, 3), "text": text}
+            if event.get("dDurationMs") is not None:   # (0 too: as YouTube's SRT)
+                cue["end"] = round((start + event["dDurationMs"]) / 1000, 3)
+            cues.append(cue)
     return cues
 
 
@@ -1313,20 +1318,6 @@ def srt_time(ms: int) -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02},{ms:03}"
 
 
-def json3_to_srt(data: dict) -> bytes:
-    """SRT made from json3 data as YouTube makes it: one cue per event with
-    text (line breaks kept, the ends trimmed), from tStartMs for dDurationMs."""
-    blocks = []
-    for event in data.get("events") or []:
-        text = "".join(seg.get("utf8", "") for seg in event.get("segs") or []).strip()
-        if not text:
-            continue
-        start = event.get("tStartMs") or 0
-        end = start + (event.get("dDurationMs") or 0)
-        blocks.append(f"{len(blocks) + 1}\n{srt_time(start)} --> {srt_time(end)}\n{text}\n")
-    return "\n".join(blocks).encode("utf-8")
-
-
 def with_query(url: str, **params: str) -> str:
     """The URL with query parameters set (replacing existing ones)."""
     parts = urllib.parse.urlsplit(url)
@@ -1387,7 +1378,7 @@ def version_languages(spec: list[tuple[str, str | None]]) -> list[str]:
     translations to fetch (one in the original's language is the original
     itself, left out when the transcript is known: resolve_versions())."""
     return list(dict.fromkeys(language for version, language in spec
-                              if language and version != "ovr"))
+                              if language and version not in ("ovr", "srt")))
 
 
 def wanted_translations(spec: list, transcript: dict | None) -> list[str]:
@@ -1412,7 +1403,7 @@ def resolve_versions(spec: list, transcript: dict | None
     name = transcript.get("name") or original
     versions, notes = [], []
     for version, language in spec:
-        if version == "ovr":
+        if version in ("ovr", "srt"):
             continue
         own = language is None or (original and base_language(language) == base_language(original))
         shown = "timed" if version == "dual" and own else version
@@ -3174,6 +3165,63 @@ def audio_suffix(key: tuple) -> str:
     return f".{code}{'.' + role if role else ''}.m4a"
 
 
+def cues_srt(cues: list[dict]) -> bytes:
+    """An SRT file of caption cues, one block per line of the transcript (the
+    same lines at the same times): to its end, else (data saved before ends
+    were kept) to the next line's start, the last one 5 s."""
+    blocks = []
+    for i, cue in enumerate(cues):
+        start = round(float(cue.get("start") or 0) * 1000)
+        end = (round(float(cue["end"]) * 1000) if cue.get("end") is not None else
+               round(float(cues[i + 1]["start"]) * 1000) if i + 1 < len(cues) else start + 5000)
+        blocks.append(f"{len(blocks) + 1}\n{srt_time(start)} --> {srt_time(max(end, start))}\n"
+                      f"{cue.get('text') or ''}\n")
+    return "\n".join(blocks).encode("utf-8")
+
+
+def srt_tracks(info: dict, spec: list) -> list[tuple[str, str, list[dict]]]:
+    """--transcript srt: the tracks of the versions the page shows, each once,
+    as (code, kind, cues) for "Title [ID].CODE.KIND.srt": the original
+    (author or auto-generated) and YouTube's translations (translated); a
+    translation of one's own is not written (its .own.srt file is the
+    source)."""
+    transcript = info.get(TRANSCRIPT_KEY)
+    if not transcript or not transcript.get("cues"):
+        return []
+    translations = translations_of(transcript)
+    tracks = {}
+    kind = "auto-generated" if transcript.get("kind") == "auto" else "author"
+    for version, language in resolve_versions(spec, transcript)[0]:
+        if language is None or version == "dual":   # dual: the original beside it too
+            tracks.setdefault((transcript.get("language") or "und", kind), transcript["cues"])
+        if language is not None and language in translations \
+                and not translations[language].get("own"):
+            tracks.setdefault((language, "translated"), translations[language].get("cues") or [])
+    return [(code, kind, cues) for (code, kind), cues in tracks.items()]
+
+
+def write_srt_files(info: dict, spec: list, page: Path) -> list[str]:
+    """The SRT files of srt_tracks() next to the page, as part of it: a file
+    with the video's id and the ending (renamed ones too) is written over
+    only when its text differs (the transcript changed); else it is left as
+    it is, its date too. Returns the files' endings, for the console."""
+    written = []
+    for code, kind, cues in srt_tracks(info, spec):
+        suffix = sub_suffix(code, kind)
+        path = file_by_suffix(page.parent, info.get("id"), suffix, "subtitle files") or \
+            page.parent / (page.stem + suffix)
+        content = cues_srt(cues)
+        try:
+            same = path.read_bytes() == content
+        except OSError:
+            same = False
+        if not same:
+            write_atomically(path, content)
+            log(f"Saved subtitles: {path}")
+            written.append(suffix)
+    return written
+
+
 def sub_suffix(code: str, kind: str) -> str:
     return f".{code}.{kind}.srt"
 
@@ -3367,9 +3415,11 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
     # drop a "--" before it, so the full address is used instead.
     parts = ["yt2html", video_id if video_id and not video_id.startswith("-")
              else f"{YOUTUBE}/watch?v={video_id}"]
-    if VIDEO_KEY in info:   # the files are part of the copy; "again" is not (how, not what)
+    if VIDEO_KEY in info:   # the files are part of the copy; "ovr" is not (how, not what)
+        # (data saved before --transcript srt may name "again" and sub: items)
         kept = [item.strip() for item in info[VIDEO_KEY].get("parameters", "").split(",")
-                if item.strip() and item.strip() not in ("again", f"{DEFAULT_MAX_HEIGHT}p")]
+                if item.strip() and item.strip() not in ("ovr", "again", f"{DEFAULT_MAX_HEIGHT}p")
+                and not item.strip().startswith("sub:")]
         parts += ["--video"] + ([",".join(kept)] if kept else [])
     # --page: what differs from its defaults; ovr is not part of the copy (how, not what)
     page = []
@@ -3514,6 +3564,9 @@ def about_transcript(info: dict, spec: list) -> str:
             for version, language in absent)
     if notes:
         text += "; " + "; ".join(esc(note) for note in notes)
+    if ("srt", None) in spec:
+        files = [f"{code} ({kind})" for code, kind, _ in srt_tracks(info, spec)]
+        text += "; SRT files next to the page: " + (esc(", ".join(files)) if files else "none")
     return text
 
 
@@ -5293,7 +5346,9 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         # Checked before fetching, from the id in the URL: no request needed.
         found = existing_page(output_dir, video_id_from_url(source))
         if found:
-            log(f"Skipped (page exists): {found}")
+            log(f"Skipped (page exists): {found}"
+                + ("; SRT files are made with the page (--page ovr, or --json write with "
+                   "saved data)" if getattr(args, "transcript_srt", False) else ""))
             outcome["target"] = found
             return None
 
@@ -5385,6 +5440,10 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         log(f"Skipped (page exists): {found}")
         outcome["target"] = found
         return None
+    if idle and found and getattr(args, "transcript_srt", False) and any(
+            not file_by_suffix(output_dir, info.get("id"), sub_suffix(code, kind), "subtitle files")
+            for code, kind, _ in srt_tracks(info, args.transcript)):
+        idle = False   # an SRT file is missing: the page and its files are made again
     deferred = bool(idle and found)
     if deferred and args.video is None:
         log(f"Nothing missing in the saved data; the page stays as it is: {found} "
@@ -5470,6 +5529,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
                            video_files=video_files, video_size=video_size,
                            audio_files=audio_files)
         write_atomically(target, page)
+        if getattr(args, "transcript_srt", False):
+            write_srt_files(info, args.transcript, target)
 
     def rebuild() -> None:
         save_json("Updated")
@@ -5556,13 +5617,6 @@ def limit_text(spec: dict) -> str:
     return f"{spec['height']}p" + (str(spec["fps"]) if spec["fps"] else "")
 
 
-def download_srt(url: str, args: argparse.Namespace, not_before: float = 0.0) -> bytes:
-    """A subtitles file as SRT, made from the track's json3 data (shared with
-    the transcript, so asked for once); a translation no sooner than
-    `not_before` (as for bilingual transcripts), once."""
-    return json3_to_srt(caption_data(url, lambda u: fetch_subtitles(u, args), not_before))
-
-
 def replaced_data_note(path: Path, fresh: dict) -> str:
     """--page ovr --json write: the saved data at `path` are replaced by fresh
     ones; what only they had is lost and named, so nothing goes unnoticed:
@@ -5630,43 +5684,32 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     result = {"date": today, "parameters": spec["text"]}
     new = False
     existing = video_files_for({"id": ident}, folder)
-    take_image = not existing or spec["again"]
+    take_image = not existing or spec["ovr"]
     if not take_image:
         log(f"Video skipped (file exists): {folder / existing[0]}. "
-            'Add "again" to --video to download it again.')
+            'Add "ovr" to --video to download it again.')
         old = previous.get("video")
         result["video"] = described({"file": existing[0],
                                      "size": (folder / existing[0]).stat().st_size},
                                     [old] if old else [])
-        if not spec["audio"] and not spec["subs"]:
+        if not spec["audio"]:
             return result, None, False
         # a page left as it is (page_info None: not made now) with every track
-        # and subtitles asked for already here too: nothing to ask YouTube, so
-        # the next video need not wait either (a page made now takes the fresh
-        # list, which tells which formats the files came from)
-        at_hand = files_at_hand(folder, ident, spec) if page_info is None else None
-        if at_hand is not None:
-            audio_files, sub_files = at_hand
+        # asked for already here too: nothing to ask YouTube, so the next video
+        # need not wait either (a page made now takes the fresh list, which
+        # tells which formats the files came from)
+        audio_files = files_at_hand(folder, ident, spec) if page_info is None else None
+        if audio_files is not None:
             for (code, role), path in audio_files:
-                log(f'Audio skipped (file exists): {path}. Add "again" to --video to download '
+                log(f'Audio skipped (file exists): {path}. Add "ovr" to --video to download '
                     'it again.')
-            for (code, kind), path in sub_files:
-                log(f'Subtitles skipped (file exists): {path}. Add "again" to --video to '
-                    'download them again.')
-            if audio_files:
-                result["extra_audio"] = [
-                    described({"audio": code, "role": role, "file": path.name,
-                               "size": path.stat().st_size},
-                              previous.get("extra_audio") or [], "audio", "role")
-                    for (code, role), path in audio_files]
-            if sub_files:
-                result["subtitles"] = [
-                    described({"code": code, "kind": kind, "file": path.name,
-                               "size": path.stat().st_size},
-                              previous.get("subtitles") or [], "code", "kind")
-                    for (code, kind), path in sub_files]
+            result["extra_audio"] = [
+                described({"audio": code, "role": role, "file": path.name,
+                           "size": path.stat().st_size},
+                          previous.get("extra_audio") or [], "audio", "role")
+                for (code, role), path in audio_files]
             return result, None, False
-    # ffmpeg joins image and sound and fixes m4a; subtitles need none
+    # ffmpeg joins image and sound and fixes m4a
     if (take_image or spec["audio"]) and not shutil.which("ffmpeg"):
         raise VideoSkipped(f"ffmpeg not found (it joins image and sound). "
                            f"Install it: {install_hint('ffmpeg')}.")
@@ -5705,7 +5748,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     def options(fmt: str, name: str) -> dict:
         opts = {"format": fmt, "merge_output_format": "mp4",
                 "outtmpl": {"default": str(folder / name.replace("%", "%%")) + ".%(ext)s"},
-                "overwrites": spec["again"], "noplaylist": True,
+                "overwrites": spec["ovr"], "noplaylist": True,
                 "quiet": True, "noprogress": False}
         if args.cookies_from_browser:
             opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
@@ -5717,7 +5760,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         audio_code = choice.track(audio)[0]
         log(f"Video: {variant['quality']} {variant['codec']} + "
             f"{track_text(audio_code, audio_codec)}, mp4, {variant['size']}")
-        # again: into the mp4 that is there, whatever its name (the parameter "again")
+        # ovr: into the mp4 that is there, whatever its name (the parameter "ovr")
         target = next((folder / name for name in existing if name.lower().endswith(".mp4")),
                       folder / f"{page.stem}.mp4")
         yt_download(fresh, options(f"{variant['format']['format_id']}+{audio['format_id']}",
@@ -5741,8 +5784,8 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         there = file_by_suffix(folder, ident, audio_suffix(key), "audio files")
         name = there or audio_name(page, key)
         entry = {"audio": key[0], "role": key[1], "file": name.name}
-        if there and not spec["again"]:
-            log(f'Audio skipped (file exists): {name}. Add "again" to --video to download '
+        if there and not spec["ovr"]:
+            log(f'Audio skipped (file exists): {name}. Add "ovr" to --video to download '
                 'it again.')
             extra.append(described({**entry, "size": name.stat().st_size},
                                    previous.get("extra_audio") or [], "audio", "role"))
@@ -5756,45 +5799,6 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         new = True
     if extra:
         result["extra_audio"] = extra
-    # Subtitles: SRT files made from the json3 tracks, each on its own; the
-    # transcript's choice of track (CAPTION_KEY) comes from the page's data.
-    subs = []
-    if spec["subs"]:
-        wanted_subs, messages, source = resolve_subs(data, spec["subs"])
-        if messages:
-            log("Subtitles: " + "; ".join(messages) + ".")
-            log("  Subtitles to take: " + subs_offer(data, source))
-        for code, kind, url in wanted_subs:
-            there = file_by_suffix(folder, ident, sub_suffix(code, kind), "subtitle files")
-            name = there or sub_name(page, code, kind)
-            if there and not spec["again"]:
-                log(f'Subtitles skipped (file exists): {name}. Add "again" to --video to '
-                    'download them again.')
-                subs.append(described({"code": code, "kind": kind, "file": name.name,
-                                       "size": name.stat().st_size},
-                                      previous.get("subtitles") or [], "code", "kind"))
-                continue
-            log(f"Subtitles: {code} ("
-                + (f"machine translation from {base_language(source[0])}"
-                   if kind == "translated" else SUB_KIND_TEXT[kind]) + "), srt")
-            try:
-                srt = download_srt(url, args, not_before if kind == "translated" else 0.0)
-            except Exception as error:
-                log(f"Subtitles FAILED: {code}: {failure_reason(error)}"
-                    + (TRANSLATION_HINT if is_too_many_requests(error) else ""))
-                failures += 1
-                continue
-            if not srt.strip():
-                log(f"  YouTube returned no subtitles for {code}; nothing saved.")
-                continue
-            write_atomically(name, srt)
-            log(f"Saved subtitles: {name} ({human_size(len(srt)).lstrip('~')})")
-            subs.append({"code": code, "kind": kind, "file": name.name, "size": len(srt),
-                         "date": today}
-                        | ({"source": base_language(source[0])} if kind == "translated" else {}))
-            new = True
-    if subs:
-        result["subtitles"] = subs
     if failures:
         result["_failures"] = failures   # told to the run, not saved
     return result, fresh.get("formats"), new
@@ -5877,80 +5881,13 @@ def subtitle_tracks(info: dict) -> dict:
             "auto-generated": {c: u for c, u in sorted(auto.items()) if u}}
 
 
-def resolve_subs(info: dict, requests: list) -> tuple[list, list[str], tuple | None]:
-    """The subtitles the sub: parameters ask for: [(code, kind, url)], the
-    messages for the rest, and the translation source ((language, url): the
-    track the transcript takes). sub:CODE takes the author's subtitles in
-    that language, else the automatic ones, else a machine translation of
-    the transcript's track; sub:CODE.KIND only that kind. Codes match as for
-    audio: (exact, else a bare language finds its regional code). Each once."""
-    tracks = subtitle_tracks(info)
-    found, messages = [], []
-    picked = choose_caption_track(info)
-    source = None
-    if picked:
-        url = timedtext_url(picked[2])
-        source = (picked[1], url) if url else None
-    asked = {}
-    for code, sort, text in requests:
-        take = None
-        for kind in [sort] if sort else SUB_KINDS:
-            if kind == "translated":
-                listed = info.get(TRANSLATIONS_KEY)
-                if (source and base_language(code) != base_language(source[0])
-                        and (listed is None or code in listed)):
-                    take = (code, kind, with_query(source[1], tlang=code))
-            else:
-                codes = tracks[kind]
-                match = ([c for c in codes if c == code]
-                         or [c for c in codes if base_language(c) == code])
-                if match:
-                    take = (match[0], kind, codes[match[0]])
-            if take:
-                break
-        if not take:
-            messages.append(f'"{text}" not available')
-        elif take[:2] in asked:   # "pt" and "pt-BR": one file
-            messages.append(f'"{text}" gives the same subtitles as "{asked[take[:2]]}"; taken once')
-        else:
-            found.append(take)
-            asked[take[:2]] = text
-    return found, messages, source
-
-
-def subs_offer(info: dict, source: tuple | None) -> str:
-    """What sub: can take, for the console: "by the author: en, pl;
-    auto-generated: en; other languages as a machine translation"."""
-    tracks = subtitle_tracks(info)
-    parts = [f"{SUB_KIND_TEXT[kind]}: {', '.join(tracks[kind])}"
-             for kind in ("author", "auto-generated") if tracks[kind]]
-    if source:
-        parts.append("other languages as a machine translation")
-    return "; ".join(parts) or "none"
-
-
-def fetch_subtitles(url: str, args: argparse.Namespace) -> bytes:
-    """One subtitles track (json3) from YouTube, through yt-dlp's connection (a bare
-    request is refused as automated)."""
-    opts = {"quiet": True}
-    if args.cookies_from_browser:
-        opts["cookiesfrombrowser"] = cookies_spec(args.cookies_from_browser)
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        with ydl.urlopen(url) as response:
-            return response.read()
-
-
-def files_at_hand(folder: Path, ident: str | None, spec: dict) -> tuple[list, list] | None:
-    """The files next to the page for every audio: and sub: parameter, found
-    without the list of formats: ([((code, role), path)], [((code, kind),
-    path)]), or None when one is missing (then the list decides). A file
-    counts by its ending after "[id]" ("[id].pl.dubbed.m4a",
-    "[id].pl.auto-generated.srt"): its code as resolve_audio() and
-    resolve_subs() match it (exact, else a bare language finds a regional
-    code), its role or kind as asked; without one, any kind of subtitles and
-    any track but an audio description. So subtitles of a kind the video got
-    later (the author's, after automatic ones) are not looked for: "again"
-    or sub:CODE.KIND asks YouTube (the user, 20.11.2026)."""
+def files_at_hand(folder: Path, ident: str | None, spec: dict) -> list | None:
+    """The files next to the page for every audio: parameter, found without
+    the list of formats: [((code, role), path)], or None when one is missing
+    (then the list decides). A file counts by its ending after "[id]"
+    ("[id].pl.dubbed.m4a"): its code as resolve_audio() matches it (exact,
+    else a bare language finds a regional code), its role as asked; without
+    one, any track but an audio description."""
     def endings(extension: str) -> list[tuple[str, str | None, Path]]:
         found = []
         for path in files_with_id(folder, ident, (extension,)):
@@ -5967,7 +5904,7 @@ def files_at_hand(folder: Path, ident: str | None, spec: dict) -> tuple[list, li
         same = [f for f in same if fits(f[1])]
         return same[0] if same else None
 
-    audio, subs = [], []
+    audio = []
     tracks = endings(".m4a")
     for code, role, _ in spec["audio"]:
         hit = first(tracks, code, (lambda r: r == role) if role else
@@ -5976,15 +5913,7 @@ def files_at_hand(folder: Path, ident: str | None, spec: dict) -> tuple[list, li
             return None
         if hit[2] not in [path for _, path in audio]:
             audio.append(((hit[0], hit[1]), hit[2]))
-    texts = sorted(endings(".srt"), key=lambda f: SUB_KINDS.index(f[1])
-                   if f[1] in SUB_KINDS else len(SUB_KINDS))
-    for code, kind, _ in spec["subs"]:
-        hit = first(texts, code, (lambda k: k == kind) if kind else (lambda k: k in SUB_KINDS))
-        if not hit:
-            return None
-        if hit[2] not in [path for _, path in subs]:
-            subs.append(((hit[0], hit[1]), hit[2]))
-    return audio, subs
+    return audio
 
 
 def sub_name(page: Path, code: str, kind: str) -> Path:
@@ -6122,12 +6051,12 @@ TRANSCRIPT_VERSIONS = ("plain", "timed", "dual")
 def transcript_spec(value: str) -> list[tuple[str, str | None]]:
     """Parse --transcript: "" (the option alone: plain) or comma-separated
     versions, each with a language code or without one (the original):
-    "plain,timed:pl,dual:de"; and "ovr" (the saved transcript downloaded
-    again, with --json). Without the option there is no transcript ([], the
+    "plain,timed:pl,dual:de"; "srt" (an SRT file for each of them, next to
+    the page) and "ovr" (the saved transcript downloaded again, with --json). Without the option there is no transcript ([], the
     parser's default).
 
     Returns the versions in the given order as (version, language) pairs,
-    ovr as ("ovr", None). Any case of letters ("Plain", "dual:PT-br").
+    srt and ovr as ("srt", None), ("ovr", None). Any case of letters ("Plain", "dual:PT-br").
     Raises ArgumentTypeError (before anything is fetched) for unknown
     versions ("none" too: without the option there is no transcript), also
     for an address taken as versions ("--transcript URL"), dual without a
@@ -6141,12 +6070,13 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
     spec = []
     for item in items:
         version, colon, language = item.partition(":")
-        if item == "ovr":
-            entry = ("ovr", None)
+        if item in ("ovr", "srt"):
+            entry = (item, None)
         elif version not in TRANSCRIPT_VERSIONS:
             raise argparse.ArgumentTypeError(
-                f"'{item}' is not a parameter (use plain, timed, dual:CODE or ovr, a version "
-                f"with :CODE for a language); the video's address goes before --transcript")
+                f"'{item}' is not a parameter (use plain, timed, dual:CODE, srt or ovr, a "
+                f"version with :CODE for a language); the video's address goes before "
+                f"--transcript")
         elif version == "dual" and not language:
             raise argparse.ArgumentTypeError("'dual' needs a language code, e.g. dual:pl")
         elif colon and not language:
@@ -6158,8 +6088,8 @@ def transcript_spec(value: str) -> list[tuple[str, str | None]]:
         if entry in spec:
             raise argparse.ArgumentTypeError(f"'{item}' is given more than once")
         spec.append(entry)
-    if spec == [("ovr", None)]:
-        spec.insert(0, ("plain", None))   # "ovr" alone: the option alone, again
+    if all(version in ("ovr", "srt") for version, _ in spec):
+        spec.insert(0, ("plain", None))   # "ovr" or "srt" alone: with the option alone
     return spec
 
 
@@ -6185,15 +6115,14 @@ VIDEO_QUALITY = re.compile(r"(\d+)p(\d+)?")
 def video_spec(value: str) -> dict:
     """Parse --video: "" (the default), or comma-separated parameters: a
     quality as an upper limit ("720p": up to 720p at any frame rate;
-    "720p30": up to 720p and 30 fps; at most 1080p), "again" (download the
+    "720p30": up to 720p and 30 fps; at most 1080p), "ovr" (download the
     files that are there again) and extra audio tracks ("audio:pl",
-    "audio:pl.auto-dubbed") and subtitles ("sub:pl", "sub:pl.translated"),
-    one item for each (the code is written the usual way); any case of
-    letters. Raises ArgumentTypeError (before anything is fetched), also for
+    "audio:pl.auto-dubbed"), one item for each (the code is written the
+    usual way); any case of letters. (Subtitles: --transcript srt.) Raises ArgumentTypeError (before anything is fetched), also for
     an address taken as parameters ("--video URL"), a code that is no
     language code, and a repeated item: the same one twice, or a language
     both alone and with a role (kind): what was meant is not clear."""
-    spec = {"height": None, "fps": None, "again": False, "audio": [], "subs": [],
+    spec = {"height": None, "fps": None, "ovr": False, "audio": [], "subs": [],
             "text": value.strip().lower()}
     if not spec["text"]:
         return spec
@@ -6212,19 +6141,10 @@ def video_spec(value: str) -> dict:
                     f"audio:pl.auto-dubbed")
             check_code(code, item)
             add_once(spec["audio"], (standard_code(code), role.lower() or None, item))
-        elif kind.lower() == "sub" and rest:
-            # sub:CODE or sub:CODE.KIND (author, auto-generated, translated)
-            code, _, sort = rest.partition(".")
-            if not LANGUAGE_CODE.fullmatch(code) or (sort and sort.lower() not in SUB_KINDS):
-                raise argparse.ArgumentTypeError(
-                    f"'{item}': write sub:CODE or sub:CODE.KIND (KIND: "
-                    f"{', '.join(SUB_KINDS)}), e.g. sub:pl or sub:pl.translated")
-            check_code(code, item)
-            add_once(spec["subs"], (standard_code(code), sort.lower() or None, item))
-        elif item.lower() == "again":
-            if spec["again"]:
-                raise argparse.ArgumentTypeError("'again' is given more than once")
-            spec["again"] = True
+        elif item.lower() == "ovr":
+            if spec["ovr"]:
+                raise argparse.ArgumentTypeError("'ovr' is given more than once")
+            spec["ovr"] = True
         elif quality and int(quality.group(1)) in QUALITY_LADDER:
             height, fps = int(quality.group(1)), quality.group(2)
             if height > DEFAULT_MAX_HEIGHT:
@@ -6239,7 +6159,8 @@ def video_spec(value: str) -> dict:
         else:
             raise argparse.ArgumentTypeError(
                 f"'{item}' is not a parameter (use a quality such as 720p or 720p30, "
-                f"audio:CODE, sub:CODE or again); the video's address goes before --video")
+                f"audio:CODE or ovr; subtitles: --transcript srt); the video's address goes "
+                f"before --video")
     return spec
 
 
@@ -6462,12 +6383,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "upper limit (720p, or 720p30 to limit the frame rate too), "
                              "audio:CODE for an extra audio track as a separate m4a (e.g. "
                              "audio:pl: a dub by the author, else YouTube's; audio:pl.auto-dubbed "
-                             "for that one; repeat for more), sub:CODE for subtitles as an "
-                             "SRT file (sub:pl: the author's, else auto-generated, else a "
-                             "machine translation of the transcript's subtitles; "
-                             "sub:pl.author, .auto-generated or .translated for that kind) "
-                             "and again (download again the files "
-                             "that are already there). "
+                             "for that one; repeat for more) and ovr (download again the "
+                             "files that are already there); subtitles as SRT files: "
+                             "--transcript srt. "
                              "Write the address first: yt2html URL --video 720p30")
     # unofficial (the user's, 20.11.2026): the videos of an index page written
     # to a list file; not in --help (yt2html_index.reverse_index()); with
@@ -6487,7 +6405,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     apply_page_spec(args)
     apply_json_parameter(args)
     args.transcript_ovr = ("ovr", None) in args.transcript
-    args.transcript = [entry for entry in args.transcript if entry[0] != "ovr"]
+    args.transcript_srt = ("srt", None) in args.transcript
+    args.transcript = [entry for entry in args.transcript if entry[0] != "ovr"]   # srt stays
     # the options that only write a list file: (what they do, what may go with them)
     alone = {"reverse": ("only writes the list of an index page", ()),
              "reverse_details": ("only writes the list of an index page", ()),
@@ -6674,6 +6593,12 @@ def main(argv=None) -> int:
             if not new:
                 return   # nothing added: the page and the data stay as they are
             outcome["info"] = outcome["deferred"]
+        if new and not outcome.get("rebuild"):   # a page that was there and is left as it is
+            log("  Warning: the page was not made again, so its Video file row does not list "
+                "the new files" + (" and the player has no switch for the new audio tracks"
+                                   if result.get("extra_audio") else "")
+                + ". To add them: --page ovr (everything again from YouTube), or --json "
+                "write if the page has saved data.")
         if outcome.get("rebuild"):   # a page made now describes the files, downloaded or found
             info = outcome["info"]
             if formats:

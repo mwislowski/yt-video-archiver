@@ -128,25 +128,6 @@ class TestChooseTrack:
         assert yt2html.transcript_language(info) == "pl"
 
 
-def test_json3_to_srt():
-    data = {"events": [
-        {"tStartMs": 0, "dDurationMs": 4000, "segs": [{"utf8": " Hello "}, {"utf8": "and welcome"}]},
-        {"tStartMs": 3000, "aAppend": 1, "segs": [{"utf8": "\n"}]},       # only a line break
-        {"tStartMs": 4000},                                                # no text at all
-        {"tStartMs": 3_723_456, "dDurationMs": 1544, "segs": [{"utf8": "first\nsecond"}]}]}
-    assert yt2html.json3_to_srt(data) == (
-        b"1\n00:00:00,000 --> 00:00:04,000\nHello and welcome\n\n"
-        b"2\n01:02:03,456 --> 01:02:05,000\nfirst\nsecond\n")
-    assert yt2html.json3_to_srt({}) == b""
-
-
-def test_caption_key():
-    tt = "https://www.youtube.com/api/timedtext?v=V&expire=1&sig=a&lang=en&kind=asr&fmt=srt"
-    assert yt2html.caption_key(tt) == ("V", "en", "asr", "", "")
-    assert yt2html.caption_key(tt + "&tlang=pl&name=x") == ("V", "en", "asr", "x", "pl")
-    assert yt2html.caption_key("https://example.com/c?fmt=vtt") == "https://example.com/c?fmt=json3"
-
-
 def test_json3_captions():
     cues = yt2html.parse_json3_captions(ORIGINAL_CAPTIONS)
     assert cues == [{"start": 0.0, "text": "Hello and welcome"},
@@ -206,28 +187,6 @@ class TestFetching:
         assert out.count("Waiting 80 s (YouTube refuses translations requested too soon)") == 2
         yt2html.fetch_transcript(fake_ydl(), english_info(), ["pl", "de"], not_before=180.0)
         assert "Waiting" not in capsys.readouterr().out      # downloaded already: no wait
-
-    def test_subtitle_files_share_the_download(self, fake_ydl, monkeypatch):
-        # the transcript's translation, then sub:pl from another fetch (other signature):
-        # one request; a refusal is not asked again either
-        ydl = fake_ydl(fail_translations=1)
-        transcript = yt2html.fetch_transcript(ydl, english_info(), ["pl", "de"])
-        asked = []
-
-        def fetch_subtitles(url, args):
-            asked.append(url)
-            return json.dumps(translated_captions("pl")).encode()
-
-        monkeypatch.setattr(yt2html, "fetch_subtitles", fetch_subtitles)
-        other = "https://www.youtube.com/api/timedtext?v=X&expire=2&lang=en"   # any format
-        srt = yt2html.download_srt(other + "&tlang=de", None)
-        assert srt.decode().startswith("1\n00:00:00,000 --> 00:00:00,000\nde: hello\n\n2\n")
-        with pytest.raises(FakeHTTPError, match="429"):
-            yt2html.download_srt(other + "&tlang=pl", None)
-        assert asked == [] and "pl" in transcript["missing"]
-        yt2html.caption_cache.clear()        # the next run asks again
-        assert b"pl: hello" in yt2html.download_srt(other + "&tlang=pl", None)
-        assert len(asked) == 1 and "fmt=json3" in asked[0]
 
     def test_wait_is_random_within_the_range(self, monkeypatch):
         monkeypatch.setattr(yt2html.random, "uniform", lambda a, b: (a, b))
@@ -305,10 +264,10 @@ class TestSpec:
 
     @pytest.mark.parametrize("value, message", [
         # anything unknown, "none" too (without the option there is no transcript)
-        ("none", "'none' is not a parameter (use plain, timed, dual:CODE or ovr, a version "
-                 "with :CODE for a language)"),
-        ("https://www.youtube.com/watch?v=x", "is not a parameter (use plain, timed, dual:CODE "
-                                              "or ovr, a version with :CODE for a language); "
+        ("none", "'none' is not a parameter (use plain, timed, dual:CODE, srt or ovr, a "
+                 "version with :CODE for a language)"),
+        ("https://www.youtube.com/watch?v=x", "is not a parameter (use plain, timed, dual:CODE, "
+                                              "srt or ovr, a version with :CODE for a language); "
                                               "the video's address goes before --transcript"),
         ("dual:jp", "'dual:jp': 'jp' is not a language code (e.g. pl, en, pt-BR)"),
         ("plain:jp", "'plain:jp': 'jp' is not a language code"),

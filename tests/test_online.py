@@ -122,18 +122,25 @@ def test_comments_turned_off(tmp_path):
     assert '<div class="note">Comments are turned off.</div>' in html
 
 
-def test_srt_made_from_json3_is_youtubes_srt():
-    # --video sub: makes the SRT file from the json3 track the transcript uses
-    # too (one request); it must say what YouTube's own SRT of the track says
+def test_srt_made_from_the_transcript_is_youtubes_srt():
+    # --transcript srt makes the SRT file from the transcript's lines (the json3
+    # track); it must have YouTube's own SRT's lines and times (a line break
+    # inside a line becomes a space)
     import json
+    import re
     import yt_dlp
     with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
         info = ydl.sanitize_info(ydl.extract_info(URL + "hz6-3-7GGyI", download=False))
         tracks = yt2html.subtitle_tracks(info)
         url = next(iter(tracks["author"].values() or tracks["auto-generated"].values()))
-        theirs = yt2html.read_url(ydl, yt2html.with_query(url, fmt="srt"))
-        ours = yt2html.json3_to_srt(json.loads(yt2html.read_url(ydl, url)))
-    assert ours.replace(b"\r\n", b"\n").strip() == theirs.replace(b"\r\n", b"\n").strip()
+        theirs = yt2html.read_url(ydl, yt2html.with_query(url, fmt="srt")).decode("utf-8")
+        ours = yt2html.cues_srt(yt2html.parse_json3_captions(
+            json.loads(yt2html.read_url(ydl, url)))).decode("utf-8")
+
+    def blocks(text):
+        return [re.sub(r"\s+", " ", block.strip()) for block in
+                text.replace("\r\n", "\n").strip().split("\n\n")]
+    assert blocks(ours) == blocks(theirs)
 
 
 def test_a_removed_video_fails_and_saves_nothing(tmp_path, capsys):

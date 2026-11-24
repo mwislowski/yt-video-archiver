@@ -286,3 +286,100 @@ def test_olang_with_saved_data(capsys, saved, youtube):
     code = yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                          "--olang", "pl", "--transcript"])
     assert code == 0 and "the page stays as it is" in capsys.readouterr().out
+
+
+# --transcript srt ------------------------------------------------------------------------------
+
+def test_srt_is_a_parameter_not_a_version():
+    assert yt2html.transcript_spec("srt") == [("plain", None), ("srt", None)]
+    assert yt2html.transcript_spec("timed:pl,SRT") == [("timed", "pl"), ("srt", None)]
+    args = yt2html.parse_args(["URL", "--transcript", "dual:pl,srt"])
+    assert args.transcript_srt and ("srt", None) in args.transcript
+    assert yt2html.resolve_versions(args.transcript, {"language": "en"})[0] == [("dual", "pl")]
+    assert yt2html.version_languages(args.transcript) == ["pl"]
+
+
+def test_cues_srt():
+    cues = [{"start": 1.0, "end": 2.5, "text": ">> Hello"}, {"start": 3.0, "text": "next"},
+            {"start": 4.25, "text": "last"}]
+    assert yt2html.cues_srt(cues).decode() == (
+        "1\n00:00:01,000 --> 00:00:02,500\n>> Hello\n\n"
+        "2\n00:00:03,000 --> 00:00:04,250\nnext\n\n"      # no end saved: to the next line
+        "3\n00:00:04,250 --> 00:00:09,250\nlast\n")       # the last: 5 s
+
+
+def test_json3_cues_keep_their_end():
+    data = {"events": [{"tStartMs": 1000, "dDurationMs": 1500, "segs": [{"utf8": "a"}]},
+                       {"tStartMs": 3000, "segs": [{"utf8": "b"}]}]}
+    assert yt2html.parse_json3_captions(data) == [{"start": 1.0, "end": 2.5, "text": "a"},
+                                                  {"start": 3.0, "text": "b"}]
+
+
+def test_srt_tracks(info):
+    transcript = info[yt2html.TRANSCRIPT_KEY]
+    transcript["translations"]["de"] = {"language": "de", "cues": transcript["cues"],
+                                        "own": {"file": "x.de.own.srt", "date": "2026-11-01"}}
+    tracks = yt2html.srt_tracks(info, [("plain", None), ("timed", None), ("dual", "pl"),
+                                       ("timed", "pl"), ("plain", "de"), ("timed", "fi")])
+    # the original once, YouTube's Polish once; one's own and what is not there: none
+    assert [(code, kind) for code, kind, _ in tracks] == [("en", "auto-generated"),
+                                                          ("pl", "translated")]
+    transcript["kind"] = "manual"
+    assert yt2html.srt_tracks(info, [("plain", "pl")])[0][:2] == ("pl", "translated")
+    assert yt2html.srt_tracks(info, [("plain", None)])[0][:2] == ("en", "author")
+    info[yt2html.TRANSCRIPT_KEY] = None
+    assert yt2html.srt_tracks(info, [("plain", None)]) == []
+
+
+def test_srt_files_written_only_when_they_change(tmp_path, info, capsys):
+    page_path = tmp_path / "Title [TESTVIDEO01].html"
+    spec = [("plain", None), ("dual", "pl")]
+    assert yt2html.write_srt_files(info, spec, page_path) == [".en.auto-generated.srt",
+                                                              ".pl.translated.srt"]
+    en = tmp_path / "Title [TESTVIDEO01].en.auto-generated.srt"
+    assert en.read_text("utf-8").startswith("1\n00:00:00,000 --> 00:00:06,000\nHello and welcome\n")
+    assert f"Saved subtitles: {en}" in capsys.readouterr().out
+    # the same again: left as it is, its date too
+    renamed = tmp_path / "01 My name [TESTVIDEO01].en.auto-generated.srt"
+    en.rename(renamed)
+    before = renamed.stat().st_mtime_ns
+    assert yt2html.write_srt_files(info, spec, page_path) == []
+    assert renamed.stat().st_mtime_ns == before and not en.exists()
+    # the transcript changed: written over, under the name it has
+    info[yt2html.TRANSCRIPT_KEY]["cues"][0]["text"] = "Changed"
+    assert yt2html.write_srt_files(info, spec, page_path) == [".en.auto-generated.srt"]
+    assert "Changed" in renamed.read_text("utf-8")
+
+
+def test_srt_with_the_page_from_saved_data(capsys, tmp_path, info):
+    # without YouTube: the SRT files come from the saved data
+    data = tmp_path / "Title [TESTVIDEO01].info.json"
+    data.write_text(json.dumps(info), encoding="utf-8")
+    assert yt2html.main([data.name, "-o", str(tmp_path), "--json", "load",
+                         "--transcript", "timed:pl,srt"]) == 0
+    names = sorted(p.name.split("]")[-1] for p in tmp_path.glob("*.srt"))
+    assert names == [".pl.translated.srt"]   # the versions asked for (not the hidden original)
+    html = next(tmp_path.glob("*.html")).read_text("utf-8")
+    assert row(html, "Transcript").endswith("; SRT files next to the page: pl (translated)")
+    assert yt2html.main([data.name, "-o", str(tmp_path), "--json", "load",
+                         "--transcript", "dual:pl,srt"]) == 0     # dual: the original too
+    assert len(list(tmp_path.glob("*.srt"))) == 2
+    assert re.search(r'<code class="command">.*--transcript timed:pl,srt</code>', html)
+
+
+def test_srt_and_a_page_that_is_there(capsys, saved, youtube):
+    # without saved data the page is skipped, and its SRT files with it (said so)
+    folder = saved.parent
+    assert yt2html.main(["TESTVIDEO01", "-o", str(folder), "--json", "write", "--transcript"]) == 0
+    capsys.readouterr()
+    assert yt2html.main(["TESTVIDEO01", "-o", str(folder), "--transcript", "srt"]) == 0
+    assert ("; SRT files are made with the page (--page ovr, or --json write with saved data)"
+            in capsys.readouterr().out)
+    assert not list(folder.glob("*.srt"))
+    # with saved data and nothing else missing: a missing SRT file is something missing
+    assert yt2html.main(["TESTVIDEO01", "-o", str(folder), "--json", "write",
+                         "--transcript", "srt"]) == 0
+    assert "Saved subtitles:" in capsys.readouterr().out and list(folder.glob("*.srt"))
+    assert yt2html.main(["TESTVIDEO01", "-o", str(folder), "--json", "write",
+                         "--transcript", "srt"]) == 0
+    assert "the page stays as it is" in capsys.readouterr().out
