@@ -1,5 +1,5 @@
 """A video no longer on YouTube (removed or private): refused on the first
-download, recorded by --refresh-json, shown on the page and in its metadata.
+download, recorded by --json refresh, shown on the page and in its metadata.
 
 The refusals are the real ones from 17.11.2026 (data/gone_playability.json);
 an age-restricted video without cookies, which is no refusal, is the real one
@@ -110,7 +110,7 @@ class ShellYDL(FakeYDL):
 
 def test_the_first_download_fails_and_writes_nothing(capsys, tmp_path, monkeypatch):
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", ShellYDL)
-    code, out = run(capsys, "fwjg1F_zdCk", "-o", str(tmp_path), "--write-json")
+    code, out = run(capsys, "fwjg1F_zdCk", "-o", str(tmp_path), "--json", "write")
     assert code == 1
     assert f"FAILED: fwjg1F_zdCk: {TERMINATED}" in out
     assert not list(tmp_path.iterdir())
@@ -130,7 +130,7 @@ def gone_on_refresh(monkeypatch, video_id="fwjg1F_zdCk"):
 def test_refresh_records_it_and_changes_nothing_else(capsys, saved, youtube, monkeypatch):
     before = json.loads(saved.read_text("utf-8"))
     gone_on_refresh(monkeypatch)
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json",
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh",
                     "--transcript", "bilingual:pl")
     assert code == 0, out
     assert f"No longer on YouTube: {TERMINATED} (recorded)" in out
@@ -151,7 +151,7 @@ def test_refresh_records_it_and_changes_nothing_else(capsys, saved, youtube, mon
     assert f'<meta name="yt2html:unavailable" content="{TODAY.isoformat()}T{time}">' in html
     assert "<title>" + yt2html.esc(before["title"]) in html
     # --no-snapshot: no tiles, so nothing there
-    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent), "--page", "snap:no")
+    run(capsys, "--json", "load", "TESTVIDEO01", "-o", str(saved.parent), "--page", "snap:no")
     assert '"label">Refreshed<' not in page(saved.parent).read_text("utf-8")
 
 
@@ -160,7 +160,7 @@ def test_another_refusal_on_refresh_fails_and_saves_nothing(capsys, saved, youtu
     before = saved.read_bytes()
     monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: (_ for _ in ()).throw(
         yt2html.VideoUnavailable("LOGIN_REQUIRED", "Sign in to confirm you’re not a bot")))
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     assert code == 1 and "FAILED: TESTVIDEO01: Sign in to confirm you’re not a bot" in out
     assert saved.read_bytes() == before
     assert not list(saved.parent.glob("*.html"))
@@ -172,7 +172,7 @@ def test_the_video_comes_back(capsys, saved, youtube, monkeypatch, refreshed):
     data[yt2html.UPDATES_KEY] = [{"date": "2026-12-03", "time": "14:05", "yt2html": "x",
                                   "added": [], "unavailable": True}]
     saved.write_text(json.dumps(data), encoding="utf-8")
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     assert code == 0, out
     data = json.loads(saved.read_text("utf-8"))
     assert yt2html.UNAVAILABLE_KEY not in data and data["view_count"] == 30_000_000
@@ -219,13 +219,13 @@ def test_a_refresh_keeps_the_thumbnail_youtube_no_longer_gives(capsys, saved, yo
     gone_on_refresh(monkeypatch)
     old = saved.parent / "Renamed by me [TESTVIDEO01].html"
     old.write_text(f'<main><img class="thumbnail" src="{THUMB}" alt=""></main>', "utf-8")
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     assert code == 0, out
     assert "Thumbnail could not be downloaded; kept from the existing page." in out
     assert f'<img class="thumbnail" src="{THUMB}" alt="">' in old.read_text("utf-8")
     # what YouTube gives now comes first
     monkeypatch.setattr(yt2html, "fetch_image", lambda url: "data:image/jpeg;base64,TkVX")
-    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent))
+    run(capsys, "--json", "load", "TESTVIDEO01", "-o", str(saved.parent))
     assert 'src="data:image/jpeg;base64,TkVX"' in old.read_text("utf-8")
 
 
@@ -233,7 +233,7 @@ def test_without_a_thumbnail_anywhere_the_placeholder(capsys, saved, youtube, mo
                                                       tmp_path):
     gone_on_refresh(monkeypatch)
     (saved.parent / "Old [TESTVIDEO01].html").write_text("<main>no image</main>", "utf-8")
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     assert code == 0 and "Thumbnail could not be downloaded." in out
     assert "Thumbnail not available" in page(saved.parent).read_text("utf-8")
     assert yt2html.images_of_page(None) == {}

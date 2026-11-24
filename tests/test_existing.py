@@ -158,9 +158,9 @@ def test_skip_also_after_fetching_when_url_has_no_id(capsys, tmp_path, fake_fetc
 
 
 def test_load_json_always_replaces(capsys, tmp_path, info_file):
-    page = tmp_path / "Renamed [TESTVIDEO01].html"
+    page = info_file.parent / "Renamed [TESTVIDEO01].html"
     page.write_text("old")
-    assert yt2html.main(["--load-json", str(info_file), "-o", str(tmp_path)]) == 0
+    assert yt2html.main(["--json", "load", str(info_file), "-o", str(info_file.parent)]) == 0
     assert page.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
 
 
@@ -215,7 +215,7 @@ def test_page_name_in_the_command():
 
 
 def test_page_name_is_not_changed_with_load_json():
-    args = yt2html.parse_args(["--load-json", "Title [TESTVIDEO01].html"])
+    args = yt2html.parse_args(["--json", "load", "Title [TESTVIDEO01].html"])
     assert args.sources == ["Title [TESTVIDEO01].html"]
 
 

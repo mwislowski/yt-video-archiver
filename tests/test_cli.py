@@ -1,4 +1,4 @@
-"""The command line: options, --version, --load-json and what gets saved."""
+"""The command line: options, --version, --json load and what gets saved."""
 
 import io
 import json
@@ -50,10 +50,9 @@ def test_invalid_transcript_option_is_rejected(capsys):
 
 
 def test_load_json_saves_in_current_folder(capsys, info_file, tmp_path, monkeypatch):
-    work = tmp_path / "videos"
-    work.mkdir()
+    work = info_file.parent
     monkeypatch.chdir(work)
-    code, out = run(capsys, "--load-json", str(info_file))
+    code, out = run(capsys, "--json", "load", info_file.name)
     assert code == 0
     pages = list(work.glob("*.html"))
     assert len(pages) == 1 and pages[0].name.endswith("[TESTVIDEO01].html")
@@ -66,11 +65,12 @@ def test_output_the_code_page_cannot_show(info, tmp_path, monkeypatch):
     # code page, which has no "｜" (yt-dlp's stand-in for "|" in file names); on
     # 22.11.2026 such a run stopped at "Saved page:" and never reached --video
     info["title"] = "War ｜｜ Ring"
-    data = tmp_path / "test.info.json"
+    (tmp_path / "pages").mkdir()
+    data = tmp_path / "pages" / "test.info.json"
     data.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     raw = io.BytesIO()
     monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252"))
-    code = yt2html.main(["--load-json", str(data), "-o", str(tmp_path / "pages")])
+    code = yt2html.main(["--json", "load", str(data), "-o", str(tmp_path / "pages")])
     sys.stdout.flush()
     out = raw.getvalue().decode("cp1252")
     assert code == 0 and "Saved page: " in out and "War ?? Ring" in out
@@ -84,26 +84,26 @@ def test_no_output_stream(monkeypatch):
 
 def test_output_folder_option(capsys, info_file, tmp_path):
     out_dir = tmp_path / "pages"
-    code, _ = run(capsys, "--load-json", str(info_file), "-o", str(out_dir))
+    code, _ = run(capsys, "--json", "load", str(info_file), "-o", str(out_dir))
     assert code == 0 and len(list(out_dir.glob("*.html"))) == 1
 
 
 def test_bilingual_without_saved_translation_saves_nothing(capsys, info_file, tmp_path):
     out_dir = tmp_path / "pages"
-    code, out = run(capsys, "--load-json", str(info_file), "-o", str(out_dir),
+    code, out = run(capsys, "--json", "load", str(info_file), "-o", str(out_dir),
                     "--transcript", "bilingual:de")
     assert code == 1
     assert "no transcript translation into 'de'" in out
-    assert not out_dir.exists() or not list(out_dir.glob("*"))
+    assert not list(out_dir.glob("*.html"))
 
 
 def test_no_transcript_without_the_option(capsys, info_file, tmp_path):
     # saved in the data, but not asked for: not on the page
     out_dir = tmp_path / "pages"
-    run(capsys, "--load-json", str(info_file), "-o", str(out_dir))
+    run(capsys, "--json", "load", str(info_file), "-o", str(out_dir))
     html = next(out_dir.glob("*.html")).read_text("utf-8")
     assert 'class="transcript' not in html and "<dt>Transcript</dt><dd>left out</dd>" in html
-    run(capsys, "--load-json", str(info_file), "-o", str(out_dir), "--transcript")
+    run(capsys, "--json", "load", str(info_file), "-o", str(out_dir), "--transcript")
     assert '<section class="transcript"' in next(out_dir.glob("*.html")).read_text("utf-8")
 
 
@@ -112,10 +112,11 @@ def test_bilingual_missing_at_download_is_a_note(capsys, info, tmp_path):
     info[yt2html.TRANSCRIPT_KEY]["missing"] = {"de": {
         "reason": "YouTube offers no translation of this transcript into 'de' (available: pl)",
         "refused": False, "date": "2026-11-05"}}
-    saved = tmp_path / "x.info.json"
-    saved.write_text(json.dumps(info), encoding="utf-8")
     out_dir = tmp_path / "pages"
-    code, _ = run(capsys, "--load-json", str(saved), "-o", str(out_dir),
+    out_dir.mkdir()
+    saved = out_dir / "x.info.json"
+    saved.write_text(json.dumps(info), encoding="utf-8")
+    code, _ = run(capsys, "--json", "load", str(saved), "-o", str(out_dir),
                   "--transcript", "bilingual:de,bilingual:pl")
     html = next(out_dir.glob("*.html")).read_text("utf-8")
     assert code == 0 and html.count('class="transcript bilingual"') == 1 and 'data-lang="de"' not in html
@@ -140,7 +141,7 @@ def test_bilingual_for_a_video_without_captions(capsys, info, tmp_path, monkeypa
 
 def test_bilingual_with_saved_translation(capsys, info_file, tmp_path):
     out_dir = tmp_path / "pages"
-    code, _ = run(capsys, "--load-json", str(info_file), "-o", str(out_dir),
+    code, _ = run(capsys, "--json", "load", str(info_file), "-o", str(out_dir),
                   "--transcript", "plain,bilingual:pl")
     html = next(out_dir.glob("*.html")).read_text(encoding="utf-8")
     assert code == 0 and "transcript bilingual" in html
@@ -149,20 +150,20 @@ def test_bilingual_with_saved_translation(capsys, info_file, tmp_path):
 def test_page_is_self_contained(capsys, info_file, tmp_path, monkeypatch):
     monkeypatch.setattr(yt2html, "fetch_image", lambda url: "data:image/png;base64,AAAA")
     out_dir = tmp_path / "pages"
-    run(capsys, "--load-json", str(info_file), "-o", str(out_dir))
+    run(capsys, "--json", "load", str(info_file), "-o", str(out_dir))
     html = next(out_dir.glob("*.html")).read_text(encoding="utf-8")
     assert html.count("<script") == 1 and "<script src" not in html  # only the built-in player
     assert 'src="http' not in html and "url(http" not in html  # no external images
 
 
 def test_failure_of_one_source_does_not_stop_others(capsys, info_file, tmp_path):
-    code, out = run(capsys, "--load-json", str(tmp_path / "missing.json"), str(info_file),
-                    "-o", str(tmp_path / "o"))
+    code, out = run(capsys, "--json", "load", str(info_file.parent / "missing.json"),
+                    str(info_file), "-o", str(info_file.parent))
     assert code == 1
     assert "FAILED" in out and "Done: 1 saved, 0 skipped (page exists), 1 failed." in out
 
 
-# --load-json sources: patterns, video ids and page names
+# --json load sources: patterns, video ids and page names
 
 def saved(folder, name="Title [TESTVIDEO01].info.json", info=None):
     folder.mkdir(parents=True, exist_ok=True)
@@ -175,24 +176,24 @@ def test_load_json_pattern_is_expanded_with_literal_brackets(capsys, tmp_path, m
     monkeypatch.chdir(tmp_path)
     saved(tmp_path / "data")
     saved(tmp_path / "data", "Other [TESTVIDEO02].info.json", {"id": "TESTVIDEO02", "title": "O"})
-    code, out = run(capsys, "--load-json", "data/*[TESTVIDEO01]*", "-o", "pages")
-    assert code == 0 and len(list((tmp_path / "pages").glob("*.html"))) == 1
-    code, out = run(capsys, "--load-json", "data/*.info.json", "-o", "pages2")
-    assert code == 0 and len(list((tmp_path / "pages2").glob("*.html"))) == 2
+    code, out = run(capsys, "--json", "load", "data/*[TESTVIDEO01]*", "-o", "data")
+    assert code == 0 and len(list((tmp_path / "data").glob("*.html"))) == 1
+    code, out = run(capsys, "--json", "load", "*.info.json", "-o", "data")   # in -o
+    assert code == 0 and len(list((tmp_path / "data").glob("*.html"))) == 2
 
 
 def test_load_json_pattern_without_matches(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    code, out = run(capsys, "--load-json", "data/*nothing*.info.json")
-    assert code == 1 and "FAILED: data/*nothing*.info.json: no file matches" in out
+    code, out = run(capsys, "--json", "load", "*nothing*.info.json")
+    assert code == 1 and "FAILED: *nothing*.info.json: no file matches" in out
 
 
 def test_load_json_by_video_id_or_name_in_the_output_folder(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     saved(tmp_path / "out")
     for source in ("TESTVIDEO01", "[TESTVIDEO01]", "Title [TESTVIDEO01].html",
-                   "Title [TESTVIDEO01].info.json", "elsewhere/Title [TESTVIDEO01]"):
-        code, out = run(capsys, "--load-json", source, "-o", "out")
+                   "Title [TESTVIDEO01].info.json", "out/Title [TESTVIDEO01]"):
+        code, out = run(capsys, "--json", "load", source, "-o", "out")
         assert code == 0, (source, out)
         assert f"Reading {Path('out') / 'Title [TESTVIDEO01].info.json'}" in out
     assert (tmp_path / "out" / "Title [TESTVIDEO01].html").exists()
@@ -200,19 +201,20 @@ def test_load_json_by_video_id_or_name_in_the_output_folder(capsys, tmp_path, mo
 
 def test_load_json_explains_what_was_looked_for(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    code, out = run(capsys, "--load-json", "TESTVIDEO09", "-o", "out")
+    code, out = run(capsys, "--json", "load", "TESTVIDEO09", "-o", "out")
     assert code == 1
     assert "no saved data for TESTVIDEO09 in out (looked for *[TESTVIDEO09]*.info.json)" in out
-    code, out = run(capsys, "--load-json", "missing.json")
+    code, out = run(capsys, "--json", "load", "missing.json")
     assert "FAILED: missing.json: no such file: missing.json" in out
 
 
-def test_an_existing_file_wins_over_the_lookup(capsys, tmp_path, monkeypatch):
+def test_an_id_is_looked_up_in_the_output_folder(capsys, tmp_path, monkeypatch):
+    # a file of that name in the current folder is not the output folder's: not read
     monkeypatch.chdir(tmp_path)
     saved(tmp_path, "TESTVIDEO01", {"id": "TESTVIDEO01", "title": "From the file"})
     saved(tmp_path / "out", "Lookup [TESTVIDEO01].info.json", {"id": "TESTVIDEO01", "title": "L"})
-    code, out = run(capsys, "--load-json", "TESTVIDEO01", "-o", "out")
-    assert code == 0 and "Reading TESTVIDEO01\n" in out
+    code, out = run(capsys, "--json", "load", "TESTVIDEO01", "-o", "out")
+    assert code == 0 and f"Reading {Path('out') / 'Lookup [TESTVIDEO01].info.json'}\n" in out
 
 
 
@@ -220,43 +222,40 @@ def test_load_json_finds_saved_data_with_the_id_anywhere(capsys, tmp_path, monke
     monkeypatch.chdir(tmp_path)
     saved(tmp_path / "out", "Title [TESTVIDEO01] (copy).INFO.JSON")
     for source in ("TESTVIDEO01", "My video [TESTVIDEO01].mp4", "Renamed [TESTVIDEO01] x.html"):
-        code, out = run(capsys, "--load-json", source, "-o", "out")
+        code, out = run(capsys, "--json", "load", source, "-o", "out")
         assert code == 0, (source, out)
 
 
 def test_load_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    code, out = run(capsys, "--load-json", "Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html")
+    code, out = run(capsys, "--json", "load", "Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html")
     assert code == 1 and "no such file: Kurs [PLeBgIYTbh-CzUlJnPXenyingrNSXQgFoa].html" in out
 
 
 
 @pytest.mark.parametrize("options, message", [
-    (["--load-json", "--write-json"], "--write-json and --load-json cannot be used together "
-     "(one JSON option at a time: --write-json saves with a download, --update-json adds what "
-     "is missing, --refresh-json also refreshes, --load-json only reads, --merge-json adds a "
-     "translation of your own)"),
-    (["--merge-json", "--load-json"], "--load-json and --merge-json cannot be used together"),
-    (["--merge-json", "--refresh-json"], "--refresh-json and --merge-json cannot be used together"),
-    (["--merge-json", "--video"], "--merge-json only merges SRT files into saved data (and "
-     "makes their pages with --transcript), so it cannot be used with --video"),
-    (["--merge-json", "--page", "ovr", "--index", "list.txt"], "so it cannot be used with "
-     "--page ovr, --index"),
-    (["--merge-json", "--index-only", "list.txt"], "so it cannot be used with --index-only"),
-    (["--merge-json", "--video-formats"], "--video-formats makes no page, so it cannot be "
-     "used with --merge-json"),
-    (["--refresh-json", "--update-json"], "--update-json and --refresh-json cannot be used together"),
-    (["--refresh-json", "--page", "ovr"], "--page ovr downloads everything again from YouTube "
-     "and --refresh-json uses the saved data; use one of them"),
-    (["--refresh-json", "--video-formats"], "cannot be used with --refresh-json"),
-    (["--update-json", "--write-json"], "--write-json and --update-json cannot be used together"),
-    (["--update-json", "--load-json"], "--update-json and --load-json cannot be used together"),
-    (["--update-json", "--page", "ovr"], "--page ovr downloads everything again from YouTube "
-     "and --update-json uses the saved data; use one of them"),
-    (["--load-json", "--page", "ovr"], "--page ovr downloads everything again from YouTube "
-     "and --load-json uses the saved data; use one of them"),
-    (["--update-json", "--video-formats"], "--video-formats makes no page, so it cannot be "
-     "used with --update-json"),
+    (["--json", "load", "--json", "write"], "--json is given more than once\n"),
+    (["--json"], "argument --json: expected one argument"),
+    (["--json", "update"], "'update' is not a parameter (use write, refresh, load or merge)"),
+    (["--json", "merge", "--video"], "--json merge only merges SRT files into the saved data "
+     "and makes no page, so it cannot be used with --video"),
+    (["--json", "merge", "--page", "ovr", "--index", "list.txt"], "so it cannot be used with "
+     "--page, --index"),
+    (["--json", "merge", "--page", "theme:dark"], "so it cannot be used with --page"),
+    (["--json", "merge", "--transcript", "plain,bilingual:pl"], "so it cannot be used with "
+     "--transcript; make the page then with: yt2html ID --json load --transcript "
+     "plain,bilingual:CODE"),
+    (["--json", "merge", "--index-only", "list.txt"], "so it cannot be used with --index-only"),
+    (["--json", "merge", "--video-formats"], "--video-formats makes no page, so it cannot be "
+     "used with --json merge"),
+    (["--json", "refresh", "--page", "ovr"], "--page ovr downloads everything again from YouTube "
+     "and --json refresh uses the saved data; use one of them"),
+    (["--json", "refresh", "--video-formats"], "cannot be used with --json refresh"),
+    (["--json", "load", "--page", "ovr"], "--page ovr downloads everything again from YouTube "
+     "and --json load uses the saved data; use one of them"),
+    (["--json", "write", "--video-formats"], "--video-formats makes no page, so it cannot be "
+     "used with --json write"),
+    (["--json", "load", "--video"], "--video needs YouTube, so it cannot be used with --json load"),
 ])
 def test_one_json_option_at_a_time(capsys, options, message):
     with pytest.raises(SystemExit):

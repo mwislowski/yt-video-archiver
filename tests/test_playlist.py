@@ -248,7 +248,7 @@ def test_a_saved_data_file_after_its_playlist_is_a_duplicate(tmp_path, capsys, y
     import json
     data = tmp_path / "Episode [TESTVIDEO01].info.json"
     data.write_text(json.dumps({**info, "id": "TESTVIDEO01"}), encoding="utf-8")
-    assert yt2html.main([PLAYLIST, str(data), "-o", str(tmp_path), "--update-json"]) == 0
+    assert yt2html.main([PLAYLIST, str(data), "-o", str(tmp_path), "--json", "write"]) == 0
     out = capsys.readouterr().out
     assert out.count(f"Reading {data}") == 1
     assert f"Ignored duplicate: {data} (already in a playlist above)" in out

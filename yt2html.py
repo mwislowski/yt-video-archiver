@@ -87,15 +87,15 @@ USER_AGENT = (
 YOUTUBE = "https://www.youtube.com"
 
 # --------------------------------------------------------------------------
-# Keys of yt2html's own data in the info dict (and in --write-json files),
+# Keys of yt2html's own data in the info dict (and in --json write files),
 # next to yt-dlp's fields
 # --------------------------------------------------------------------------
 
-# Date of fetching, stored so that --load-json keeps the original snapshot date.
+# Date of fetching, stored so that --json load keeps the original snapshot date.
 ARCHIVED_KEY = "yt2html_archived"
 
 # Key under which the timestamp lists are stored in the info dict (and in a
-# --write-json file). Not a yt-dlp field.
+# --json write file). Not a yt-dlp field.
 MARKERS_KEY = "yt2html_marker_lists"
 
 # Key for extra description elements (e.g. the AI-generated video summary).
@@ -131,8 +131,8 @@ ORIGINAL_AUDIO_KEY = "yt2html_original_audio_language"
 # The transcript: {language, name, kind, cues: [{start, text}], translations:
 # {lang: {language, name, cues, own?}}, missing: {lang: {reason, refused, date}}}
 # (missing: the translations left out; refused ones are asked for again by
-# --update-json; own: {file, date} for a translation of one's own that
-# --merge-json took from an SRT file, the others are YouTube's); None if the
+# --json write; own: {file, date} for a translation of one's own that
+# --json merge took from an SRT file, the others are YouTube's); None if the
 # video has none, absent without --transcript. All versions on the page are
 # built from the same cues.
 TRANSCRIPT_KEY = "yt2html_transcript"
@@ -166,21 +166,21 @@ PLAYLIST_KEY = "yt2html_playlist"
 # Why the transcript is missing when TRANSCRIPT_KEY is None.
 TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
 
-# What each run of --update-json and --refresh-json did to the saved data:
+# What each run of --json write and --json refresh did to the saved data:
 # [{date, time, yt2html, added: [text] ("translation pl", "subtitles pl
-# (translated)"), refreshed: true for --refresh-json, comments: {new, gone,
+# (translated)"), refreshed: true for --json refresh, comments: {new, gone,
 # back} when the comments were refreshed, unavailable: true for a
-# --refresh-json that found the video no longer on YouTube}]; the copy's date
+# --json refresh that found the video no longer on YouTube}]; the copy's date
 # stays. The page names only the runs (Downloaded row); the rest is for the data.
 UPDATES_KEY = "yt2html_updates"
 
-# --refresh-json found the video no longer on YouTube (removed or private):
+# --json refresh found the video no longer on YouTube (removed or private):
 # {status, reason} as YouTube gives them (the reason as yt-dlp shows it). The
 # state now, without history (the runs are in UPDATES_KEY); removed when a
-# later --refresh-json finds the video again.
+# later --json refresh finds the video again.
 UNAVAILABLE_KEY = "yt2html_unavailable"
 
-# In a saved comment (--refresh-json): the day it was first not on YouTube,
+# In a saved comment (--json refresh): the day it was first not on YouTube,
 # the times it was missing and came back ([{from, until}]), its earlier
 # texts ([{text, until}]) and, for one a refresh added, the day it came.
 MISSING_SINCE_KEY = "yt2html_missing_since"
@@ -188,16 +188,16 @@ MISSING_HISTORY_KEY = "yt2html_missing"
 EDITS_KEY = "yt2html_edits"
 FIRST_SEEN_KEY = "yt2html_first_seen"
 
-# --refresh-json: the times the comments were turned off on YouTube (or no
+# --json refresh: the times the comments were turned off on YouTube (or no
 # longer shown) after they had been saved: [{from, until?, turned_off}]; the
 # last entry without "until" means they are off now (a note on the page).
 COMMENTS_CLOSED_KEY = "yt2html_comments_closed"
 
-# --refresh-json: the earlier title and description ([{until, title} or
+# --json refresh: the earlier title and description ([{until, title} or
 # {until, description}]); the page shows the current ones, without a note.
 PREVIOUS_KEY = "yt2html_previous"
 
-# What --refresh-json takes anew besides the comments: the counts.
+# What --json refresh takes anew besides the comments: the counts.
 REFRESHED_KEYS = ("view_count", "like_count", "channel_follower_count", YT_COUNT_KEY)
 
 # The watch page: "read", "partial" (without the player data) or "failed".
@@ -296,7 +296,7 @@ class VideoUnavailable(Exception):
     @property
     def gone(self) -> bool:
         """Removed (YouTube's status ERROR, except "try again later") or
-        private: --refresh-json records it. Any other refusal ("not a bot",
+        private: --json refresh records it. Any other refusal ("not a bot",
         sign in to confirm the age, try again later) may not last."""
         if self.status == "ERROR":
             return "try again later" not in self.reason.lower()
@@ -1374,7 +1374,7 @@ def translations_of(transcript: dict) -> dict[str, dict]:
 
 
 def own_shown(transcript: dict | None, spec: list | None) -> list[tuple[str, str]]:
-    """[(language, day added)] of the translations of one's own (--merge-json)
+    """[(language, day added)] of the translations of one's own (--json merge)
     that the page shows: those of its bilingual versions."""
     translations = translations_of(transcript or {})
     return [(language, translations[language]["own"].get("date") or "")
@@ -1434,7 +1434,7 @@ def add_translations(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: s
                      targets: list[str], not_before: float = 0.0) -> None:
     """Translations of the transcript (its track at `url`) into `targets`,
     added to it; what does not come is kept in "missing" with the reason,
-    whether YouTube refused it (asked for again by --update-json) and the day."""
+    whether YouTube refused it (asked for again by --json write) and the day."""
     translations = transcript.setdefault("translations", {})
     for target in targets:
         try:
@@ -1446,7 +1446,7 @@ def add_translations(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: s
             log(f"No translation into '{target}': {reason}.")
             if refused:
                 log("  The page is made without it and counts as finished; to add the "
-                    "translation later: --update-json (keeps the comments) or --page ovr."
+                    "translation later: --json write (keeps the comments) or --page ovr."
                     + TRANSLATION_HINT)
             transcript.setdefault("missing", {})[target] = {
                 "reason": str(reason), "refused": refused, "date": dt.date.today().isoformat()}
@@ -1763,7 +1763,7 @@ def chronological(items: list[dict]) -> list[dict]:
 def build_comment_tree(comments: list[dict]) -> tuple[list[dict], dict[str, list[dict]]]:
     """Return (top-level comments oldest first, the pinned one first, as on
     YouTube; {parent_id: replies oldest first}). A pinned comment YouTube no
-    longer sends (MISSING_SINCE_KEY, after --refresh-json) stays in its place
+    longer sends (MISSING_SINCE_KEY, after --json refresh) stays in its place
     in time, its mark a trace of the past (the user, 20.11.2026)."""
     ids = {c.get("id") for c in comments}
     roots, children = [], defaultdict(list)
@@ -2479,7 +2479,7 @@ METADATA_VERSION = "2"
 
 
 def run_moment(update: dict) -> str:
-    """When a run of --update-json / --refresh-json was: YYYY-MM-DDTHH:MM."""
+    """When a run of --json write / --json refresh was: YYYY-MM-DDTHH:MM."""
     return f"{update['date']}T{update['time']}"
 
 
@@ -3440,17 +3440,17 @@ def closed_note(closed: dict) -> str:
 
 
 def gone_comments(comments: list[dict]) -> int:
-    """How many saved comments --refresh-json no longer found on YouTube."""
+    """How many saved comments --json refresh no longer found on YouTube."""
     return sum(1 for c in comments if c.get(MISSING_SINCE_KEY))
 
 
 def unavailable_checks(info: dict) -> list[dict]:
-    """The runs of --refresh-json that found the video no longer on YouTube."""
+    """The runs of --json refresh that found the video no longer on YouTube."""
     return [u for u in info.get(UPDATES_KEY) or [] if u.get("unavailable")]
 
 
 def refreshed_tile(info: dict, archived: dt.date) -> str:
-    """The Refreshed tile: the day of the last --refresh-json, if not the copy's
+    """The Refreshed tile: the day of the last --json refresh, if not the copy's
     day; for a video no longer on YouTube the day of the last check, in the
     warning colour, always."""
     if info.get(UNAVAILABLE_KEY):
@@ -3462,7 +3462,7 @@ def refreshed_tile(info: dict, archived: dt.date) -> str:
 
 
 def last_refresh(info: dict, comments: bool = False) -> dt.date | None:
-    """The day of the last --refresh-json (that refreshed the comments)."""
+    """The day of the last --json refresh (that refreshed the comments)."""
     days = [u["date"] for u in info.get(UPDATES_KEY) or []
             if u.get("refreshed") and (not comments or "comments" in u)]
     return dt.date.fromisoformat(days[-1]) if days else None
@@ -4571,7 +4571,7 @@ def id_in_name(text: str, playlists: bool = True) -> str | None:
 
 def source_video_id(source: str) -> str | None:
     """The video id of a source: from its address, or for a saved data file
-    (--update-json, --refresh-json) from the id in its name."""
+    (--json write, --json refresh) from the id in its name."""
     if source.lower().endswith(".json"):
         return id_in_name(source, playlists=False)
     return video_id_from_url(source)
@@ -4763,11 +4763,11 @@ def narrow_saved_comments(info: dict, args: argparse.Namespace, note: bool = Tru
         info["comment_count"] = limit  # cut by the limit, not by Ctrl+C any more
     elif note and comment_status(info) in ("limited", "interrupted"):
         log(f"  The saved data has only {plural(len(comments), 'comment')}; "
-            f"--refresh-json --page comments:all adds the rest.")
+            f"--json refresh --page comments:all adds the rest.")
 
 
 def update_data_path(source: str, output_dir: Path) -> Path | None:
-    """The saved data an --update-json source adds to: a saved data file
+    """The saved data a --json write source adds to: a saved data file
     given as it is, else the ".info.json" file with the video's id in square
     brackets in the output folder; None when there is none. Raises ValueError
     for a file name that leads nowhere."""
@@ -4814,10 +4814,10 @@ def missing_for_update(info: dict, args: argparse.Namespace) -> tuple[bool, list
 def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                       targets: list[str], fresh: dict | None = None,
                       started: float | None = None) -> list[str]:
-    """--update-json: the transcript (`whole`) or only its translations into
+    """--json write: the transcript (`whole`) or only its translations into
     `targets`, from fresh player data (no comments, no watch page: caption
     addresses expire, and the saved data know the track and the languages);
-    --refresh-json passes the `fresh` data it fetched at `started`.
+    --json refresh passes the `fresh` data it fetched at `started`.
     Returns what was added, for UPDATES_KEY."""
     opts = {"skip_download": True, "noplaylist": True, "ignore_no_formats_error": True,
             "noprogress": True, "quiet": True, "format": NO_MERGE_FORMAT}
@@ -4859,7 +4859,7 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
 
 def note_update(info: dict, record: dict, added: list[str] = (), refreshed: bool = False,
                 comments: dict | None = None, unavailable: bool = False) -> None:
-    """Record what this run of --update-json or --refresh-json did in its own
+    """Record what this run of --json write or --json refresh did in its own
     entry of UPDATES_KEY (`record`, empty until something happens): what was
     added, whether the data were refreshed, what changed in the comments,
     whether the video was found no longer on YouTube."""
@@ -4881,7 +4881,7 @@ def note_update(info: dict, record: dict, added: list[str] = (), refreshed: bool
 
 def merge_comments(saved: list[dict], fresh: list[dict], complete: bool,
                    today: str) -> tuple[list[dict], dict]:
-    """--refresh-json: the saved comments with the fresh ones, by id. A fresh
+    """--json refresh: the saved comments with the fresh ones, by id. A fresh
     comment replaces its saved self (the old text kept in EDITS_KEY when it
     changed; one missing before comes back, noted in MISSING_HISTORY_KEY),
     a new one is added with the day it came (FIRST_SEEN_KEY), and a saved
@@ -4932,7 +4932,7 @@ def merge_comments(saved: list[dict], fresh: list[dict], complete: bool,
 
 
 def refresh_saved(info: dict, fresh: dict) -> dict | None:
-    """--refresh-json: the counts from fresh data; the title and description
+    """--json refresh: the counts from fresh data; the title and description
     (the earlier ones kept in PREVIOUS_KEY) and the timestamp lists made from
     them; and the comments merged (merge_comments()). Comments not downloaded
     now (--page comments:no) leave the saved ones; comments turned off on YouTube
@@ -4991,7 +4991,7 @@ def video_added(result: dict, previous: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# --merge-json: a translation of one's own (an SRT file) into the saved data
+# --json merge: a translation of one's own (an SRT file) into the saved data
 # --------------------------------------------------------------------------
 
 # "Title [ID].pl.own.srt": "own" sets it apart from the kinds of YouTube's
@@ -5038,10 +5038,10 @@ def check_own_cues(cues: list[dict], transcript: dict) -> None:
 
 def merge_own_translation(source: str, args: argparse.Namespace,
                           outcome: dict | None = None) -> Path | None:
-    """--merge-json: a translation of one's own, "Title [ID].CODE.own.srt",
+    """--json merge: a translation of one's own, "Title [ID].CODE.own.srt",
     into the saved data next to it (the ".info.json" file with the same id),
-    as the transcript's translation into CODE; then, with --transcript, the
-    page from the data as with --load-json. Nothing is asked of YouTube. A
+    as the transcript's translation into CODE; no page is made (--json load
+    then shows it). Nothing is asked of YouTube. A
     translation of one's own replaces an earlier one; one from YouTube in the
     same language is never replaced. Raises ValueError, with nothing saved,
     when the file does not fit the data."""
@@ -5069,7 +5069,7 @@ def merge_own_translation(source: str, args: argparse.Namespace,
     transcript = info.get(TRANSCRIPT_KEY)
     if not transcript:
         raise ValueError("the saved data have no transcript to translate (download it "
-                         "with --update-json --transcript first)")
+                         "with --json write --transcript first)")
     if base_language(language) == base_language(transcript.get("language")):
         raise ValueError(f"'{language}' is the language of the transcript itself "
                          f"({transcript_note(transcript)})")
@@ -5093,14 +5093,10 @@ def merge_own_translation(source: str, args: argparse.Namespace,
     write_atomically(data_path, json.dumps(info, ensure_ascii=False, indent=1))
     log(f"Updated metadata: {data_path} (own translation into '{language}', "
         f"{plural(len(cues), 'line')})")
-    if not args.transcript:
-        log(f"  The page is unchanged; to show the translation: yt2html --load-json "
-            f"\"{data_path}\" --transcript plain,bilingual:{language}")
-        return data_path
-    if language not in bilingual_languages(args.transcript):
-        log(f"  The page does not show it: --transcript has no bilingual:{language}.")
-    return archive(str(data_path), argparse.Namespace(**{**vars(args), "merge_json": False,
-                                                         "load_json": True}), None, outcome)
+    folder = "" if args.output_dir == DEFAULT_OUTPUT_DIR else f' -o "{args.output_dir}"'
+    log(f"  The page is unchanged; to show the translation: yt2html \"{data_path.name}\"{folder} "
+        f"--json load --transcript plain,bilingual:{language}")
+    return data_path
 
 
 PLAYLIST_ERROR = "this URL leads to a playlist or channel, not a single video"
@@ -5113,14 +5109,14 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     """Make the page for one URL (or one .info.json file).
 
     Returns the page's path, or None if the video already has a page in the
-    output folder and --page ovr was not given (with --load-json the page is
-    always made again; with --update-json and --refresh-json too when there
+    output folder and --page ovr was not given (with --json load the page is
+    always made again; with --json write and --json refresh too when there
     are saved data, which get what the options need and they lack, and are
     saved back). Everything that can fail for a reason the user should know
     (playlist URL, missing translation) is checked before anything is
     written. `outcome` (for --video) gets the page's path ("target"), and for
     a page made now also its data ("info") and "rebuild": a function that
-    saves the data (with --write-json) and the page again from it, with the
+    saves the data (with --json write) and the page again from it, with the
     images already downloaded.
     """
     if getattr(args, "merge_json", False):
@@ -5151,11 +5147,11 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         if adding:
             found = existing_page(output_dir, video_id_from_url(source))
             if found:
-                log(f"Skipped (page exists, no saved data to update): {found}. Use "
-                    "--page ovr --write-json to download everything again.")
+                log(f"Skipped (page exists, no saved data to add to): {found}. Use "
+                    "--page ovr --json write to download everything again with the data.")
                 outcome["target"] = found
                 return None
-            log(f"No saved data for {source}: downloading everything (as with --write-json).")
+            log(f"No saved data for {source}: downloading everything.")
             write_json = True
         log(f"Fetching {source}")
         info = fetch_info(source, args)
@@ -5194,8 +5190,9 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         if whole or targets:
             note_update(info, record, update_transcript(info, args, whole, targets, fresh,
                                                         started))
-        elif args.video is None and not args.refresh_json:
-            log("Nothing to add from YouTube; the page is made from the saved data.")
+    # --json write with nothing missing in the data: a page that is there stays
+    # as it is (with --video, unless files are added: then it is made again)
+    idle = updating and not args.refresh_json and not (whole or targets)
 
     saved = info.get(TRANSCRIPT_KEY) or {}
     known = set(translations_of(saved)) | set(saved.get("missing") or {})
@@ -5212,23 +5209,34 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         log(f"Skipped (page exists): {found}")
         outcome["target"] = found
         return None
+    deferred = bool(idle and found)
+    if deferred and args.video is None:
+        log(f"Nothing missing in the saved data; the page stays as it is: {found} "
+            "(--json load makes it again from the data)")
+        outcome["target"] = found
+        return None
     output_dir.mkdir(parents=True, exist_ok=True)
     target = found or output_path(info, output_dir)
     if args.video is not None:
-        # what the saved data said about the files next to the page (the data
-        # read now, else the file there, read before --write-json replaces
-        # it): --video keeps what still holds
-        outcome["previous"] = ((info.get(VIDEO_KEY) or {}) if data_path else previous_video(
-            file_with_id(output_dir, info.get("id"), (".info.json",), "saved data files")))
+        # what the saved data read now say about the files next to the page:
+        # --video keeps what still holds (without --json, or with --page ovr,
+        # saved data are not read: the files are only found next to the page)
+        outcome["previous"] = (info.get(VIDEO_KEY) or {}) if data_path else {}
+    # --page ovr --json write: the fresh data replace the saved ones, in their file
+    replaced = (file_with_id(output_dir, info.get("id"), (".info.json",), "saved data files")
+                if write_json and args.overwrite else None)
 
     def save_json(verb: str = "Saved") -> None:
         if write_json or updating:
-            # --update-json: back into the file it read, whatever its name
-            json_path = data_path if updating else target.with_suffix(".info.json")
+            # adding to saved data: back into the file read, whatever its name
+            json_path = data_path if updating else replaced or target.with_suffix(".info.json")
             write_atomically(json_path, json.dumps(info, ensure_ascii=False, indent=1))
             log(f"{verb} metadata: {json_path}")
 
-    save_json("Updated" if updating else "Saved")
+    if replaced:
+        log(replaced_data_note(replaced, info))
+    if not deferred:
+        save_json("Updated" if updating else "Saved")
 
     def shown(note: bool = False) -> dict:
         """What the page shows: from saved data, the comments narrowed by
@@ -5242,21 +5250,29 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
             view.pop(CARDS_KEY, None)
         return view
 
-    log("Downloading thumbnail and cover...")
-    thumbnail = fetch_thumbnail(info)
-    cover = fetch_image(cover_url(info))
-    kept = images_of_page(found)   # if YouTube no longer gives them
-    if not thumbnail:
-        thumbnail = kept.get("thumbnail")
-        log("  Thumbnail could not be downloaded" +
-            ("; kept from the existing page." if thumbnail else "."))
-    if not cover:
-        cover = kept.get("cover")
-        log("  Cover could not be downloaded" +
-            ("; kept from the existing page." if cover else "."))
-    avatar_uris = fetch_images(avatar_urls(shown(note=True), comments=not args.no_avatars),
-                               "avatars", resize=resize_avatar_url)
-    extra_images = fetch_images(extra_image_urls(shown()), "images (people, podcast, cards)")
+    images = {}
+
+    def fetch_page_images() -> None:
+        """The images the page embeds, once (not at all for a page left as it is)."""
+        if images:
+            return
+        log("Downloading thumbnail and cover...")
+        thumbnail = fetch_thumbnail(info)
+        cover = fetch_image(cover_url(info))
+        kept = images_of_page(found)   # if YouTube no longer gives them
+        if not thumbnail:
+            thumbnail = kept.get("thumbnail")
+            log("  Thumbnail could not be downloaded" +
+                ("; kept from the existing page." if thumbnail else "."))
+        if not cover:
+            cover = kept.get("cover")
+            log("  Cover could not be downloaded" +
+                ("; kept from the existing page." if cover else "."))
+        images.update(
+            thumbnail=thumbnail, cover=cover,
+            avatars=fetch_images(avatar_urls(shown(note=True), comments=not args.no_avatars),
+                                 "avatars", resize=resize_avatar_url),
+            extra=fetch_images(extra_image_urls(shown()), "images (people, podcast, cards)"))
 
     try:
         archived = dt.date.fromisoformat(info.get(ARCHIVED_KEY) or "")
@@ -5264,14 +5280,16 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         archived = dt.date.today()  # older JSON files without the date
 
     def write_page() -> None:
+        fetch_page_images()
         video_files = video_files_for(info, output_dir)
         video_size = (output_dir / video_files[0]).stat().st_size if video_files else None
         audio_files = audio_files_for(info, output_dir)
-        page = render_page(shown(), thumbnail, avatar_uris, archived, cover=cover,
+        page = render_page(shown(), images["thumbnail"], images["avatars"], archived,
+                           cover=images["cover"],
                            show_snapshot=not args.no_snapshot,
                            theme=args.theme,
                            transcript_spec=args.transcript,
-                           extra_images=extra_images,
+                           extra_images=images["extra"],
                            no_avatars=args.no_avatars, from_json=bool(data_path),
                            video_files=video_files, video_size=video_size,
                            audio_files=audio_files)
@@ -5282,6 +5300,12 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         write_page()
         log(f"Updated page: {target}")
 
+    if deferred:
+        # --video may add files; the page and the data follow only then
+        log(f"Nothing missing in the saved data; the page stays as it is unless --video "
+            f"adds files: {found}")
+        outcome.update(target=target, deferred=info, rebuild=rebuild, updating=True)
+        return None
     write_page()
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
@@ -5292,7 +5316,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     if (not data_path or args.refresh_json) and comments_interrupted(info):
         log("  Comments were interrupted (Ctrl+C): the page has those fetched so far "
             "and counts as finished; " + (
-                "use --refresh-json again for this video to get the rest (--page ovr "
+                "use --json refresh again for this video to get the rest (--page ovr "
                 "would replace the saved comments)." if data_path else
                 "use --page ovr for this video to fetch them again."))
         raise CommentsInterrupted
@@ -5363,13 +5387,37 @@ def download_srt(url: str, args: argparse.Namespace, not_before: float = 0.0) ->
     return json3_to_srt(caption_data(url, lambda u: fetch_subtitles(u, args), not_before))
 
 
-def previous_video(path: Path | None) -> dict:
-    """What saved data (an .info.json file) say about the files --video took
-    (VIDEO_KEY), or {} when there is no such file or it cannot be read."""
+def replaced_data_note(path: Path, fresh: dict) -> str:
+    """--page ovr --json write: the saved data at `path` are replaced by fresh
+    ones; what only they had is lost and named, so nothing goes unnoticed:
+    translations of one's own, comments YouTube no longer has, YouTube's
+    translations the fresh data lack, the record of downloaded files."""
     try:
-        return json.loads(path.read_text(encoding="utf-8")).get(VIDEO_KEY) or {} if path else {}
-    except (OSError, ValueError, AttributeError):
-        return {}
+        old = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"Replacing saved data that could not be read: {path}"
+    lost = []
+    transcript = old.get(TRANSCRIPT_KEY) or {}
+    fresh_languages = set(translations_of(fresh.get(TRANSCRIPT_KEY) or {}))
+    own = sorted(code for code, entry in translations_of(transcript).items() if entry.get("own"))
+    if own:
+        lost.append(f"own translation{'s' if len(own) > 1 else ''} {', '.join(own)}")
+    gone = sum(1 for c in old.get("comments") or [] if c.get(MISSING_SINCE_KEY))
+    if gone:
+        lost.append(f"{plural(gone, 'comment')} no longer on YouTube")
+    youtube = sorted(code for code, entry in translations_of(transcript).items()
+                     if not entry.get("own") and code not in fresh_languages)
+    if youtube:
+        lost.append(f"YouTube's translation{'s' if len(youtube) > 1 else ''} into "
+                    f"{', '.join(youtube)}")
+    if old.get(VIDEO_KEY):
+        lost.append("the record of the downloaded files")
+    try:
+        since = f" from {format_date(old.get(ARCHIVED_KEY))}" if old.get(ARCHIVED_KEY) else ""
+    except ValueError:
+        since = ""
+    return (f"Replacing the saved data{since}: {path}"
+            + (f" (lost: {'; '.join(lost)})" if lost else ""))
 
 
 def described(entry: dict, earlier: list, *same: str) -> dict:
@@ -5458,7 +5506,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     log("Video: fetching the current list of formats...")
     notes.add("requested")   # the next video waits a moment first
     not_before = time.monotonic() + translation_wait()   # for translated subtitles
-    # by the id: the source may be a saved data file (--update-json)
+    # by the id: the source may be a saved data file (--json write)
     fresh = fetch_formats(f"{YOUTUBE}/watch?v={ident}", args)
     # the page's data (made now) knows the transcript's track and YouTube's
     # translation languages; the fresh list has neither
@@ -5841,9 +5889,34 @@ class Once(argparse.Action):
     parameters go in one comma-separated value."""
     def __call__(self, parser, namespace, values, option_string=None):
         if getattr(namespace, self.dest) is not None:
-            parser.error(f"{option_string} is given more than once; put all its parameters "
-                         f"in one, comma-separated")
+            parser.error(f"{option_string} is given more than once"
+                         + ("; put all its parameters in one, comma-separated"
+                            if self.dest == "page" else ""))
         setattr(namespace, self.dest, values)
+
+
+JSON_PARAMETERS = ("write", "refresh", "load", "merge")
+
+
+def json_parameter(value: str) -> str:
+    """--json: one of JSON_PARAMETERS, any case."""
+    if value.strip().lower() not in JSON_PARAMETERS:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' is not a parameter (use write, refresh, load or merge); the "
+            f"video's address goes before --json")
+    return value.strip().lower()
+
+
+def apply_json_parameter(args: argparse.Namespace) -> None:
+    """What --json PARAMETER asks for, as the attributes the program reads:
+    write saves the data (write_json), adding to the saved ones where there
+    are any (update_json; else a download that saves them), or with --page
+    ovr a download that replaces them."""
+    mode = args.json
+    args.write_json = mode == "write"
+    args.update_json = mode == "write" and not args.overwrite
+    args.refresh_json, args.load_json, args.merge_json = (
+        mode == "refresh", mode == "load", mode == "merge")
 
 
 def apply_page_spec(args: argparse.Namespace) -> None:
@@ -6001,7 +6074,7 @@ def has_wildcards(text: str) -> bool:
 
 
 def expand_pattern(source: str) -> list[str]:
-    """--load-json paths with * or ?, expanded by the program (Windows shells
+    """--json load paths with * or ?, expanded by the program (Windows shells
     pass them on as they are), sorted. Square brackets stay literal, since
     every page name ends with "[VIDEO_ID]". A pattern without matches is kept;
     saved_data_path() reports it."""
@@ -6012,12 +6085,12 @@ def expand_pattern(source: str) -> list[str]:
 
 
 def saved_data_path(source: str, output_dir: Path) -> Path:
-    """The .info.json file for a --load-json source: an existing file; else a
+    """The .info.json file for a --json load source: an existing file; else a
     video id, or any file name with "[ID]" (a page, a video, saved data),
     looked up in the output folder as a ".info.json" file with "[ID]" in its
     name. Raises ValueError with what was looked for."""
     path = Path(source)
-    if path.is_file():
+    if path.is_file() and path.name.lower().endswith(".json"):   # (else a name with the id)
         return path
     if has_wildcards(source):
         raise ValueError(f"no file matches {source}")
@@ -6032,11 +6105,38 @@ def saved_data_path(source: str, output_dir: Path) -> Path:
 
 
 def update_source(source: str) -> str:
-    """An --update-json source: a saved data file stays a file (it may lie
+    """A --json write source: a saved data file stays a file (it may lie
     outside the output folder), any other name with an id becomes its URL."""
     if source.lower().endswith(".json") and Path(source).is_file():
         return source
     return source_from_page_name(source)
+
+
+def same_folder(a: Path, b: Path) -> bool:
+    """Whether two folders are the same one (relative or absolute, any case
+    on Windows, "." and ".." resolved)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:   # one of them does not exist (yet)
+        return (os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b)))
+
+
+def placed_source(source: str, output_dir: str) -> str:
+    """A source that names a file (not an address or an id) belongs to the
+    output folder: a bare name is taken there; a path elsewhere is an error,
+    so that a video's page, data and files never split between two folders.
+    Raises ValueError with the -o that would fit."""
+    if ("://" in source or video_id_from_url(source) or playlist_id_from_url(source)
+            or is_channel_url(source)):
+        return source
+    path = Path(source)
+    if path.parent == Path("."):
+        return source if output_dir == DEFAULT_OUTPUT_DIR else str(Path(output_dir) / source)
+    if not same_folder(path.parent, Path(output_dir)):
+        raise ValueError(f"{source} is not in the output folder ({output_dir}); the pages, "
+                         f"their data and files stay in one folder: add -o \"{path.parent}\" "
+                         "or give the name only")
+    return source
 
 
 def collect_sources(args: argparse.Namespace) -> list[str]:
@@ -6049,6 +6149,7 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
     files = args.load_json or args.merge_json   # file names as they are
     what = "file" if files else "URL"
     seen = set()
+    args.sources = [placed_source(source, args.output_dir) for source in args.sources]
     if files:
         args.sources = [path for source in args.sources for path in expand_pattern(source)]
     else:
@@ -6077,9 +6178,7 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
 # Options --index-only refuses: they download or shape the video pages,
 # and it only makes the index from what is in the folder.
 INDEX_ONLY_REFUSES = (("--video", "video"), ("--transcript", "transcript"),
-                      ("--write-json", "write_json"), ("--update-json", "update_json"),
-                      ("--refresh-json", "refresh_json"), ("--load-json", "load_json"),
-                      ("--page", "page"))
+                      ("--json", "json"), ("--page", "page"))
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -6093,13 +6192,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("sources", nargs="*", metavar="URL",
                         help="video or playlist URL(s) or id(s), or the name of a page "
                              "made by yt2html ('Title [ID].html'); a playlist archives all its "
-                             "videos. With --load-json: .info.json file(s), also as patterns "
+                             "videos. With --json load: .info.json file(s), also as patterns "
                              "with * or ?, or video id(s) or page names, looked up in the "
-                             "output folder (-o). With --merge-json: SRT files of your own "
+                             "output folder (-o). With --json merge: SRT files of your own "
                              "translations. Not with --index / --index-only (the videos "
                              "then come from the list file)")
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
-                        help="folder for the generated pages (default: the current folder)")
+                        help="folder for the generated pages, their saved data and files "
+                             "(default: the current folder); a file given by its name is "
+                             "taken there, one given with a path elsewhere is an error")
     parser.add_argument(
         "--page", nargs="?", const="", type=page_spec, default=None, action=Once,
         metavar="PARAMETERS",
@@ -6118,17 +6219,28 @@ def parse_args(argv=None) -> argparse.Namespace:
              "plain (continuous text), timestamps (one line per caption), bilingual:CODE "
              "(timestamps with YouTube's translation into that language in a second "
              "column, e.g. bilingual:pl; left out with a note if YouTube has "
-             "none or refuses it; or your own translation merged with --merge-json). "
+             "none or refuses it; or your own translation merged with --json merge). "
              "Write the address first: yt2html URL --transcript plain,bilingual:pl")
+    parser.add_argument(
+        "--json", type=json_parameter, default=None, action=Once, metavar="PARAMETER",
+        help="the saved data next to the page ('Title [ID].info.json': yt-dlp's data and what "
+             "yt2html adds), one parameter: write (save them with the page; for a video "
+             "whose page and data are there, add only what the options ask for and the data "
+             "lack: the transcript, translations YouTube refused before, --video files; "
+             "nothing missing leaves the page as it is; with --page ovr everything is "
+             "downloaded again and replaces them), refresh (as write, and also refresh what "
+             "changes: the counts, title and description, the comments merged with the saved "
+             "ones, those YouTube no longer has kept and marked; a video gone from YouTube is "
+             "recorded), load (make the pages only from saved data, without YouTube: .info.json "
+             "files, also as patterns with * or ?, or video ids and page names looked up in "
+             "-o) or merge (add a translation of your own: SRT files 'Title [ID].CODE.own.srt' "
+             "with the lines and times of the transcript, merged into the data with the same "
+             "id; makes no page: --json load then shows it)")
     parser.add_argument("--cookies-from-browser", "--cookies", dest="cookies_from_browser",
                         metavar="BROWSER", type=cookies_argument,
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in; a profile after a colon: "
                              "\"firefox:PROFILE_FOLDER\" (its folder name or path)")
-    parser.add_argument("--write-json", action="store_true",
-                        help="also save the data (yt-dlp's metadata and what yt2html adds) "
-                             "next to the page, as 'Title [ID].info.json', replacing an older "
-                             "file; --load-json builds pages from it later without YouTube")
     parser.add_argument("--index", metavar="FILE",
                         help="archive the videos of a list file (UTF-8 text: video and "
                              "playlist addresses or ids, page names, video files of your own; "
@@ -6138,8 +6250,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "named after the file ('series.txt' -> 'series.html'): built from "
                              "the pages and video files in the folder; playlists are read from "
                              "YouTube each time (the index keeps their lists for when YouTube "
-                             "cannot be reached). With --load-json, --update-json or "
-                             "--refresh-json: those, then the index")
+                             "cannot be reached). With --json load, --json write or "
+                             "--json refresh: those, then the index")
     parser.add_argument("--index-only", metavar="FILE",
                         help="only make the index page of a list file from what is in the "
                              "output folder, downloading nothing (playlists: only their lists "
@@ -6173,38 +6285,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="only list, for each video, the qualities a download can take "
                              "(with the parameter that chooses each, the codec and the size) "
                              "and the audio tracks it can add; no page is made")
-    parser.add_argument("--update-json", action="store_true",
-                        help="add to the saved data (.info.json next to the page, or the file "
-                             "given) what the options ask for and it lacks: the transcript, "
-                             "translations YouTube refused before, --video files; comments, "
-                             "counts and the copy's date stay; the data are saved back and the "
-                             "page made again. Without saved data: a full download, as with "
-                             "--write-json (a page that exists is skipped)")
-    parser.add_argument("--refresh-json", action="store_true",
-                        help="as --update-json, and also refresh what changes over time: the "
-                             "counts, the title and description, and the comments merged with "
-                             "the saved ones (new ones "
-                             "added, edited ones updated, those YouTube no longer has kept "
-                             "and marked 'not on YouTube on DD.MM.YYYY'); the copy's date stays; "
-                             "a video no longer on YouTube (removed or private) is recorded "
-                             "and its page made again from the saved data")
-    parser.add_argument("--load-json", action="store_true",
-                        help="build pages only from saved .info.json files (or video ids "
-                             "looked up in -o), without YouTube; existing pages are always "
-                             "replaced; a missing file fails that video, nothing is downloaded")
-    parser.add_argument("--merge-json", action="store_true",
-                        help="merge a translation of your own into the saved data: the "
-                             "files given are SRT files named 'Title [ID].CODE.own.srt' "
-                             "(also as patterns with * or ?), each made from the subtitles "
-                             "of the transcript (the same lines, the same times) and merged "
-                             "into the .info.json file with the same id next to it, as the "
-                             "transcript's translation into CODE (an earlier own one is "
-                             "replaced, YouTube's never); nothing is asked of YouTube. With "
-                             "--transcript, the page is then made from the data as with "
-                             "--load-json (bilingual:CODE shows the translation); without "
-                             "it, the page stays as it is")
     args = parser.parse_args(argv)
     apply_page_spec(args)
+    apply_json_parameter(args)
     # the options that only write a list file: (what they do, what may go with them)
     alone = {"reverse": ("only writes the list of an index page", ()),
              "reverse_details": ("only writes the list of an index page", ()),
@@ -6235,39 +6318,29 @@ def parse_args(argv=None) -> argparse.Namespace:
     if args.video_formats:
         used = [name for name, on in (
             ("--page", args.page is not None), ("--index", args.index is not None),
-            ("--index-only", args.index_only is not None), ("--write-json", args.write_json),
-            ("--update-json", args.update_json), ("--refresh-json", args.refresh_json),
-            ("--transcript", bool(args.transcript)), ("--merge-json", args.merge_json),
+            ("--index-only", args.index_only is not None),
+            (f"--json {args.json}", args.json not in (None, "load")),
+            ("--transcript", bool(args.transcript)),
             ("--video", args.video is not None)) if on]
         if used:
             parser.error(f"--video-formats makes no page, so it cannot be used with "
                          f"{', '.join(used)}")
-    json_options = [name for name, on in (("--write-json", args.write_json),
-                                          ("--update-json", args.update_json),
-                                          ("--refresh-json", args.refresh_json),
-                                          ("--load-json", args.load_json),
-                                          ("--merge-json", args.merge_json)) if on]
-    if len(json_options) > 1:
-        parser.error(f"{' and '.join(json_options)} cannot be used together (one JSON option "
-                     "at a time: --write-json saves with a download, --update-json adds what "
-                     "is missing, --refresh-json also refreshes, --load-json only reads, "
-                     "--merge-json adds a translation of your own)")
     if args.merge_json:
         used = [name for name, on in (("--video", args.video is not None),
-                                      ("--page ovr", args.overwrite),
+                                      ("--page", args.page is not None),
+                                      ("--transcript", bool(args.transcript)),
                                       ("--index", args.index is not None),
                                       ("--index-only", args.index_only is not None)) if on]
         if used:
-            parser.error(f"--merge-json only merges SRT files into saved data (and makes "
-                         f"their pages with --transcript), so it cannot be used with "
-                         f"{', '.join(used)}")
-    for name, on in (("--load-json", args.load_json), ("--update-json", args.update_json),
-                     ("--refresh-json", args.refresh_json)):
-        if on and args.overwrite:
-            parser.error(f"--page ovr downloads everything again from YouTube and {name} "
-                         "uses the saved data; use one of them")
+            parser.error(f"--json merge only merges SRT files into the saved data and makes "
+                         f"no page, so it cannot be used with {', '.join(used)}"
+                         + ("; make the page then with: yt2html ID --json load --transcript "
+                            "plain,bilingual:CODE" if args.transcript else ""))
+    if args.overwrite and args.json in ("load", "refresh"):
+        parser.error(f"--page ovr downloads everything again from YouTube and --json "
+                     f"{args.json} uses the saved data; use one of them")
     if args.video is not None and args.load_json:
-        parser.error("--video needs YouTube, so it cannot be used with --load-json; "
+        parser.error("--video needs YouTube, so it cannot be used with --json load; "
                      "give the URL instead")
     list_file = args.index if args.index is not None else args.index_only
     if args.index is not None and args.index_only is not None:
@@ -6292,8 +6365,8 @@ def parse_args(argv=None) -> argparse.Namespace:
             parser.error(str(error))
         return args
     if (args.load_json or args.merge_json) and args.cookies_from_browser:
-        log(f"Note: --cookies-from-browser has no effect with "
-            f"{'--load-json' if args.load_json else '--merge-json'} (nothing is downloaded).")
+        log(f"Note: --cookies-from-browser has no effect with --json {args.json} "
+            f"(nothing is downloaded).")
     try:
         args.sources = collect_sources(args)
     except ValueError as error:
@@ -6322,7 +6395,7 @@ def main(argv=None) -> int:
         yt2html_index.write_reverse(*args.reversed)
         return 0
     counts = {"saved": 0, "skipped": 0, "failed": 0}
-    without_data = []   # --load-json --index: videos of the list without saved data
+    without_data = []   # --json load --index: videos of the list without saved data
     videos = {"downloaded": 0, "skipped": 0, "failed": 0}
     notes = set()   # --video: notes told once, and whether YouTube was asked
     caption_cache.clear()   # caption tracks: once per run
@@ -6381,6 +6454,10 @@ def main(argv=None) -> int:
             return
         videos["failed" if result.pop("_failures", 0) else "downloaded" if new
                else "skipped"] += 1
+        if outcome.get("deferred") is not None:   # --json write, nothing missing in the data
+            if not new:
+                return   # nothing added: the page and the data stay as they are
+            outcome["info"] = outcome["deferred"]
         if outcome.get("rebuild"):   # a page made now describes the files, downloaded or found
             info = outcome["info"]
             if formats:

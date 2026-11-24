@@ -932,7 +932,7 @@ def test_the_index_theme_comes_from_the_list_and_the_pages_theme_from_page(tmp_p
 
 def test_videos_of_a_playlist_know_their_playlist(tmp_path, youtube):
     listing = write_list(tmp_path, f"{PLAYLIST_ID}\n")
-    yt2html.main(["--index", listing, "-o", str(tmp_path), "--write-json"])
+    yt2html.main(["--index", listing, "-o", str(tmp_path), "--json", "write"])
     saved = json.loads(next(tmp_path.glob("*TESTVIDEO02*.info.json")).read_text("utf-8"))
     assert saved[yt2html.PLAYLIST_KEY] == {"id": PLAYLIST_ID, "title": "Test playlist",
                                            "position": 2, "count": 2}
@@ -1008,7 +1008,7 @@ def test_an_index_that_cannot_be_written(tmp_path, youtube, capsys):
 def test_load_json_with_a_list(tmp_path, youtube, capsys, saved):
     folder = saved.parent
     listing = write_list(tmp_path, "TESTVIDEO01\nTESTVIDEO02\n")
-    assert yt2html.main(["--load-json", "--index", listing, "-o", str(folder)]) == 0
+    assert yt2html.main(["--json", "load", "--index", listing, "-o", str(folder)]) == 0
     out = capsys.readouterr().out
     assert youtube.fetched == [] and f"Reading {saved}" in out
     assert "No saved data for TESTVIDEO02; skipped." in out
@@ -1023,13 +1023,13 @@ def test_load_json_with_a_list(tmp_path, youtube, capsys, saved):
     (["--index", "a.txt", url(1)], f"--index takes the videos from the list file; add {url(1)} "
                                    "to the file instead of giving it in the command"),
     (["--index-only", "a.txt", PLAYLIST], "--index-only takes the videos from the list file"),
-    (["--index-only", "a.txt", "--page", "theme:dark", "--load-json"],
+    (["--index-only", "a.txt", "--page", "theme:dark", "--json", "load"],
      "--index-only downloads nothing and only makes the index, so it cannot be used with "
-     "--load-json, --page (use --index FILE for that)"),
+     "--json, --page (use --index FILE for that)"),
     (["--index-only", "a.txt", "--transcript"], "cannot be used with --transcript"),
     (["--index-only", "a.txt", "--page", "comments:0"], "cannot be used with --page"),
     (["--index-only", "a.txt", "--page", "theme:dark"], "cannot be used with --page"),
-    (["--index-only", "a.txt", "--refresh-json"], "cannot be used with --refresh-json"),
+    (["--index-only", "a.txt", "--json", "refresh"], "cannot be used with --json ("),
     (["--index"], "argument --index: expected one argument"),
 ])
 def test_index_option_errors(capsys, argv, message):
@@ -1042,7 +1042,7 @@ def test_index_option_errors(capsys, argv, message):
                                            yt2html.INDEX_ONLY_REFUSES])
 def test_every_refused_option(capsys, name, refused):
     value = {"page": ["--page", "comments:5"], "video": ["--video"],
-             "transcript": ["--transcript"]}.get(refused, [name])
+             "transcript": ["--transcript"], "json": ["--json", "load"]}.get(refused, [name])
     with pytest.raises(SystemExit):
         yt2html.parse_args(["--index-only", "a.txt", *value])
     assert f"cannot be used with {name} (" in capsys.readouterr().err
@@ -1059,8 +1059,8 @@ def test_a_bad_list_stops_before_anything_is_downloaded(tmp_path, youtube, capsy
 
 def test_index_works_with_the_json_options(tmp_path, youtube):
     listing = write_list(tmp_path, "TESTVIDEO01\n")
-    for option in ("--write-json", "--update-json", "--refresh-json", "--load-json"):
-        assert yt2html.parse_args(["--index", listing, option]).list.children
+    for parameter in ("write", "refresh", "load"):
+        assert yt2html.parse_args(["--index", listing, "--json", parameter]).list.children
 
 
 # --reverse (unofficial, the user's 20.11.2026: not in --help or the README) ----------

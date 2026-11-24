@@ -18,7 +18,7 @@ def test_top_level_oldest_first_with_the_pinned_one_first():
 
 
 def test_a_pinned_comment_youtube_no_longer_sends_keeps_its_place(info):
-    # after --refresh-json: the old pinned one gone, another one pinned now
+    # after --json refresh: the old pinned one gone, another one pinned now
     comments = make_comments()
     comments[0] = {**comments[0], yt2html.MISSING_SINCE_KEY: "2026-11-20"}
     comments[2] = {**comments[2], "is_pinned": True}               # N2

@@ -87,13 +87,14 @@ def test_the_old_options_are_gone(capsys, option):
 
 
 def test_ovr_and_the_saved_data_are_opposites(capsys):
-    for option in ("--load-json", "--update-json", "--refresh-json"):
+    for parameter in ("load", "refresh"):
         with pytest.raises(SystemExit):
-            yt2html.parse_args(["x.info.json", option, "--page", "ovr"])
-        assert (f"--page ovr downloads everything again from YouTube and {option} uses the "
-                "saved data; use one of them") in capsys.readouterr().err
-    # with --write-json the fresh data are saved: fine
-    assert yt2html.parse_args(["URL", "--write-json", "--page", "ovr"]).overwrite
+            yt2html.parse_args(["x.info.json", "--json", parameter, "--page", "ovr"])
+        assert (f"--page ovr downloads everything again from YouTube and --json {parameter} "
+                "uses the saved data; use one of them") in capsys.readouterr().err
+    # with --json write the fresh data replace the saved ones: fine
+    args = yt2html.parse_args(["URL", "--json", "write", "--page", "ovr"])
+    assert args.overwrite and args.write_json and not args.update_json
 
 
 # The download -----------------------------------------------------------------------
@@ -144,10 +145,11 @@ def many_comments(n):
 
 
 def build(capsys, tmp_path, info, *options):
-    saved = tmp_path / "x.info.json"
-    saved.write_text(json.dumps(info), encoding="utf-8")
     out_dir = tmp_path / f"p{len(list(tmp_path.glob('p*')))}"
-    assert yt2html.main(["--load-json", str(saved), "-o", str(out_dir), *options]) == 0
+    out_dir.mkdir()
+    saved = out_dir / "x.info.json"
+    saved.write_text(json.dumps(info), encoding="utf-8")
+    assert yt2html.main(["--json", "load", str(saved), "-o", str(out_dir), *options]) == 0
     capsys.readouterr()
     return next(out_dir.glob("*.html")).read_text("utf-8")
 
@@ -171,9 +173,9 @@ def test_refresh_says_when_the_default_limit_cut_the_comments(capsys, tmp_path, 
     monkeypatch.setattr(yt2html, "fetch_info", lambda source, args: json.loads(json.dumps(fresh)))
     note = ("Comments refreshed up to the default limit of 1,000; --page comments:all "
             "refreshes all of them.")
-    assert yt2html.main(["TESTVIDEO01", "-o", str(tmp_path), "--refresh-json"]) == 0
+    assert yt2html.main(["TESTVIDEO01", "-o", str(tmp_path), "--json", "refresh"]) == 0
     assert note in capsys.readouterr().out
     # a limit given on purpose: no advice
-    assert yt2html.main(["TESTVIDEO01", "-o", str(tmp_path), "--refresh-json",
+    assert yt2html.main(["TESTVIDEO01", "-o", str(tmp_path), "--json", "refresh",
                          "--page", "comments:1000"]) == 0
     assert note not in capsys.readouterr().out

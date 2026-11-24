@@ -337,8 +337,11 @@ def info() -> dict:
 
 @pytest.fixture
 def info_file(tmp_path, info):
-    """The info dict saved as an .info.json file, as --write-json writes it."""
-    path = tmp_path / "test.info.json"
+    """The info dict saved as an .info.json file, as --json write writes it,
+    in the folder "pages" the tests make the pages in (data and pages stay
+    in one folder)."""
+    (tmp_path / "pages").mkdir(exist_ok=True)
+    path = tmp_path / "pages" / "test.info.json"
     path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     return path
 
@@ -398,13 +401,13 @@ def cards_collection(*cues: tuple[int, str]) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Saved data and a faked YouTube for --update-json and --refresh-json
+# Saved data and a faked YouTube for --json write and --json refresh
 # (test_update.py, test_unavailable.py)
 # --------------------------------------------------------------------------
 
 @pytest.fixture
 def saved(tmp_path, info):
-    """Saved data in the output folder (as --write-json leaves them), with a
+    """Saved data in the output folder (as --json write leaves them), with a
     refused Polish translation and German that YouTube does not offer."""
     info[yt2html.CAPTION_KEY] = {"language": "en", "kind": "asr"}
     info[yt2html.TRANSLATIONS_KEY] = {"pl": "Polish", "fr": "French"}
@@ -459,7 +462,7 @@ def youtube(monkeypatch):
 
 @pytest.fixture
 def refreshed(saved, youtube, monkeypatch, info):
-    """Fresh data for --refresh-json: N2r2a deleted, a new comment, N1 edited,
+    """Fresh data for --json refresh: N2r2a deleted, a new comment, N1 edited,
     more views."""
     asked = []
 

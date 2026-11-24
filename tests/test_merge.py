@@ -1,4 +1,4 @@
-"""--merge-json: a translation of one's own (an SRT file) merged into the saved data."""
+"""--json merge: a translation of one's own (an SRT file) merged into the saved data."""
 
 import argparse
 import datetime as dt
@@ -59,7 +59,7 @@ def test_merge_adds_the_translation_and_leaves_the_page(capsys, tmp_path, saved)
                                                         "date": "2026-11-14"}}
     saved.write_text(json.dumps(before), encoding="utf-8")
     srt = own_srt(tmp_path, "de")
-    code, out = run(capsys, "--merge-json", str(srt), "-o", str(tmp_path))
+    code, out = run(capsys, "--json", "merge", str(srt), "-o", str(tmp_path))
     assert code == 0
     after = data(saved)
     transcript = after[yt2html.TRANSCRIPT_KEY]
@@ -74,18 +74,20 @@ def test_merge_adds_the_translation_and_leaves_the_page(capsys, tmp_path, saved)
     assert not list(tmp_path.glob("*.html"))
     assert f"Merging {srt.name} into {saved}" in out
     assert f"Updated metadata: {saved} (own translation into 'de', 3 lines)" in out
-    assert (f'The page is unchanged; to show the translation: yt2html --load-json "{saved}" '
-            "--transcript plain,bilingual:de") in out
-    # --update-json then asks YouTube for nothing in that language
+    assert (f'The page is unchanged; to show the translation: yt2html "{saved.name}" '
+            f'-o "{tmp_path}" --json load --transcript plain,bilingual:de') in out
+    # --json write then asks YouTube for nothing in that language
     args = argparse.Namespace(transcript=[("plain", None), ("bilingual", "de")])
     assert yt2html.missing_for_update(after, args) == (False, [])
 
 
-def test_merge_with_transcript_makes_the_page(capsys, tmp_path, saved):
+def test_the_page_then_from_the_data(capsys, tmp_path, saved):
+    # --json merge makes no page; --json load shows the translation
     srt = own_srt(tmp_path, "de")
-    code, out = run(capsys, "--merge-json", str(srt), "-o", str(tmp_path),
+    assert run(capsys, "--json", "merge", str(srt), "-o", str(tmp_path))[0] == 0
+    code, out = run(capsys, saved.name, "-o", str(tmp_path), "--json", "load",
                     "--transcript", "plain,bilingual:de")
-    assert code == 0 and "Saved page:" in out and "The page" not in out
+    assert code == 0 and "Saved page:" in out
     html = page(tmp_path)
     assert "German, own translation" in html and "auto-translated" not in html
     assert "<span class=\"text\">Zeilen</span>" in html
@@ -96,23 +98,19 @@ def test_merge_with_transcript_makes_the_page(capsys, tmp_path, saved):
     command = re.search(r'<code class="command">(.*?)</code>', html).group(1)
     assert command.endswith("--transcript")
     assert "bilingual" not in command
-
-
-def test_merge_with_a_transcript_that_does_not_show_it(capsys, tmp_path, saved):
-    code, out = run(capsys, "--merge-json", str(own_srt(tmp_path, "de")), "-o", str(tmp_path),
-                    "--transcript", "plain,bilingual:pl")
-    assert code == 0
-    assert "The page does not show it: --transcript has no bilingual:de." in out
+    # a page without bilingual:de does not show it
+    run(capsys, saved.name, "-o", str(tmp_path), "--json", "load",
+        "--transcript", "plain,bilingual:pl")
     html = page(tmp_path)
     assert "own translation" not in html and "Polish, auto-translated" in html
 
 
 def test_an_own_translation_replaces_an_earlier_own_one(capsys, tmp_path, saved):
-    run(capsys, "--merge-json", str(own_srt(tmp_path, "de")), "-o", str(tmp_path))
+    run(capsys, "--json", "merge", str(own_srt(tmp_path, "de")), "-o", str(tmp_path))
     earlier = data(saved)
     earlier[yt2html.TRANSCRIPT_KEY]["translations"]["de"]["own"]["date"] = "2026-11-01"
     saved.write_text(json.dumps(earlier), encoding="utf-8")
-    code, out = run(capsys, "--merge-json", str(own_srt(tmp_path, "de", ("A", "B", "C"))),
+    code, out = run(capsys, "--json", "merge", str(own_srt(tmp_path, "de", ("A", "B", "C"))),
                     "-o", str(tmp_path))
     assert code == 0
     assert "Replaces the own translation into 'de' added on 01.11.2026." in out
@@ -145,7 +143,7 @@ def test_an_own_translation_replaces_an_earlier_own_one(capsys, tmp_path, saved)
 ])
 def test_nothing_is_merged_when_the_file_does_not_fit(capsys, tmp_path, saved, make, message):
     before = saved.read_bytes()
-    code, out = run(capsys, "--merge-json", str(make(tmp_path)), "-o", str(tmp_path))
+    code, out = run(capsys, "--json", "merge", str(make(tmp_path)), "-o", str(tmp_path))
     assert code == 1 and message in out and "FAILED" in out
     assert saved.read_bytes() == before
 
@@ -154,7 +152,7 @@ def test_names_that_are_no_translation_of_ones_own(capsys, tmp_path, saved):
     for name in ("Title [TESTVIDEO01].de.srt", "Title [TESTVIDEO01].de.translated.srt",
                  "Title [TESTVIDEO01].own.srt"):
         (tmp_path / name).write_text("1\n00:00:00,000 --> 00:00:01,000\nx\n", encoding="utf-8")
-        code, out = run(capsys, "--merge-json", str(tmp_path / name))
+        code, out = run(capsys, "--json", "merge", str(tmp_path / name), "-o", str(tmp_path))
         assert code == 1 and (f"{name}: the name of a translation of your own ends with "
                               "'.CODE.own.srt', e.g. 'Title [ID].pl.own.srt'") in out
 
@@ -167,9 +165,10 @@ def test_data_without_a_transcript(capsys, tmp_path, saved):
         else:
             del info[yt2html.TRANSCRIPT_KEY]
         saved.write_text(json.dumps(info), encoding="utf-8")
-        code, out = run(capsys, "--merge-json", str(own_srt(tmp_path, "de")))
+        code, out = run(capsys, "--json", "merge", str(own_srt(tmp_path, "de")),
+                        "-o", str(tmp_path))
         assert code == 1 and ("the saved data have no transcript to translate (download it "
-                              "with --update-json --transcript first)") in out
+                              "with --json write --transcript first)") in out
 
 
 def test_srt_files_as_editors_write_them(tmp_path):
@@ -198,7 +197,7 @@ def test_a_pattern_merges_every_file(capsys, tmp_path, saved):
     own_srt(tmp_path, "de")
     own_srt(tmp_path, "FR")   # any case of letters; the code as YouTube writes it
     (tmp_path / "Title [TESTVIDEO01].FR.own.srt").rename(tmp_path / "Title [TESTVIDEO01].FR.OWN.SRT")
-    code, out = run(capsys, "--merge-json", str(tmp_path / "*.own.srt"),
+    code, out = run(capsys, "--json", "merge", str(tmp_path / "*.own.srt"),
                     str(tmp_path / "*.OWN.SRT"), "-o", str(tmp_path))
     assert code == 0 and "Done: 2 saved, 0 skipped (page exists), 0 failed." in out
     translations = data(saved)[yt2html.TRANSCRIPT_KEY]["translations"]
@@ -210,8 +209,8 @@ def test_a_pattern_merges_every_file(capsys, tmp_path, saved):
 
 
 def test_cookies_note(capsys, tmp_path):
-    yt2html.parse_args(["--merge-json", "x.de.own.srt", "--cookies", "firefox"])
-    assert ("Note: --cookies-from-browser has no effect with --merge-json (nothing is "
+    yt2html.parse_args(["--json", "merge", "x.de.own.srt", "--cookies", "firefox"])
+    assert ("Note: --cookies-from-browser has no effect with --json merge (nothing is "
             "downloaded).") in capsys.readouterr().out
 
 

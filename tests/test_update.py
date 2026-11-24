@@ -1,4 +1,4 @@
-"""--update-json: what the options ask for and the saved data lack, added to them."""
+"""--json write: what the options ask for and the saved data lack, added to them."""
 
 import datetime as dt
 import json
@@ -28,7 +28,7 @@ def row(html, name):
 
 def test_a_refused_translation_is_added(capsys, saved, youtube):
     before = json.loads(saved.read_text("utf-8"))
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                     "--transcript", "bilingual:pl,bilingual:de,bilingual:fr,bilingual:it")
     assert code == 0 and youtube["extracted"] == 1
     assert "Fetching the video's data (no comments) for what is missing..." in out
@@ -57,17 +57,19 @@ def test_a_refused_translation_is_added(capsys, saved, youtube):
     assert "Snapshot 05.11.2026" in html and 'class="transcript bilingual"' in html
     assert row(html, "Page built").endswith(f"from the saved data, with yt2html {yt2html.__version__}")
     # the same again: all there now, YouTube is not asked
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                     "--transcript", "bilingual:pl,bilingual:fr")
-    assert code == 0 and youtube["extracted"] == 1 and "Nothing to add from YouTube" in out
+    assert code == 0 and youtube["extracted"] == 1
+    assert ("Nothing missing in the saved data; the page stays as it is: " in out
+            and "(--json load makes it again from the data)" in out)
 
 
 def test_refused_again(capsys, saved, youtube):
     youtube["fail_translations"] = 1
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                     "--transcript", "bilingual:pl")
     assert code == 0                    # decision C: the page counts as finished
-    assert "to add the translation later: --update-json (keeps the comments)" in out
+    assert "to add the translation later: --json write (keeps the comments)" in out
     data = json.loads(saved.read_text("utf-8"))
     assert data[yt2html.TRANSCRIPT_KEY]["missing"]["pl"]["date"] == dt.date.today().isoformat()
     assert yt2html.UPDATES_KEY not in data                      # nothing added
@@ -78,19 +80,27 @@ def test_refused_again(capsys, saved, youtube):
 
 
 def test_nothing_missing_asks_youtube_nothing(capsys, saved, youtube):
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    # data without a page: the page from the data, YouTube not asked
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                     "--transcript", "timestamps")
     assert code == 0 and youtube["extracted"] == 0, out
-    assert "Nothing to add from YouTube; the page is made from the saved data." in out
-    assert page(saved.parent).exists()
+    assert page(saved.parent).exists() and "Saved page: " in out
     assert yt2html.UPDATES_KEY not in json.loads(saved.read_text("utf-8"))
+    # data and page: nothing missing, both stay as they are
+    data, html = saved.stat().st_mtime_ns, page(saved.parent).stat().st_mtime_ns
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                    "--transcript", "plain,timestamps", "--page", "theme:dark")
+    assert code == 0 and youtube["extracted"] == 0
+    assert "Nothing missing in the saved data; the page stays as it is: " in out
+    assert "Saved page" not in out and "Downloading thumbnail" not in out
+    assert (saved.stat().st_mtime_ns, page(saved.parent).stat().st_mtime_ns) == (data, html)
 
 
 def test_the_whole_transcript_when_the_data_have_none(capsys, saved, youtube):
     data = json.loads(saved.read_text("utf-8"))
     del data[yt2html.TRANSCRIPT_KEY]
     saved.write_text(json.dumps(data), encoding="utf-8")
-    code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                   "--transcript", "plain,bilingual:pl")
     data = json.loads(saved.read_text("utf-8"))
     assert code == 0 and data[yt2html.TRANSCRIPT_KEY]["cues"]
@@ -99,7 +109,7 @@ def test_the_whole_transcript_when_the_data_have_none(capsys, saved, youtube):
     data[yt2html.TRANSCRIPT_KEY] = None
     data[yt2html.TRANSCRIPT_MISSING_KEY] = "the video has no captions"
     saved.write_text(json.dumps(data), encoding="utf-8")
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                     "--transcript")
     assert code == 0 and youtube["extracted"] == 1
     assert "No transcript in the saved data (the video has no captions); not asked for again." in out
@@ -110,7 +120,7 @@ def test_a_video_without_captions_now(capsys, saved, youtube, monkeypatch):
     del data[yt2html.TRANSCRIPT_KEY]
     saved.write_text(json.dumps(data), encoding="utf-8")
     monkeypatch.setattr(yt2html, "choose_caption_track", lambda info: None)
-    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                "--transcript")[0] == 0
     data = json.loads(saved.read_text("utf-8"))
     assert data[yt2html.TRANSCRIPT_KEY] is None and yt2html.UPDATES_KEY not in data
@@ -120,7 +130,7 @@ def test_a_video_without_captions_now(capsys, saved, youtube, monkeypatch):
 def test_the_transcripts_track_gone(capsys, saved, youtube, monkeypatch):
     monkeypatch.setattr(yt2html, "choose_caption_track",
                         lambda info: ("manual", "en", caption_formats("English")))
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                     "--transcript", "bilingual:pl,bilingual:it")
     assert code == 0
     reason = "the transcript's captions (English) are not in YouTube's data now"
@@ -130,7 +140,7 @@ def test_the_transcripts_track_gone(capsys, saved, youtube, monkeypatch):
 
 
 def test_the_page_shows_fewer_comments_the_data_keep_all(capsys, saved, youtube):
-    code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                   "--transcript", "bilingual:pl", "--page", "comments:2")
     assert code == 0
     assert len(json.loads(saved.read_text("utf-8"))["comments"]) == 7
@@ -143,49 +153,73 @@ def test_interrupted_comments_in_the_data_do_not_stop_the_run(capsys, saved, you
     data = json.loads(saved.read_text("utf-8"))
     data["comment_count"] = None      # how yt-dlp leaves data after Ctrl+C
     saved.write_text(json.dumps(data), encoding="utf-8")
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                     "--transcript")
     assert code == 0 and "Ctrl+C" not in out      # the saved comments are what they are
 
 
-def test_a_file_given_elsewhere_is_updated_where_it_is(capsys, saved, youtube, tmp_path):
-    elsewhere = tmp_path / "data" / "Old name [TESTVIDEO01].info.json"
-    elsewhere.parent.mkdir()
-    saved.rename(elsewhere)
-    pages = tmp_path / "pages"
-    code, out = run(capsys, str(tmp_path / "data" / "*.info.json"), "-o", str(pages),
-                    "--update-json", "--transcript", "bilingual:pl")
-    assert code == 0 and f"Updated metadata: {elsewhere}" in out
-    assert "translation" in json.loads(elsewhere.read_text("utf-8"))[yt2html.UPDATES_KEY][0]["added"][0]
-    assert page(pages).exists() and not list(pages.glob("*.info.json"))
+def test_a_data_file_is_updated_under_its_name(capsys, saved, youtube, tmp_path):
+    renamed = saved.with_name("Old name [TESTVIDEO01].info.json")
+    saved.rename(renamed)
+    code, out = run(capsys, str(saved.parent / "*.info.json"), "-o", str(saved.parent),
+                    "--json", "write", "--transcript", "bilingual:pl")
+    assert code == 0 and f"Updated metadata: {renamed}" in out
+    assert "translation" in json.loads(renamed.read_text("utf-8"))[yt2html.UPDATES_KEY][0]["added"][0]
+    assert page(saved.parent).exists() and list(saved.parent.glob("*.info.json")) == [renamed]
     # a name that leads nowhere fails that source
-    code, out = run(capsys, str(tmp_path / "none.info.json"), "--update-json")
+    code, out = run(capsys, str(saved.parent / "none.info.json"), "-o", str(saved.parent),
+                    "--json", "write")
     assert code == 1 and "no such file: " in out
-    code, out = run(capsys, str(tmp_path / "*.nothing.json"), "--update-json")
+    code, out = run(capsys, str(saved.parent / "*.nothing.json"), "-o", str(saved.parent),
+                    "--json", "write")
     assert code == 1 and "no file matches " in out
+
+
+def test_files_outside_the_output_folder_are_an_error(capsys, saved, tmp_path):
+    """Data, page and files stay in one folder: a path elsewhere stops the run
+    before anything is read or written; a bare name is taken in the folder."""
+    elsewhere = tmp_path / "data"
+    elsewhere.mkdir()
+    for argv in ([str(elsewhere / "x [TESTVIDEO01].info.json"), "--json", "write"],
+                 [str(elsewhere / "*.info.json"), "--json", "load"],
+                 [str(elsewhere / "Title [TESTVIDEO01].html")],
+                 [str(elsewhere / "Title [TESTVIDEO01].pl.own.srt"), "--json", "merge"]):
+        with pytest.raises(SystemExit) as stop:
+            yt2html.parse_args([*argv, "-o", str(saved.parent)])
+        assert stop.value.code == 2
+        assert (f"is not in the output folder ({saved.parent}); the pages, their data and "
+                f'files stay in one folder: add -o "{elsewhere}" or give the name only'
+                in capsys.readouterr().err)
+    args = yt2html.parse_args([saved.name, "-o", str(saved.parent), "--json", "load"])
+    assert args.sources == [str(saved)]
+    # the same folder written another way is the same folder
+    args = yt2html.parse_args([str(saved.parent / "." / saved.name), "-o",
+                               str(saved.parent / "sub" / ".."), "--json", "load"])
+    assert args.sources == [str(saved.parent / "." / saved.name)]
 
 
 def test_without_saved_data(capsys, tmp_path, youtube, info, monkeypatch):
     out_dir = tmp_path / "out"
-    # no data, no page: everything downloaded and saved, as with --write-json
+    # no data, no page: everything downloaded and saved, as with --json write
     monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: json.loads(json.dumps(info)))
-    code, out = run(capsys, URL, "-o", str(out_dir), "--update-json")
+    code, out = run(capsys, URL, "-o", str(out_dir), "--json", "write")
     assert code == 0, out
-    assert f"No saved data for {URL}: downloading everything (as with --write-json)." in out
+    assert f"No saved data for {URL}: downloading everything." in out
     data = page(out_dir).with_suffix(".info.json")
     assert data.exists()
     # a page without data: skipped, nothing replaced (no --overwrite hidden in it)
     data.unlink()
     monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: pytest.fail("no download"))
-    code, out = run(capsys, URL, "-o", str(out_dir), "--update-json")
+    code, out = run(capsys, URL, "-o", str(out_dir), "--json", "write")
     assert code == 0
-    assert ("Skipped (page exists, no saved data to update): " in out
-            and "Use --page ovr --write-json to download everything again." in out)
+    assert ("Skipped (page exists, no saved data to add to): " in out
+            and "Use --page ovr --json write to download everything again with the data."
+            in out)
     # also when only the fetched data show the id (an address without it)
     monkeypatch.setattr(yt2html, "video_id_from_url", lambda url: None)
     monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: json.loads(json.dumps(info)))
     before = page(out_dir).stat().st_mtime_ns
-    code, out = run(capsys, "https://example.com/v", "-o", str(out_dir), "--update-json")
+    code, out = run(capsys, "https://example.com/v", "-o", str(out_dir), "--json", "write")
     assert code == 0 and "Skipped (page exists): " in out
     assert page(out_dir).stat().st_mtime_ns == before
 
@@ -194,7 +228,7 @@ def test_update_with_a_list_file(capsys, saved, youtube, tmp_path):
     # the saved data are found by the video's id in the output folder
     (tmp_path / "list.txt").write_text("TESTVIDEO01\n", encoding="utf-8")
     code, out = run(capsys, "--index", str(tmp_path / "list.txt"), "-o", str(saved.parent),
-                    "--update-json", "--transcript", "bilingual:pl")
+                    "--json", "write", "--transcript", "bilingual:pl")
     assert code == 0 and f"Reading {saved}" in out
     assert yt2html.UPDATES_KEY in json.loads(saved.read_text("utf-8"))
     assert (saved.parent / "list.html").is_file()
@@ -234,7 +268,7 @@ def test_update_helpers():
     assert yt2html.missing_text({"reason": "r", "refused": True, "date": "2026-11-20"}) == "r, 20.11.2026"
 
 
-# --refresh-json ----------------------------------------------------------------------
+# --json refresh ----------------------------------------------------------------------
 
 DAY = "2026-11-20"
 
@@ -311,7 +345,7 @@ def test_refresh_saved_counts_and_comments(info):
 
 
 def test_a_refresh_without_a_limit_completes_limited_comments(info):
-    """What the hint after a limited copy promises: --refresh-json without
+    """What the hint after a limited copy promises: --json refresh without
     --max-comments (fetch_info leaves LIMIT_KEY None) adds the rest."""
     info["comments"] = info["comments"][:3]
     info[yt2html.LIMIT_KEY] = 3
@@ -326,7 +360,7 @@ def test_a_refresh_without_a_limit_completes_limited_comments(info):
 
 
 def test_refresh(capsys, saved, youtube, refreshed):
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json",
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh",
                     "--transcript", "bilingual:pl")
     assert code == 0, out
     assert "Fetching TESTVIDEO01 (to refresh the saved data)" in out
@@ -359,13 +393,13 @@ def test_refresh(capsys, saved, youtube, refreshed):
             '<div class="label">Refreshed</div>') in html
     assert f'<div class="value">{yt2html.format_int(30_000_000)}</div>' in html
     # --no-snapshot: neither tile
-    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent), "--page", "snap:no")
+    run(capsys, "--json", "load", "TESTVIDEO01", "-o", str(saved.parent), "--page", "snap:no")
     html = page(saved.parent).read_text("utf-8")
     assert '"label">Snapshot<' not in html and '"label">Refreshed<' not in html
     # refreshed the day of the download: no second tile with the same date
     data[yt2html.ARCHIVED_KEY] = dt.date.today().isoformat()
     saved.write_text(json.dumps(data), encoding="utf-8")
-    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent))
+    run(capsys, "--json", "load", "TESTVIDEO01", "-o", str(saved.parent))
     html = page(saved.parent).read_text("utf-8")
     assert '"label">Snapshot<' in html and '"label">Refreshed<' not in html
 
@@ -374,7 +408,7 @@ def test_refresh_without_comments_now(capsys, saved, youtube, refreshed, monkeyp
     monkeypatch.setattr(yt2html, "fetch_info",
                         lambda s, a: {**json.loads(json.dumps(info)), "comments": None,
                                       "view_count": 5})
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     data = json.loads(saved.read_text("utf-8"))
     assert code == 0 and "Nothing to add" not in out
     assert len(data["comments"]) == 7 and data["view_count"] == 5
@@ -388,15 +422,15 @@ def test_refresh_without_comments_now(capsys, saved, youtube, refreshed, monkeyp
 def test_refresh_interrupted_stops_the_run(capsys, saved, youtube, monkeypatch, info):
     monkeypatch.setattr(yt2html, "fetch_info",
                         lambda s, a: {**json.loads(json.dumps(info)), "comment_count": None})
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     assert code == 130 and "Comments were interrupted (Ctrl+C)" in out
     assert page(saved.parent).exists()
 
 
 def test_refresh_without_saved_data(capsys, tmp_path, youtube, info, monkeypatch):
     monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: json.loads(json.dumps(info)))
-    code, out = run(capsys, URL, "-o", str(tmp_path), "--refresh-json")
-    assert code == 0 and "downloading everything (as with --write-json)" in out
+    code, out = run(capsys, URL, "-o", str(tmp_path), "--json", "refresh")
+    assert code == 0 and "downloading everything." in out
     assert page(tmp_path).with_suffix(".info.json").exists()
 
 
@@ -414,7 +448,7 @@ def test_comments_turned_off_after_the_download(capsys, saved, youtube, monkeypa
         return {**json.loads(json.dumps(info)), "comments": None,
                 yt2html.COMMENTS_MESSAGE_KEY: "Comments are turned off."}
     monkeypatch.setattr(yt2html, "fetch_info", turned_off)
-    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")[0] == 0
+    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")[0] == 0
     data = json.loads(saved.read_text("utf-8"))
     today = dt.date.today().isoformat()
     assert len(data["comments"]) == 7          # kept, none marked as gone
@@ -427,12 +461,12 @@ def test_comments_turned_off_after_the_download(capsys, saved, youtube, monkeypa
     # still off at the next refresh: the first day stays
     data[yt2html.COMMENTS_CLOSED_KEY][0]["from"] = "2026-11-20"
     saved.write_text(json.dumps(data), encoding="utf-8")
-    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     data = json.loads(saved.read_text("utf-8"))
     assert data[yt2html.COMMENTS_CLOSED_KEY] == [{"from": "2026-11-20", "turned_off": True}]
     # on again: the note goes, the data keep when they were off
     monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: json.loads(json.dumps(info)))
-    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     data = json.loads(saved.read_text("utf-8"))
     assert data[yt2html.COMMENTS_CLOSED_KEY] == [
         {"from": "2026-11-20", "turned_off": True, "until": today}]
@@ -440,7 +474,7 @@ def test_comments_turned_off_after_the_download(capsys, saved, youtube, monkeypa
     assert "can no longer be seen there" not in html and "as of" not in row(html, "Comments")
     # off once more: a new entry
     monkeypatch.setattr(yt2html, "fetch_info", turned_off)
-    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
+    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
     closed = json.loads(saved.read_text("utf-8"))[yt2html.COMMENTS_CLOSED_KEY]
     assert closed[-1] == {"from": today, "turned_off": True} and len(closed) == 2
 
@@ -479,11 +513,11 @@ def test_refresh_title_description_and_markers(info):
 
 def test_refresh_sources_as_for_update(capsys, saved, youtube, refreshed, tmp_path):
     code, out = run(capsys, str(saved.parent / "*.info.json"), "-o", str(saved.parent),
-                    "--refresh-json")
+                    "--json", "refresh")
     assert code == 0 and f"Reading {saved}" in out
     (tmp_path / "list.txt").write_text("Title [TESTVIDEO01].html\n", encoding="utf-8")
     code, out = run(capsys, "--index", str(tmp_path / "list.txt"), "-o", str(saved.parent),
-                    "--refresh-json")
+                    "--json", "refresh")
     assert code == 0 and f"Reading {saved}" in out
 
 
@@ -493,7 +527,7 @@ def test_saved_data_survive_an_interrupted_save(capsys, saved, youtube, monkeypa
     def interrupted(source, target):
         raise KeyboardInterrupt
     monkeypatch.setattr(yt2html.os, "replace", interrupted)
-    assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                          "--transcript", "bilingual:pl"]) == 130  # as after Ctrl+C
     assert saved.read_bytes() == before                       # the old data, whole
 
@@ -501,15 +535,15 @@ def test_saved_data_survive_an_interrupted_save(capsys, saved, youtube, monkeypa
 def test_refresh_interrupted_does_not_advise_overwrite(capsys, saved, youtube, monkeypatch, info):
     monkeypatch.setattr(yt2html, "fetch_info",
                         lambda s, a: {**json.loads(json.dumps(info)), "comment_count": None})
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
-    assert code == 130 and ("use --refresh-json again for this video to get the rest "
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
+    assert code == 130 and ("use --json refresh again for this video to get the rest "
                             "(--page ovr would replace the saved comments).") in out
 
 
 def test_the_same_video_twice_in_a_list_is_updated_once(capsys, saved, youtube, tmp_path):
     listing = tmp_path / "mine.txt"
     listing.write_text(f"Title [TESTVIDEO01].html\n{URL}\n", encoding="utf-8")
-    code, out = run(capsys, "--index", str(listing), "-o", str(saved.parent), "--update-json")
+    code, out = run(capsys, "--index", str(listing), "-o", str(saved.parent), "--json", "write")
     assert code == 0 and out.count(f"Reading {saved}") == 1
     index = (saved.parent / "mine.html").read_text("utf-8")
     assert index.count('<div class="row d0') == 2                 # but shown in both places
@@ -524,7 +558,7 @@ def test_a_failed_update_with_a_list_file(capsys, saved, youtube, tmp_path, monk
     saved.write_text(json.dumps(data), encoding="utf-8")
     listing = tmp_path / "mine.txt"
     listing.write_text("TESTVIDEO01\n", encoding="utf-8")
-    code, out = run(capsys, "--index", str(listing), "-o", str(saved.parent), "--update-json",
+    code, out = run(capsys, "--index", str(listing), "-o", str(saved.parent), "--json", "write",
                     "--transcript")
     index = (saved.parent / "mine.html").read_text("utf-8")
     # the reason is only in the console; the index shows what is in the folder
@@ -545,6 +579,6 @@ def test_the_whole_transcript_uses_the_saved_original(capsys, saved, youtube, mo
         seen.append((yt2html.transcript_language(info), info.get(yt2html.CAPTION_KEY)))
         return "auto", "en", caption_formats("English")
     monkeypatch.setattr(yt2html, "choose_caption_track", choose)
-    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
+    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                "--transcript")[0] == 0
     assert seen[0] == ("pl", {"language": "en", "kind": "asr"})

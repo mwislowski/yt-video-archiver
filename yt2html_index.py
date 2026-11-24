@@ -12,7 +12,7 @@ understood stops the run with its number.
 The index is always built from what lies in the output folder: pages
 (found by "[VIDEO_ID].html", read only up to their <title>: the yt2html:...
 metadata), video files (found by "[VIDEO_ID]" and a video extension) and
-the user's own files, so --index, --index-only and --load-json give the
+the user's own files, so --index, --index-only and --json load give the
 same index for the same folder. Only the videos of a playlist come from
 YouTube, read each time; the index keeps them (a JSON data block, not
 shown) for when YouTube cannot be reached.

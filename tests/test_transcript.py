@@ -185,7 +185,7 @@ class TestFetching:
         out = capsys.readouterr().out
         assert ("No translation into 'pl': YouTube refused to send it (HTTP 429 Too Many "
                 "Requests).\n[yt2html]   The page is made without it and counts as finished; "
-                "to add the translation later: --update-json (keeps the comments) or "
+                "to add the translation later: --json write (keeps the comments) or "
                 "--page ovr. YouTube refuses auto-translated captions to downloads at times (HTTP 429); try again "
                 "later.") in out
 
@@ -524,7 +524,7 @@ class TestOriginalUncertain:
         info.update(without_audio_tracks())
         data = tmp_path / "Title [TESTVIDEO01].info.json"
         data.write_text(json.dumps(info), encoding="utf-8")
-        assert yt2html.main([str(data), "--load-json", "-o", str(tmp_path), "--transcript"]) == 0
+        assert yt2html.main([str(data), "--json", "load", "-o", str(tmp_path), "--transcript"]) == 0
         warning = ("  Warning: the original language is uncertain: YouTube sent no audio tracks "
                    "to tell it from the dubs, so the transcript and the page's language are "
                    "taken as 'en' (the captions YouTube opens with). Make the page again later; "
@@ -535,16 +535,16 @@ class TestOriginalUncertain:
         del info[yt2html.TRANSCRIPT_KEY]
         info.pop(yt2html.CAPTION_KEY)
         data.write_text(json.dumps(info), encoding="utf-8")
-        assert yt2html.main([str(data), "--load-json", "-o", str(tmp_path)]) == 0
+        assert yt2html.main([str(data), "--json", "load", "-o", str(tmp_path)]) == 0
         out = capsys.readouterr().out
         assert "so the page's language is taken as 'en' (the captions" in out
         # nothing to know it by at all
         info["language"] = None
         data.write_text(json.dumps(info), encoding="utf-8")
-        yt2html.main([str(data), "--load-json", "-o", str(tmp_path)])
+        yt2html.main([str(data), "--json", "load", "-o", str(tmp_path)])
         assert "taken as 'unknown'" in capsys.readouterr().out
         # known: no warning
         info[yt2html.ORIGINAL_AUDIO_KEY] = "pl"
         data.write_text(json.dumps(info), encoding="utf-8")
-        yt2html.main([str(data), "--load-json", "-o", str(tmp_path)])
+        yt2html.main([str(data), "--json", "load", "-o", str(tmp_path)])
         assert "Warning" not in capsys.readouterr().out

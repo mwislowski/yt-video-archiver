@@ -118,7 +118,7 @@ def test_not_periods(given, message):
 
 @pytest.mark.parametrize("extra, named", [(["URL"], "a URL"), (["-o", "out"], "-o"),
                                           (["--index", "a.txt"], "--index"),
-                                          (["--write-json"], "--write-json")])
+                                          (["--json", "write"], "--json")])
 def test_it_takes_nothing_else_but_cookies(capsys, tmp_path, extra, named):
     with pytest.raises(SystemExit):
         yt2html.main(["--channel-list", "@x", str(tmp_path / "x.txt"), "2019", *extra])

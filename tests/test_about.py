@@ -95,7 +95,7 @@ def test_playlist_context_is_the_playlist_used(tmp_path, monkeypatch, info):
                                                                   "entries": entries})
     monkeypatch.setattr(yt2html, "fetch_info",
                         lambda source, args: {**info, "id": yt2html.video_id_from_url(source)})
-    assert yt2html.main([playlist, "-o", str(tmp_path), "--write-json"]) == 0
+    assert yt2html.main([playlist, "-o", str(tmp_path), "--json", "write"]) == 0
     saved = json.loads(next(tmp_path.glob("*TESTVIDEO02*.info.json")).read_text("utf-8"))
     assert saved[yt2html.PLAYLIST_KEY] == {"id": "PLtest1234567890", "title": "Test playlist",
                                            "position": 2, "count": 3}
@@ -214,15 +214,16 @@ def test_command_with_an_id_starting_with_a_dash_uses_the_address(info):
 def test_command_of_a_page_built_from_saved_data(capsys, tmp_path, info):
     info[yt2html.LIMIT_KEY] = 50
     info[yt2html.CARDS_KEY] = []
-    saved = tmp_path / "x.info.json"
+    (tmp_path / "p").mkdir()
+    saved = tmp_path / "p" / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
-    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "p"), "--transcript",
+    yt2html.main(["--json", "load", str(saved), "-o", str(tmp_path / "p"), "--transcript",
                   "timestamps", "--page", "theme:dark,cards:no"])
     html = next((tmp_path / "p").glob("*.html")).read_text("utf-8")
     assert command(html) == ("yt2html TESTVIDEO01 --page comments:50,cards:no,theme:dark "
                              "--transcript timestamps")
     assert row(html, "Page built").endswith(f"from the saved data, with yt2html {yt2html.__version__}")
-    assert "--load-json" not in html and str(tmp_path) not in html
+    assert "--json load" not in html and str(tmp_path) not in html
 
 
 @pytest.mark.parametrize("spec, expected", [
@@ -534,10 +535,11 @@ def test_no_option_names_outside_the_command(info, theme):
 # --------------------------------------------------------------------------
 
 def rebuild(capsys, tmp_path, info, *options):
-    saved = tmp_path / "x.info.json"
-    saved.write_text(json.dumps(info), encoding="utf-8")
     out_dir = tmp_path / f"p{len(list(tmp_path.glob('p*')))}"
-    code = yt2html.main(["--load-json", str(saved), "-o", str(out_dir), *options])
+    out_dir.mkdir()
+    saved = out_dir / "x.info.json"   # data and page in one folder
+    saved.write_text(json.dumps(info), encoding="utf-8")
+    code = yt2html.main(["--json", "load", str(saved), "-o", str(out_dir), *options])
     out = capsys.readouterr().out
     return code, out, next(out_dir.glob("*.html")).read_text("utf-8")
 
@@ -560,7 +562,7 @@ def test_a_cut_after_ctrl_c_counts_as_limited(capsys, tmp_path, info):
     assert row(html, "Comments").endswith("; limited to 5")
     code, out, html = rebuild(capsys, tmp_path, info, "--page", "comments:100")
     assert row(html, "Comments").endswith("; interrupted (Ctrl+C)")
-    assert ("The saved data has only 7 comments; --refresh-json --page comments:all adds "
+    assert ("The saved data has only 7 comments; --json refresh --page comments:all adds "
             "the rest.") in out
 
 
@@ -568,7 +570,7 @@ def test_a_larger_limit_cannot_widen_the_saved_data(capsys, tmp_path, info):
     info["comments"] = info["comments"][:5]
     info[yt2html.LIMIT_KEY] = 5
     _, out, html = rebuild(capsys, tmp_path, info, "--page", "comments:50")
-    assert ("The saved data has only 5 comments; --refresh-json --page comments:all adds "
+    assert ("The saved data has only 5 comments; --json refresh --page comments:all adds "
             "the rest.") in out
     assert row(html, "Comments").endswith("; limited to 5")
     assert "--page comments:5" in command(html)
@@ -587,7 +589,7 @@ def test_no_comments_leaves_out_the_saved_ones(capsys, tmp_path, info):
 
 def test_cookies_have_no_effect_when_building(capsys, tmp_path, info):
     _, out, _ = rebuild(capsys, tmp_path, info, "--cookies-from-browser", "firefox")
-    assert "Note: --cookies-from-browser has no effect with --load-json" in out
+    assert "Note: --cookies-from-browser has no effect with --json load" in out
 
 
 
@@ -1108,7 +1110,7 @@ def test_video_file_row_with_a_video_next_to_the_page(capsys, tmp_path, info):
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
     (tmp_path / "Renamed [TESTVIDEO01].mp4").write_bytes(b"x" * 2_500_000)
-    assert yt2html.main(["--load-json", str(saved), "-o", str(tmp_path)]) == 0
+    assert yt2html.main(["--json", "load", str(saved), "-o", str(tmp_path)]) == 0
     html = next(tmp_path.glob("*.html")).read_text("utf-8")
     assert row(html, "Video file").startswith(
         "next to the page: video Renamed [TESTVIDEO01].mp4, 2 MB; Deno at download:")
@@ -1205,13 +1207,13 @@ def test_video_formats_option_prints_and_makes_no_page(capsys, tmp_path, info):
     info["formats"] = video_formats_example()
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
-    code = yt2html.main(["--video-formats", "--load-json", str(saved), str(saved),
-                         "-o", str(tmp_path / "out")])
+    code = yt2html.main(["--video-formats", "--json", "load", str(saved), str(saved),
+                         "-o", str(tmp_path)])
     out = capsys.readouterr().out
-    assert code == 0 and not (tmp_path / "out").exists()
+    assert code == 0 and not list(tmp_path.glob("*.html"))
     assert out.count("  1080p, 50 fps  (1080p50)  h264  ~609 MB  (default)") == 1  # one source
-    code = yt2html.main(["--video-formats", "--load-json", str(saved), str(saved.with_name("y.json")),
-                         "-o", str(tmp_path / "out")])
+    code = yt2html.main(["--video-formats", "--json", "load", str(saved), str(saved.with_name("y.json")),
+                         "-o", str(tmp_path)])
     out = capsys.readouterr().out
     assert code == 1 and "subtitles: none\n\n[yt2html] FAILED: " in out   # a blank line between videos
     assert "Deno" not in out   # saved data: nothing fetched
@@ -1219,10 +1221,10 @@ def test_video_formats_option_prints_and_makes_no_page(capsys, tmp_path, info):
 
 def test_video_formats_option_excludes_page_options(capsys):
     with pytest.raises(SystemExit):
-        yt2html.main(["u", "--video-formats", "--page", "theme:dark,cards:no", "--write-json"])
-    assert ("--video-formats makes no page, so it cannot be used with --page, --write-json"
+        yt2html.main(["u", "--video-formats", "--page", "theme:dark,cards:no", "--json", "write"])
+    assert ("--video-formats makes no page, so it cannot be used with --page, --json write"
             in capsys.readouterr().err)
-    for option in (["--page", "ovr"], ["--index", "a.txt"], ["--index-only", "a.txt"], ["--write-json"],
+    for option in (["--page", "ovr"], ["--index", "a.txt"], ["--index-only", "a.txt"], ["--json", "write"],
                    ["--page"], ["--page", "comments:5"], ["--transcript", "timestamps"]):
         with pytest.raises(SystemExit):
             yt2html.parse_args(["u", "--video-formats", *option])

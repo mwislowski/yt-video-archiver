@@ -21,7 +21,7 @@ URL = "https://www.youtube.com/watch?v="
 
 def archive(tmp_path, video_id, *options):
     code = yt2html.main([URL + video_id, "-o", str(tmp_path), "--page", "comments:5,avatars:no",
-                         "--write-json", *options])
+                         "--json", "write", *options])
     assert code == 0, "yt2html failed; see its output above"
     page = next(tmp_path.glob(f"*[[]{video_id}[]].html"))
     data = next(tmp_path.glob(f"*[[]{video_id}[]].info.json"))
@@ -138,7 +138,7 @@ def test_srt_made_from_json3_is_youtubes_srt():
 
 def test_a_removed_video_fails_and_saves_nothing(tmp_path, capsys):
     # removed for the Terms of Service (seen 17.11.2026; tests/data/gone_playability.json)
-    code = yt2html.main(["r671hNQtok0", "-o", str(tmp_path), "--write-json"])
+    code = yt2html.main(["r671hNQtok0", "-o", str(tmp_path), "--json", "write"])
     out = capsys.readouterr().out
     assert code == 1
     assert ("FAILED: r671hNQtok0: This video has been removed for violating YouTube's "
