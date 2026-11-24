@@ -564,7 +564,7 @@ def test_channel_avatar_is_downloaded_small_also_with_no_avatars(capsys, info, t
     assert any("@newest" in url for url in requested)
     requested.clear()
     # --no-avatars leaves out the comment authors' avatars, not the channel's
-    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "b"), "--no-avatars"])
+    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "b"), "--page", "avatars:no"])
     avatars = [url for url in requested if "yt3.ggpht" in url]   # not the thumbnail
     assert avatars == [f"https://yt3.ggpht.test/owner=s{yt2html.AVATAR_SIZE}"]
     html = next((tmp_path / "b").glob("*.html")).read_text("utf-8")

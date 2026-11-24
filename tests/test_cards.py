@@ -141,7 +141,7 @@ def test_no_cards_option_hides_saved_cards(capsys, tmp_path, info, monkeypatch):
     yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "a")])
     assert any(info[yt2html.CARDS_KEY][0]["image"] in urls for urls in images)
     images.clear()
-    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "b"), "--no-cards"])
+    yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "b"), "--page", "cards:no"])
     assert not any(info[yt2html.CARDS_KEY][0]["image"] in urls for urls in images)  # not fetched
     assert 'id="info-cards"' in next((tmp_path / "a").glob("*.html")).read_text("utf-8")
     assert 'id="info-cards"' not in next((tmp_path / "b").glob("*.html")).read_text("utf-8")
@@ -160,7 +160,7 @@ def test_fetch_info_passes_no_cards(monkeypatch, info):
         def sanitize_info(self, i): return i
 
     monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", Fake)
-    yt2html.fetch_info("u", yt2html.parse_args(["u", "--no-cards"]))
+    yt2html.fetch_info("u", yt2html.parse_args(["u", "--page", "cards:no"]))
     assert seen == {"cards": False}
 
 

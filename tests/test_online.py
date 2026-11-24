@@ -20,8 +20,8 @@ URL = "https://www.youtube.com/watch?v="
 
 
 def archive(tmp_path, video_id, *options):
-    code = yt2html.main([URL + video_id, "-o", str(tmp_path), "--max-comments", "5",
-                         "--no-avatars", "--write-json", *options])
+    code = yt2html.main([URL + video_id, "-o", str(tmp_path), "--page", "comments:5,avatars:no",
+                         "--write-json", *options])
     assert code == 0, "yt2html failed; see its output above"
     page = next(tmp_path.glob(f"*[[]{video_id}[]].html"))
     data = next(tmp_path.glob(f"*[[]{video_id}[]].info.json"))

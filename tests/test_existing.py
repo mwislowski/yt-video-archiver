@@ -143,7 +143,7 @@ def test_new_video_is_saved(capsys, tmp_path, fake_fetch):
 def test_overwrite_replaces_the_existing_file_under_its_name(capsys, tmp_path, fake_fetch):
     page = tmp_path / "Renamed [TESTVIDEO01].html"
     page.write_text("old")
-    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite"]) == 0
+    assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr"]) == 0
     assert fake_fetch == [URL]
     assert page.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
     assert [p.name for p in tmp_path.iterdir()] == ["Renamed [TESTVIDEO01].html"]
@@ -222,6 +222,6 @@ def test_page_name_is_not_changed_with_load_json():
 def test_overwrite_a_page_given_by_its_name(capsys, tmp_path, fake_fetch):
     page = tmp_path / "Renamed [TESTVIDEO01].html"
     page.write_text("old")
-    assert yt2html.main([page.name, "-o", str(tmp_path), "--overwrite"]) == 0
+    assert yt2html.main([page.name, "-o", str(tmp_path), "--page", "ovr"]) == 0
     assert fake_fetch == ["https://www.youtube.com/watch?v=TESTVIDEO01"]
     assert page.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")

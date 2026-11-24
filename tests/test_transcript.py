@@ -186,7 +186,7 @@ class TestFetching:
         assert ("No translation into 'pl': YouTube refused to send it (HTTP 429 Too Many "
                 "Requests).\n[yt2html]   The page is made without it and counts as finished; "
                 "to add the translation later: --update-json (keeps the comments) or "
-                "--overwrite. YouTube refuses auto-translated captions to downloads at times (HTTP 429); try again "
+                "--page ovr. YouTube refuses auto-translated captions to downloads at times (HTTP 429); try again "
                 "later.") in out
 
     def test_other_failure_of_a_translation(self, fake_ydl):
@@ -246,7 +246,7 @@ class TestFetching:
         assert message in transcript["missing"][target]["reason"]
         assert transcript["missing"][target]["refused"] is False
         out = capsys.readouterr().out
-        assert f"No translation into '{target}': " in out and "--overwrite" not in out
+        assert f"No translation into '{target}': " in out and "--page ovr" not in out
 
     def test_no_transcript(self, fake_ydl):
         info = {}

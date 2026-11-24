@@ -915,6 +915,21 @@ def test_index_downloads_what_is_missing_and_makes_the_index(tmp_path, youtube, 
                               "row d1 2", "row d0 3", "row d0 4"]
 
 
+def test_the_index_theme_comes_from_the_list_and_the_pages_theme_from_page(tmp_path, youtube):
+    """!theme for the index, --page theme: for the video pages, apart."""
+    listing = write_list(tmp_path, "!theme: light\nhttps://youtu.be/TESTVIDEO01\n")
+    assert yt2html.main(["--index", listing, "-o", str(tmp_path), "--page", "theme:dark"]) == 0
+    index = (tmp_path / "series.html").read_text(encoding="utf-8")
+    video = next(p for p in tmp_path.glob("*TESTVIDEO01*.html")).read_text(encoding="utf-8")
+    assert '<meta name="color-scheme" content="light">' in index
+    assert '<meta name="color-scheme" content="dark">' in video
+    # without !theme: auto, whatever the pages have
+    listing = write_list(tmp_path, "https://youtu.be/TESTVIDEO01\n")
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path)]) == 0
+    assert ('<meta name="color-scheme" content="dark light">'
+            in (tmp_path / "series.html").read_text(encoding="utf-8"))
+
+
 def test_videos_of_a_playlist_know_their_playlist(tmp_path, youtube):
     listing = write_list(tmp_path, f"{PLAYLIST_ID}\n")
     yt2html.main(["--index", listing, "-o", str(tmp_path), "--write-json"])
@@ -967,12 +982,12 @@ def test_ctrl_c_while_reading_the_playlists(tmp_path, youtube, capsys, monkeypat
 
 def test_index_only_downloads_nothing(tmp_path, youtube, capsys):
     page(tmp_path, "TESTVIDEO01")
-    listing = write_list(tmp_path, "TESTVIDEO01\nTESTVIDEO02\n")
-    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path), "--theme", "light",
+    listing = write_list(tmp_path, "!theme: light\nTESTVIDEO01\nTESTVIDEO02\n")
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path),
                          "--cookies", "firefox"]) == 0
     out = capsys.readouterr().out
     assert youtube.fetched == [] and "Done:" not in out
-    assert "  line 2: TESTVIDEO02 not downloaded (--index downloads it)" in out
+    assert "  line 3: TESTVIDEO02 not downloaded (--index downloads it)" in out
     result = (tmp_path / "series.html").read_text(encoding="utf-8")
     assert '<meta name="color-scheme" content="light">' in result
 
@@ -1008,11 +1023,12 @@ def test_load_json_with_a_list(tmp_path, youtube, capsys, saved):
     (["--index", "a.txt", url(1)], f"--index takes the videos from the list file; add {url(1)} "
                                    "to the file instead of giving it in the command"),
     (["--index-only", "a.txt", PLAYLIST], "--index-only takes the videos from the list file"),
-    (["--index-only", "a.txt", "--overwrite", "--load-json"],
+    (["--index-only", "a.txt", "--page", "theme:dark", "--load-json"],
      "--index-only downloads nothing and only makes the index, so it cannot be used with "
-     "--load-json, --overwrite (use --index FILE for that)"),
+     "--load-json, --page (use --index FILE for that)"),
     (["--index-only", "a.txt", "--transcript"], "cannot be used with --transcript"),
-    (["--index-only", "a.txt", "--max-comments", "0"], "cannot be used with --max-comments"),
+    (["--index-only", "a.txt", "--page", "comments:0"], "cannot be used with --page"),
+    (["--index-only", "a.txt", "--page", "theme:dark"], "cannot be used with --page"),
     (["--index-only", "a.txt", "--refresh-json"], "cannot be used with --refresh-json"),
     (["--index"], "argument --index: expected one argument"),
 ])
@@ -1025,7 +1041,7 @@ def test_index_option_errors(capsys, argv, message):
 @pytest.mark.parametrize("name, refused", [(name, key) for name, key in
                                            yt2html.INDEX_ONLY_REFUSES])
 def test_every_refused_option(capsys, name, refused):
-    value = {"max_comments": ["--max-comments", "5"], "video": ["--video"],
+    value = {"page": ["--page", "comments:5"], "video": ["--video"],
              "transcript": ["--transcript"]}.get(refused, [name])
     with pytest.raises(SystemExit):
         yt2html.parse_args(["--index-only", "a.txt", *value])
@@ -1196,8 +1212,8 @@ def test_reverse_errors(tmp_path, capsys, make, args, message):
 
 
 @pytest.mark.parametrize("extra, named", [(["URL"], "a URL"), (["-o", "out"], "-o"),
-                                          (["--theme", "dark"], "--theme"),
-                                          (["--max-comments", "0"], "--max-comments")])
+                                          (["--page", "theme:dark"], "--page"),
+                                          (["--page"], "--page")])
 def test_reverse_takes_nothing_else_and_is_not_in_help(capsys, extra, named):
     for option in ("--reverse", "--reverse-details"):
         with pytest.raises(SystemExit):

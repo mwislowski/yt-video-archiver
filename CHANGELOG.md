@@ -4,6 +4,12 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- **The page's options are one: `--page`**, with comma-separated parameters: `ovr` (make the page again even if the video has one; was `--overwrite`), `comments:no|0|N|all` (was `--no-comments` and `--max-comments N`), `snap:yes|no` (was `--no-snapshot`), `cards:yes|no` (was `--no-cards`), `avatars:yes|no` (was `--no-avatars`) and `theme:auto|light|dark` (was `--theme`), e.g. `--page ovr,comments:200,theme:dark`. The old options are gone, not kept as other names. `--page` is given once (a second one is an error, not a silent replacement); `--page ovr` with `--load-json`, `--update-json` or `--refresh-json` is an error (everything from YouTube against the saved data); `--index-only` and `--video-formats` refuse `--page`. The *Command* row of new pages writes `--page` with what differs from its defaults.
+- **Comments: at most 1,000 by default** (was all of them); `--page comments:all` takes all. With saved data only a limit given on purpose narrows the saved comments; `--refresh-json` says when the default limit cut the refreshed ones.
+- **The index's theme comes from the list file**, `!theme: auto|light|dark` (default auto), no longer from the command; `--page theme:` sets the video pages' theme only. Settings of a list file may also stand several on a line (`!numbers: no !layout: cards`), as the `=` details do.
+
 ### Fixed
 
 - The podcast a video belongs to shows again when YouTube uses its newer podcast card under the description (seen since 23.11.2026) instead of the "Explore the podcast" section: the section is headed "Podcast" and shows the podcast's title, episode count and square cover, linked to its playlist; the card names no author.

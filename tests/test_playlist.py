@@ -218,7 +218,7 @@ def test_ctrl_c_during_comments_saves_the_page_and_stops(tmp_path, capsys, youtu
     out = capsys.readouterr().out
     assert youtube.fetched == [PLAYLIST, url(1), url(2)]   # episode 3 not started
     assert len(pages(tmp_path)) == 2
-    assert "use --overwrite for this video" in out
+    assert "use --page ovr for this video" in out
     assert "Interrupted (Ctrl+C)" in out
     assert "Done: 2 saved, 0 skipped (page exists), 0 failed." in out
 

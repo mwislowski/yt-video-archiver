@@ -131,12 +131,12 @@ def test_the_transcripts_track_gone(capsys, saved, youtube, monkeypatch):
 
 def test_the_page_shows_fewer_comments_the_data_keep_all(capsys, saved, youtube):
     code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--update-json",
-                  "--transcript", "bilingual:pl", "--max-comments", "2")
+                  "--transcript", "bilingual:pl", "--page", "comments:2")
     assert code == 0
     assert len(json.loads(saved.read_text("utf-8"))["comments"]) == 7
     html = page(saved.parent).read_text("utf-8")
     assert html.count('class="comment ') + html.count('class="comment"') <= 2
-    assert "--max-comments 2" in row(html, "Command")
+    assert "--page comments:2" in row(html, "Command")
 
 
 def test_interrupted_comments_in_the_data_do_not_stop_the_run(capsys, saved, youtube):
@@ -180,7 +180,7 @@ def test_without_saved_data(capsys, tmp_path, youtube, info, monkeypatch):
     code, out = run(capsys, URL, "-o", str(out_dir), "--update-json")
     assert code == 0
     assert ("Skipped (page exists, no saved data to update): " in out
-            and "Use --overwrite --write-json to download everything again." in out)
+            and "Use --page ovr --write-json to download everything again." in out)
     # also when only the fetched data show the id (an address without it)
     monkeypatch.setattr(yt2html, "video_id_from_url", lambda url: None)
     monkeypatch.setattr(yt2html, "fetch_info", lambda s, a: json.loads(json.dumps(info)))
@@ -359,7 +359,7 @@ def test_refresh(capsys, saved, youtube, refreshed):
             '<div class="label">Refreshed</div>') in html
     assert f'<div class="value">{yt2html.format_int(30_000_000)}</div>' in html
     # --no-snapshot: neither tile
-    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent), "--no-snapshot")
+    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent), "--page", "snap:no")
     html = page(saved.parent).read_text("utf-8")
     assert '"label">Snapshot<' not in html and '"label">Refreshed<' not in html
     # refreshed the day of the download: no second tile with the same date
@@ -502,8 +502,8 @@ def test_refresh_interrupted_does_not_advise_overwrite(capsys, saved, youtube, m
     monkeypatch.setattr(yt2html, "fetch_info",
                         lambda s, a: {**json.loads(json.dumps(info)), "comment_count": None})
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--refresh-json")
-    assert code == 130 and ("use --refresh-json again for this video to get all of them "
-                            "(--overwrite would replace the saved comments).") in out
+    assert code == 130 and ("use --refresh-json again for this video to get the rest "
+                            "(--page ovr would replace the saved comments).") in out
 
 
 def test_the_same_video_twice_in_a_list_is_updated_once(capsys, saved, youtube, tmp_path):

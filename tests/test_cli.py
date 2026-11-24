@@ -29,7 +29,7 @@ def test_defaults():
     assert args.transcript == []                     # no option: no transcript
     assert args.output_dir == "."
     assert yt2html.parse_args(["URL", "--transcript"]).transcript == [("plain", None)]
-    assert yt2html.parse_args(["URL", "--transcript", "--theme", "dark"]).transcript == [("plain", None)]
+    assert yt2html.parse_args(["URL", "--transcript", "--page", "theme:dark"]).transcript == [("plain", None)]
 
 
 def test_transcript_option_and_the_address(capsys):
@@ -240,19 +240,21 @@ def test_load_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
     (["--merge-json", "--refresh-json"], "--refresh-json and --merge-json cannot be used together"),
     (["--merge-json", "--video"], "--merge-json only merges SRT files into saved data (and "
      "makes their pages with --transcript), so it cannot be used with --video"),
-    (["--merge-json", "--overwrite", "--index", "list.txt"], "so it cannot be used with "
-     "--overwrite, --index"),
+    (["--merge-json", "--page", "ovr", "--index", "list.txt"], "so it cannot be used with "
+     "--page ovr, --index"),
     (["--merge-json", "--index-only", "list.txt"], "so it cannot be used with --index-only"),
     (["--merge-json", "--video-formats"], "--video-formats makes no page, so it cannot be "
      "used with --merge-json"),
     (["--refresh-json", "--update-json"], "--update-json and --refresh-json cannot be used together"),
-    (["--refresh-json", "--overwrite"], "--overwrite downloads everything again and "
-     "--refresh-json keeps the saved data; use one of them"),
+    (["--refresh-json", "--page", "ovr"], "--page ovr downloads everything again from YouTube "
+     "and --refresh-json uses the saved data; use one of them"),
     (["--refresh-json", "--video-formats"], "cannot be used with --refresh-json"),
     (["--update-json", "--write-json"], "--write-json and --update-json cannot be used together"),
     (["--update-json", "--load-json"], "--update-json and --load-json cannot be used together"),
-    (["--update-json", "--overwrite"], "--overwrite downloads everything again and "
-     "--update-json keeps the saved data; use one of them"),
+    (["--update-json", "--page", "ovr"], "--page ovr downloads everything again from YouTube "
+     "and --update-json uses the saved data; use one of them"),
+    (["--load-json", "--page", "ovr"], "--page ovr downloads everything again from YouTube "
+     "and --load-json uses the saved data; use one of them"),
     (["--update-json", "--video-formats"], "--video-formats makes no page, so it cannot be "
      "used with --update-json"),
 ])

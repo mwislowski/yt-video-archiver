@@ -249,7 +249,7 @@ def test_own_translations_under_the_languages_table(info):
         "(auto-translated), bilingual with DE (own translation)")
     assert html.count(", own translation</span>") == 2 and "Polish, auto-translated" in html
     # only YouTube's translation in the command
-    assert '<code class="command">yt2html TESTVIDEO01 --no-cards --transcript plain,bilingual:pl</code>' in html
+    assert '<code class="command">yt2html TESTVIDEO01 --page comments:all,cards:no --transcript plain,bilingual:pl</code>' in html
     # what the page does not show is not named: neither in the line nor in the command
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5),
                                transcript_spec=[("bilingual", "pl")])
@@ -264,7 +264,7 @@ def test_only_an_own_translation_shown(info):
                                transcript_spec=[("bilingual", "de")])
     assert row(html, "Transcript").endswith("1 version: bilingual with DE (own translation)")
     # the command does not claim a version the page does not have
-    assert '<code class="command">yt2html TESTVIDEO01 --no-cards</code>' in html
+    assert '<code class="command">yt2html TESTVIDEO01 --page comments:all,cards:no</code>' in html
 
 
 def test_no_own_line_without_formats(info):

@@ -116,7 +116,7 @@ def test_the_first_download_fails_and_writes_nothing(capsys, tmp_path, monkeypat
     assert not list(tmp_path.iterdir())
     # --overwrite of an existing page: the same, the page stays as it was
     (tmp_path / "Old [fwjg1F_zdCk].html").write_text("old")
-    code, out = run(capsys, "fwjg1F_zdCk", "-o", str(tmp_path), "--overwrite")
+    code, out = run(capsys, "fwjg1F_zdCk", "-o", str(tmp_path), "--page", "ovr")
     assert code == 1 and f"FAILED: fwjg1F_zdCk: {TERMINATED}" in out
     assert [p.name for p in tmp_path.iterdir()] == ["Old [fwjg1F_zdCk].html"]
 
@@ -151,7 +151,7 @@ def test_refresh_records_it_and_changes_nothing_else(capsys, saved, youtube, mon
     assert f'<meta name="yt2html:unavailable" content="{TODAY.isoformat()}T{time}">' in html
     assert "<title>" + yt2html.esc(before["title"]) in html
     # --no-snapshot: no tiles, so nothing there
-    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent), "--no-snapshot")
+    run(capsys, "--load-json", "TESTVIDEO01", "-o", str(saved.parent), "--page", "snap:no")
     assert '"label">Refreshed<' not in page(saved.parent).read_text("utf-8")
 
 

@@ -847,7 +847,7 @@ def test_overwrite_keeps_what_the_files_were(tmp_path, youtube, capsys):
     yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--write-json"])
     first = page(tmp_path).read_text("utf-8")
     capsys.readouterr()
-    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl",
+    assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr", "--video", "audio:pl",
                          "--write-json"]) == 0
     out = capsys.readouterr().out
     assert len(youtube["downloads"]) == 2                     # nothing downloaded again
@@ -867,7 +867,7 @@ def test_renamed_files_are_found_and_described(tmp_path, youtube, capsys):
     yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--write-json"])
     rename_all(tmp_path, "01 ")
     capsys.readouterr()
-    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl",
+    assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr", "--video", "audio:pl",
                          "--write-json"]) == 0
     assert len(youtube["downloads"]) == 2                     # recognised under the new names
     html_path = page(tmp_path)
@@ -899,7 +899,7 @@ def test_files_found_without_saved_data(tmp_path, youtube):
     # downloaded without --write-json: made again, the files are only found
     youtube["fresh"] = DUBS + [dub("251-9", "pl", "dubbed", "opus")]
     yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl"])
-    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "audio:pl"]) == 0
+    assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr", "--video", "audio:pl"]) == 0
     html = page(tmp_path).read_text("utf-8")
     assert row(html, "Video file").startswith(
         f"next to the page: video {page(tmp_path).stem}.mp4, &lt;1 MB; "
@@ -915,7 +915,7 @@ def test_renamed_subtitles_are_found_and_described(tmp_path, subtitles, capsys):
     yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en", "--write-json"])
     rename_all(tmp_path, "04 ")
     before = len(subtitles["subs"])
-    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "sub:en",
+    assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr", "--video", "sub:en",
                          "--write-json"]) == 0
     assert len(subtitles["subs"]) == before                  # not downloaded again
     saved = json.loads(page(tmp_path).with_suffix(".info.json").read_text("utf-8"))
@@ -934,7 +934,7 @@ def test_renamed_subtitles_are_found_and_described(tmp_path, subtitles, capsys):
 
 def test_the_video_only_found_keeps_the_list_of_formats(tmp_path, youtube):
     yt2html.main([URL, "-o", str(tmp_path), "--video"])
-    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video"]) == 0
+    assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr", "--video"]) == 0
     assert youtube["fetches"] == 1                            # no list needed for a file there
     html = page(tmp_path).read_text("utf-8")
     assert row(html, "Video file").endswith("; Deno at download: yes")
@@ -943,7 +943,7 @@ def test_the_video_only_found_keeps_the_list_of_formats(tmp_path, youtube):
 
 def test_subtitles_found_without_saved_data(tmp_path, subtitles):
     yt2html.main([URL, "-o", str(tmp_path), "--video", "sub:en,sub:pl"])
-    assert yt2html.main([URL, "-o", str(tmp_path), "--overwrite", "--video", "sub:en,sub:pl"]) == 0
+    assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr", "--video", "sub:en,sub:pl"]) == 0
     html = page(tmp_path).read_text("utf-8")
     assert "; subtitles srt: en (author), pl (translated); " in row(html, "Video file")
     assert '<span class="chosen">en</span>' in html
@@ -1029,7 +1029,7 @@ def test_update_json_records_the_files(tmp_path, subtitles, capsys):
     data_path.write_text(json.dumps(data), encoding="utf-8")
     capsys.readouterr()
     assert yt2html.main([URL, "-o", str(tmp_path), "--update-json", "--video", "sub:en",
-                         "--max-comments", "100"]) == 0
+                         "--page", "comments:100"]) == 0
     out = capsys.readouterr().out
     assert "Nothing to add from YouTube" not in out and f"Updated metadata: {data_path}" in out
     assert out.count("The saved data has only 7 comments") == 1       # told once
@@ -1042,7 +1042,7 @@ def test_update_json_records_the_files(tmp_path, subtitles, capsys):
     assert f"; updated {TODAY} {data[yt2html.UPDATES_KEY][-1]['time']}</dd>" in html
     # again, all files there: nothing new to record
     assert yt2html.main([URL, "-o", str(tmp_path), "--update-json", "--video", "sub:en",
-                         "--max-comments", "2"]) == 0
+                         "--page", "comments:2"]) == 0
     data = json.loads(data_path.read_text("utf-8"))
     assert len(data[yt2html.UPDATES_KEY]) == 1                 # no new entry
     assert len(data["comments"]) == 7          # the page shows fewer, the data keep all
@@ -1057,7 +1057,7 @@ def test_update_json_narrows_only_the_page(tmp_path, subtitles):
     data[yt2html.CARDS_KEY] = [card]
     data_path.write_text(json.dumps(data), encoding="utf-8")
     assert yt2html.main([URL, "-o", str(tmp_path), "--update-json", "--video", "sub:en",
-                         "--no-cards"]) == 0
+                         "--page", "cards:no"]) == 0
     assert json.loads(data_path.read_text("utf-8"))[yt2html.CARDS_KEY] == [card]
     assert row(page(tmp_path).read_text("utf-8"), "Info cards") == "left out"
 
@@ -1122,7 +1122,7 @@ def test_files_all_there_ask_youtube_nothing(tmp_path, subtitles, monkeypatch, c
     assert subtitles["fetches"] == fetches + 1 and len(subtitles["subs"]) == subs + 1
     assert len(subtitles["downloads"]) == downloads
     # a page made again takes the fresh list (it tells which formats the files came from)
-    assert yt2html.main(command + ["--overwrite"]) == 0
+    assert yt2html.main(command + ["--page", "ovr"]) == 0
     assert subtitles["fetches"] == fetches + 3
 
 

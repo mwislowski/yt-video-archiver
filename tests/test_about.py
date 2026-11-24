@@ -148,9 +148,20 @@ def command(html: str) -> str:
 
 def test_command_with_defaults_is_the_id_alone(info):
     info[yt2html.CARDS_KEY] = []
+    info[yt2html.LIMIT_KEY] = yt2html.DEFAULT_COMMENTS
     assert command(render(info)) == "yt2html TESTVIDEO01 --transcript"   # alone: plain
     del info[yt2html.TRANSCRIPT_KEY]                                      # no option: none
     assert command(render(info)) == "yt2html TESTVIDEO01"
+
+
+def test_command_names_all_comments_now_that_the_default_is_a_limit(info):
+    # all comments (also data saved before the default limit): no longer the default
+    info[yt2html.CARDS_KEY] = []
+    del info[yt2html.TRANSCRIPT_KEY]
+    info[yt2html.LIMIT_KEY] = None
+    assert command(render(info)) == "yt2html TESTVIDEO01 --page comments:all"
+    info[yt2html.LIMIT_KEY] = 0
+    assert command(render(info)) == "yt2html TESTVIDEO01 --page comments:0"
 
 
 def test_command_has_the_settings_that_shaped_the_page(info):
@@ -158,14 +169,15 @@ def test_command_has_the_settings_that_shaped_the_page(info):
     info[yt2html.DOWNLOAD_KEY] = {"yt2html": "0.6.0", "cookies_from_browser": "firefox"}
     html = render(info, transcript_spec=[("timestamps", None), ("bilingual", "pl")],
                   theme="light", show_snapshot=False, no_avatars=True)
-    assert command(html) == ("yt2html TESTVIDEO01 --max-comments 500 --no-cards --no-avatars "
-                             "--transcript timestamps,bilingual:pl --theme light --no-snapshot "
+    assert command(html) == ("yt2html TESTVIDEO01 --page comments:500,snap:no,cards:no,"
+                             "avatars:no,theme:light --transcript timestamps,bilingual:pl "
                              "--cookies-from-browser firefox")
 
 
 def test_command_with_the_video(info):
     # what --video took belongs to the copy: right after the id, without "again" (how, not what)
     info[yt2html.CARDS_KEY] = []
+    info[yt2html.LIMIT_KEY] = yt2html.DEFAULT_COMMENTS
     info[yt2html.VIDEO_KEY] = {"date": "2026-11-13", "parameters": "720p30, again, audio:pl"}
     assert command(render(info)) == "yt2html TESTVIDEO01 --video 720p30,audio:pl --transcript"
     info[yt2html.VIDEO_KEY]["parameters"] = "again"
@@ -184,16 +196,17 @@ def test_command_left_out_comments_and_transcript(info):
     info[yt2html.CARDS_KEY] = []
     del info["comments"]
     del info[yt2html.TRANSCRIPT_KEY]  # no --transcript at download
-    assert command(render(info)) == "yt2html TESTVIDEO01 --no-comments"
+    assert command(render(info)) == "yt2html TESTVIDEO01 --page comments:no"
     info[yt2html.TRANSCRIPT_KEY] = None  # asked for, but the video has none
-    assert command(render(info)) == "yt2html TESTVIDEO01 --no-comments --transcript"
+    assert command(render(info)) == "yt2html TESTVIDEO01 --page comments:no --transcript"
     # asked for at download, not shown now
-    assert command(render(info, transcript_spec=[])) == "yt2html TESTVIDEO01 --no-comments"
+    assert command(render(info, transcript_spec=[])) == "yt2html TESTVIDEO01 --page comments:no"
 
 
 def test_command_with_an_id_starting_with_a_dash_uses_the_address(info):
     info.update(id="-Tk4nW8sYq0")
     info[yt2html.CARDS_KEY] = []
+    info[yt2html.LIMIT_KEY] = yt2html.DEFAULT_COMMENTS
     del info[yt2html.TRANSCRIPT_KEY]
     assert command(render(info)) == "yt2html https://www.youtube.com/watch?v=-Tk4nW8sYq0"
 
@@ -204,10 +217,10 @@ def test_command_of_a_page_built_from_saved_data(capsys, tmp_path, info):
     saved = tmp_path / "x.info.json"
     saved.write_text(json.dumps(info), encoding="utf-8")
     yt2html.main(["--load-json", str(saved), "-o", str(tmp_path / "p"), "--transcript",
-                  "timestamps", "--theme", "dark", "--no-cards"])
+                  "timestamps", "--page", "theme:dark,cards:no"])
     html = next((tmp_path / "p").glob("*.html")).read_text("utf-8")
-    assert command(html) == ("yt2html TESTVIDEO01 --max-comments 50 --no-cards "
-                             "--transcript timestamps --theme dark")
+    assert command(html) == ("yt2html TESTVIDEO01 --page comments:50,cards:no,theme:dark "
+                             "--transcript timestamps")
     assert row(html, "Page built").endswith(f"from the saved data, with yt2html {yt2html.__version__}")
     assert "--load-json" not in html and str(tmp_path) not in html
 
@@ -531,10 +544,10 @@ def rebuild(capsys, tmp_path, info, *options):
 
 def test_max_comments_keeps_the_first_saved_ones(capsys, tmp_path, info):
     info[yt2html.CARDS_KEY] = []
-    code, out, html = rebuild(capsys, tmp_path, info, "--max-comments", "3")
+    code, out, html = rebuild(capsys, tmp_path, info, "--page", "comments:3")
     assert code == 0
     assert row(html, "Comments") == "3 of 9; 3 threads, 0 replies; limited to 3"
-    assert command(html) == "yt2html TESTVIDEO01 --max-comments 3"
+    assert command(html) == "yt2html TESTVIDEO01 --page comments:3"
     # the first three in yt-dlp's order: pinned, newest, middle (without its replies)
     assert "Pinned by the creator" in html and "Middle comment" in html
     assert "Oldest comment" not in html and "@middle first reply" not in html
@@ -543,33 +556,33 @@ def test_max_comments_keeps_the_first_saved_ones(capsys, tmp_path, info):
 def test_a_cut_after_ctrl_c_counts_as_limited(capsys, tmp_path, info):
     info.update(comment_count=None)  # interrupted download
     info[yt2html.LIMIT_KEY] = None
-    _, _, html = rebuild(capsys, tmp_path, info, "--max-comments", "5")
+    _, _, html = rebuild(capsys, tmp_path, info, "--page", "comments:5")
     assert row(html, "Comments").endswith("; limited to 5")
-    code, out, html = rebuild(capsys, tmp_path, info, "--max-comments", "100")
+    code, out, html = rebuild(capsys, tmp_path, info, "--page", "comments:100")
     assert row(html, "Comments").endswith("; interrupted (Ctrl+C)")
-    assert ("The saved data has only 7 comments; --refresh-json without --max-comments adds "
+    assert ("The saved data has only 7 comments; --refresh-json --page comments:all adds "
             "the rest.") in out
 
 
 def test_a_larger_limit_cannot_widen_the_saved_data(capsys, tmp_path, info):
     info["comments"] = info["comments"][:5]
     info[yt2html.LIMIT_KEY] = 5
-    _, out, html = rebuild(capsys, tmp_path, info, "--max-comments", "50")
-    assert ("The saved data has only 5 comments; --refresh-json without --max-comments adds "
+    _, out, html = rebuild(capsys, tmp_path, info, "--page", "comments:50")
+    assert ("The saved data has only 5 comments; --refresh-json --page comments:all adds "
             "the rest.") in out
     assert row(html, "Comments").endswith("; limited to 5")
-    assert "--max-comments 5" in command(html)
+    assert "--page comments:5" in command(html)
     _, out, _ = rebuild(capsys, tmp_path, dict(info, comments=info["comments"], **{
-        yt2html.LIMIT_KEY: None}), "--max-comments", "50")  # complete: nothing to say
+        yt2html.LIMIT_KEY: None}), "--page", "comments:50")  # complete: nothing to say
     assert "saved data has only" not in out
 
 
 def test_no_comments_leaves_out_the_saved_ones(capsys, tmp_path, info):
     info[yt2html.CARDS_KEY] = []
-    _, _, html = rebuild(capsys, tmp_path, info, "--no-comments")
+    _, _, html = rebuild(capsys, tmp_path, info, "--page", "comments:no")
     assert "<h2>Comments</h2>" not in html
     assert row(html, "Comments") == "left out"
-    assert command(html) == "yt2html TESTVIDEO01 --no-comments"
+    assert command(html) == "yt2html TESTVIDEO01 --page comments:no"
 
 
 def test_cookies_have_no_effect_when_building(capsys, tmp_path, info):
@@ -1185,7 +1198,7 @@ def test_format_list_audio_lines(info):
         "try again later"]
     assert yt2html.format_list(info, saved=True)[1:] == [
         "no video or audio formats in the data: YouTube sent none when the data was saved; "
-        "make the page again with --overwrite"]
+        "make the page again with --page ovr"]
 
 
 def test_video_formats_option_prints_and_makes_no_page(capsys, tmp_path, info):
@@ -1206,12 +1219,11 @@ def test_video_formats_option_prints_and_makes_no_page(capsys, tmp_path, info):
 
 def test_video_formats_option_excludes_page_options(capsys):
     with pytest.raises(SystemExit):
-        yt2html.main(["u", "--video-formats", "--theme", "dark", "--no-cards"])
-    assert ("--video-formats makes no page, so it cannot be used with --no-cards, --theme"
+        yt2html.main(["u", "--video-formats", "--page", "theme:dark,cards:no", "--write-json"])
+    assert ("--video-formats makes no page, so it cannot be used with --page, --write-json"
             in capsys.readouterr().err)
-    for option in (["--overwrite"], ["--index", "a.txt"], ["--index-only", "a.txt"], ["--write-json"],
-                   ["--no-comments"], ["--max-comments", "5"], ["--no-avatars"],
-                   ["--transcript", "timestamps"], ["--no-snapshot"]):
+    for option in (["--page", "ovr"], ["--index", "a.txt"], ["--index-only", "a.txt"], ["--write-json"],
+                   ["--page"], ["--page", "comments:5"], ["--transcript", "timestamps"]):
         with pytest.raises(SystemExit):
             yt2html.parse_args(["u", "--video-formats", *option])
         assert f"cannot be used with {option[0]}" in capsys.readouterr().err

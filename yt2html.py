@@ -109,7 +109,8 @@ YT_COUNT_KEY = "yt2html_youtube_comment_count"
 # None when there is none.
 COMMENTS_MESSAGE_KEY = "yt2html_comments_message"
 
-# The --max-comments value used when fetching (None = no limit).
+# The comment limit used when fetching (--page comments:N, by default
+# DEFAULT_COMMENTS; None = all).
 LIMIT_KEY = "yt2html_max_comments"
 
 # The "License" row of the video details: {title, runs: [{text, url}]}.
@@ -137,7 +138,7 @@ ORIGINAL_AUDIO_KEY = "yt2html_original_audio_language"
 TRANSCRIPT_KEY = "yt2html_transcript"
 
 # The author's info cards: [{type, title, url, image, details, message, start}];
-# absent with --no-cards, None when the watch page cannot be read.
+# absent with --page cards:no, None when the watch page cannot be read.
 CARDS_KEY = "yt2html_cards"
 
 # The channel's avatar (image URL) from the watch page's owner row; yt-dlp
@@ -235,7 +236,7 @@ def fetch_formats(url: str, args: argparse.Namespace) -> dict:
 
 def fetch_info(url: str, args: argparse.Namespace) -> dict:
     """Extract metadata and comments with yt-dlp (no video download)."""
-    max_comments = "all" if args.max_comments is None else str(args.max_comments)
+    max_comments = "all" if args.comment_limit is None else str(args.comment_limit)
     opts = {
         "skip_download": True,
         "noplaylist": True,
@@ -269,7 +270,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
                               # YouTube's full list of formats (Video formats section)
                               "deno": shutil.which("deno") is not None}
         if not args.no_comments:
-            info[LIMIT_KEY] = args.max_comments
+            info[LIMIT_KEY] = args.comment_limit
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info, cards=not args.no_cards)
             if args.transcript:
@@ -330,7 +331,7 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
     consent; ytInitialData and ytInitialPlayerResponse are read from it.
     If it cannot be read, all PAGE_KEYS are None and the page falls back to
     yt-dlp's data where it can. Info cards are read only if `cards` is true
-    (--no-cards leaves CARDS_KEY out and does nothing for them). Raises
+    (--page cards:no leaves CARDS_KEY out and does nothing for them). Raises
     VideoUnavailable when YouTube refuses the video (playability_refusal()).
     """
     url = f"{YOUTUBE}/watch?v={info.get('id')}&hl=en"
@@ -1235,7 +1236,7 @@ class TranslationUnavailable(Exception):
 
 class TranslationRefused(TranslationUnavailable):
     """YouTube did not send the translation (HTTP 429 or another failure): the
-    page is made without it, with a note; --overwrite tries again later."""
+    page is made without it, with a note; --page ovr tries again later."""
 
 
 # Each caption track is downloaded once per run, as json3 (YouTube's own
@@ -1445,7 +1446,7 @@ def add_translations(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: s
             log(f"No translation into '{target}': {reason}.")
             if refused:
                 log("  The page is made without it and counts as finished; to add the "
-                    "translation later: --update-json (keeps the comments) or --overwrite."
+                    "translation later: --update-json (keeps the comments) or --page ovr."
                     + TRANSLATION_HINT)
             transcript.setdefault("missing", {})[target] = {
                 "reason": str(reason), "refused": refused, "date": dt.date.today().isoformat()}
@@ -2453,8 +2454,8 @@ def uncertain_warning(info: dict) -> str:
 
 def comment_status(info: dict) -> str:
     """How the comment download ended, for the page's metadata and the index:
-    complete, limited (--max-comments reached), interrupted (Ctrl+C),
-    not-downloaded (--no-comments), turned-off (YouTube's message in place
+    complete, limited (the comment limit reached), interrupted (Ctrl+C),
+    not-downloaded (--page comments:no), turned-off (YouTube's message in place
     of the comments) or unavailable (no comments, reason unknown)."""
     if "comments" not in info:
         return "not-downloaded"
@@ -3249,14 +3250,24 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
         kept = [item.strip() for item in info[VIDEO_KEY].get("parameters", "").split(",")
                 if item.strip() and item.strip() not in ("again", f"{DEFAULT_MAX_HEIGHT}p")]
         parts += ["--video"] + ([",".join(kept)] if kept else [])
+    # --page: what differs from its defaults; ovr is not part of the copy (how, not what)
+    page = []
     if "comments" not in info:
-        parts.append("--no-comments")
-    elif info.get(LIMIT_KEY) is not None:
-        parts += ["--max-comments", str(info[LIMIT_KEY])]
+        page.append("comments:no")
+    elif info.get(LIMIT_KEY) is None:
+        page.append("comments:all")
+    elif info[LIMIT_KEY] != DEFAULT_COMMENTS:
+        page.append(f"comments:{info[LIMIT_KEY]}")
+    if not show_snapshot:
+        page.append("snap:no")
     if CARDS_KEY not in info:
-        parts.append("--no-cards")
+        page.append("cards:no")
     if no_avatars:
-        parts.append("--no-avatars")
+        page.append("avatars:no")
+    if theme != "auto":
+        page.append(f"theme:{theme}")
+    if page:
+        parts += ["--page", ",".join(page)]
     # a translation of one's own does not come from YouTube: its bilingual
     # version is left out, and --transcript too when nothing else is shown
     own = {language for language, _ in own_shown(info.get(TRANSCRIPT_KEY), spec)}
@@ -3264,10 +3275,6 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
     if TRANSCRIPT_KEY in info and spec:   # the option alone means plain
         versions = format_transcript_spec(spec)
         parts += ["--transcript"] + ([versions] if versions != "plain" else [])
-    if theme != "auto":
-        parts += ["--theme", theme]
-    if not show_snapshot:
-        parts.append("--no-snapshot")
     browser = (info.get(DOWNLOAD_KEY) or {}).get("cookies_from_browser")
     if browser:
         parts += ["--cookies-from-browser", browser]
@@ -4163,7 +4170,7 @@ def format_list(info: dict, saved: bool = False) -> list[str]:
     overview = video_overview(info)
     if overview is None:
         return lines + [f"{NO_FORMATS}: " + ("YouTube sent none when the data was saved; make "
-                                             "the page again with --overwrite" if saved
+                                             "the page again with --page ovr" if saved
                                              else f"{NO_FORMATS_WHY}; try again later")]
     variants = overview["variants"]
     if variants:
@@ -4286,13 +4293,13 @@ def channel_avatar_url(info: dict) -> str | None:
 
 def comment_avatar_urls(info: dict) -> set[str]:
     """The avatars of the comment authors (the channel's own is apart: it stays
-    with --no-avatars). The same set is downloaded and counted in "About this copy"."""
+    with --page avatars:no). The same set is downloaded and counted in "About this copy"."""
     return {c.get("author_thumbnail") for c in info.get("comments") or []} - {None, ""}
 
 
 def avatar_urls(info: dict, comments: bool = True) -> set[str]:
     """The avatars to download: the channel's, and the comment authors' unless
-    left out (--no-avatars)."""
+    left out (--page avatars:no)."""
     urls = comment_avatar_urls(info) if comments else set()
     return {url for url in urls | {channel_avatar_url(info)} if url}
 
@@ -4396,7 +4403,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                  if expected is not None and expected != len(comments) else "")
         status = comment_status(info)
         body.append("<h2>Comments</h2>")
-        # Nothing to count: only why. A download cut short by --max-comments
+        # Nothing to count: only why. A download cut short by the comment limit
         # or Ctrl+C must not claim "No comments.", and keeps its numbers.
         if info.get("comments") is None:
             body.append(f'<div class="note">'
@@ -4738,7 +4745,7 @@ def comments_interrupted(info: dict) -> bool:
 
 
 def narrow_saved_comments(info: dict, args: argparse.Namespace, note: bool = True) -> None:
-    """--no-comments and --max-comments with saved data: they can only narrow
+    """--page comments:no and comments:N with saved data: they can only narrow
     the saved comments, as if the download had used them. The first N are
     kept, in the saved (yt-dlp's) order, replies counted: the comments a
     download with that limit gets. Only the page shows the result (`info`
@@ -4756,7 +4763,7 @@ def narrow_saved_comments(info: dict, args: argparse.Namespace, note: bool = Tru
         info["comment_count"] = limit  # cut by the limit, not by Ctrl+C any more
     elif note and comment_status(info) in ("limited", "interrupted"):
         log(f"  The saved data has only {plural(len(comments), 'comment')}; "
-            f"--refresh-json without --max-comments adds the rest.")
+            f"--refresh-json --page comments:all adds the rest.")
 
 
 def update_data_path(source: str, output_dir: Path) -> Path | None:
@@ -4928,7 +4935,7 @@ def refresh_saved(info: dict, fresh: dict) -> dict | None:
     """--refresh-json: the counts from fresh data; the title and description
     (the earlier ones kept in PREVIOUS_KEY) and the timestamp lists made from
     them; and the comments merged (merge_comments()). Comments not downloaded
-    now (--no-comments) leave the saved ones; comments turned off on YouTube
+    now (--page comments:no) leave the saved ones; comments turned off on YouTube
     since leave them too, noted in COMMENTS_CLOSED_KEY. Returns what changed
     in the comments, or None when they were not refreshed."""
     today = dt.date.today().isoformat()
@@ -5106,7 +5113,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     """Make the page for one URL (or one .info.json file).
 
     Returns the page's path, or None if the video already has a page in the
-    output folder and --overwrite was not given (with --load-json the page is
+    output folder and --page ovr was not given (with --load-json the page is
     always made again; with --update-json and --refresh-json too when there
     are saved data, which get what the options need and they lack, and are
     saved back). Everything that can fail for a reason the user should know
@@ -5145,7 +5152,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
             found = existing_page(output_dir, video_id_from_url(source))
             if found:
                 log(f"Skipped (page exists, no saved data to update): {found}. Use "
-                    "--overwrite --write-json to download everything again.")
+                    "--page ovr --write-json to download everything again.")
                 outcome["target"] = found
                 return None
             log(f"No saved data for {source}: downloading everything (as with --write-json).")
@@ -5178,6 +5185,11 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
             else:
                 info.pop(UNAVAILABLE_KEY, None)
                 note_update(info, record, refreshed=True, comments=refresh_saved(info, fresh))
+                if (args.page is None or args.page["comments"] is None) \
+                        and comment_status(fresh) == "limited":
+                    log(f"  Comments refreshed up to the default limit of "
+                        f"{DEFAULT_COMMENTS:,}; --page comments:all refreshes all "
+                        f"of them.")
         whole, targets = ((False, []) if gone else missing_for_update(info, args))
         if whole or targets:
             note_update(info, record, update_transcript(info, args, whole, targets, fresh,
@@ -5220,8 +5232,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
 
     def shown(note: bool = False) -> dict:
         """What the page shows: from saved data, the comments narrowed by
-        --no-comments or --max-comments and the cards left out with
-        --no-cards (the data keep all of them)."""
+        --page comments:no or comments:N and the cards left out with
+        cards:no (the data keep all of them)."""
         if not data_path:
             return info
         view = dict(info)
@@ -5280,9 +5292,9 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     if (not data_path or args.refresh_json) and comments_interrupted(info):
         log("  Comments were interrupted (Ctrl+C): the page has those fetched so far "
             "and counts as finished; " + (
-                "use --refresh-json again for this video to get all of them (--overwrite "
+                "use --refresh-json again for this video to get the rest (--page ovr "
                 "would replace the saved comments)." if data_path else
-                "use --overwrite for this video to get all of them."))
+                "use --page ovr for this video to fetch them again."))
         raise CommentsInterrupted
     return target
 
@@ -5772,6 +5784,85 @@ def standard_code(code: str) -> str:
     language, *rest = code.split("-")
     return "-".join([language.lower()] + [part.upper() if len(part) == 2 else
                                           part.capitalize() for part in rest])
+# --page: what the page has (defaults: comments up to DEFAULT_COMMENTS,
+# snapshot tile, info cards and comment avatars yes, theme auto) and ovr.
+DEFAULT_COMMENTS = 1000
+PAGE_SWITCHES = ("snap", "cards", "avatars")
+
+
+def page_spec(value: str) -> dict:
+    """Parse --page: "" (the option alone: the defaults) or comma-separated
+    parameters: "ovr" (make the page again even if the video has one),
+    "comments:no|0|N|all" (no comments asked for; asked, none taken; at most
+    N, replies counted; all), "snap:yes|no", "cards:yes|no", "avatars:yes|no",
+    "theme:auto|light|dark"; any case of letters. Each parameter once.
+    Raises ArgumentTypeError (before anything is fetched), also for an
+    address taken as parameters ("--page URL")."""
+    spec = {"ovr": False, "comments": None, "snap": True, "cards": True, "avatars": True,
+            "theme": "auto", "given": set()}
+    if not value.strip():
+        return spec
+    for item in (part.strip() for part in value.split(",")):
+        if not item:
+            raise argparse.ArgumentTypeError(f"empty item in '{value}' (check the commas)")
+        key, colon, setting = (part.strip().lower() for part in item.partition(":"))
+        name = key
+        if name in spec["given"]:
+            raise argparse.ArgumentTypeError(f"'{name}' is given more than once")
+        if key == "ovr" and not colon:
+            spec["ovr"] = True
+        elif key == "comments" and colon:
+            if setting in ("no", "all"):
+                spec["comments"] = setting
+            elif setting.isdigit():
+                spec["comments"] = int(setting)
+            else:
+                raise argparse.ArgumentTypeError(
+                    f"'{item}': comments is no, a number (0 too) or all, e.g. comments:200")
+        elif key in PAGE_SWITCHES and colon:
+            if setting not in ("yes", "no"):
+                raise argparse.ArgumentTypeError(f"'{item}': {key} is yes or no")
+            spec[key] = setting == "yes"
+        elif key == "theme" and colon:
+            if setting not in THEMES:
+                raise argparse.ArgumentTypeError(f"'{item}': theme is auto, light or dark")
+            spec["theme"] = setting
+        else:
+            raise argparse.ArgumentTypeError(
+                f"'{item}' is not a parameter (use ovr, comments:N, snap:no, cards:no, "
+                f"avatars:no or theme:dark); the video's address goes before --page")
+        spec["given"].add(name)
+    return spec
+
+
+class Once(argparse.Action):
+    """An option that may be given only once: a second --page would silently
+    replace the first (argparse keeps the last), so it is an error; all
+    parameters go in one comma-separated value."""
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest) is not None:
+            parser.error(f"{option_string} is given more than once; put all its parameters "
+                         f"in one, comma-separated")
+        setattr(namespace, self.dest, values)
+
+
+def apply_page_spec(args: argparse.Namespace) -> None:
+    """The settings --page gives (args.page; None without the option), as
+    the attributes the rest of the program reads: overwrite, no_comments,
+    max_comments (an explicit limit, which also narrows saved comments),
+    comment_limit (the download's: DEFAULT_COMMENTS when not given, None for
+    all), no_snapshot, no_cards, no_avatars, theme."""
+    spec = args.page if args.page is not None else page_spec("")
+    comments = spec["comments"]
+    args.overwrite = spec["ovr"]
+    args.no_comments = comments == "no"
+    args.max_comments = comments if isinstance(comments, int) else None
+    args.comment_limit = (DEFAULT_COMMENTS if comments is None else
+                          None if comments in ("all", "no") else comments)
+    args.no_snapshot, args.no_cards = not spec["snap"], not spec["cards"]
+    args.no_avatars, args.theme = not spec["avatars"], spec["theme"]
+
+
 TRANSCRIPT_VERSIONS = ("plain", "timestamps", "bilingual")
 
 
@@ -5988,16 +6079,14 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
 INDEX_ONLY_REFUSES = (("--video", "video"), ("--transcript", "transcript"),
                       ("--write-json", "write_json"), ("--update-json", "update_json"),
                       ("--refresh-json", "refresh_json"), ("--load-json", "load_json"),
-                      ("--overwrite", "overwrite"), ("--no-comments", "no_comments"),
-                      ("--max-comments", "max_comments"), ("--no-cards", "no_cards"),
-                      ("--no-avatars", "no_avatars"), ("--no-snapshot", "no_snapshot"))
+                      ("--page", "page"))
 
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yt2html",
         description="Save a YouTube video page (metadata, description, chapters, "
-                    "transcript, all comments) as a single offline HTML file.",
+                    "transcript, comments) as a single offline HTML file.",
     )
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__} (yt-dlp {yt_dlp.version.__version__})")
@@ -6011,18 +6100,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "then come from the list file)")
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
                         help="folder for the generated pages (default: the current folder)")
-    parser.add_argument("--no-comments", action="store_true",
-                        help="do not download comments (with --load-json: leave out the "
-                             "saved ones)")
-    parser.add_argument("--max-comments", type=int, metavar="N",
-                        help="limit the number of downloaded comments (replies included; "
-                             "with --load-json: keep only the first N saved ones)")
-    parser.add_argument("--no-cards", action="store_true",
-                        help="leave out the author's info cards (nothing is read or "
-                             "downloaded for them)")
-    parser.add_argument("--no-avatars", action="store_true",
-                        help="do not embed the avatars of comment authors (letter "
-                             "placeholders instead); the channel's avatar stays")
+    parser.add_argument(
+        "--page", nargs="?", const="", type=page_spec, default=None, action=Once,
+        metavar="PARAMETERS",
+        help="the page, with comma-separated parameters: ovr (make it again even if the "
+             "video already has one in the output folder, recognised by '[VIDEO_ID]' in "
+             "the .html file's name; such videos are skipped by default), comments:no|0|N|all "
+             f"(default {DEFAULT_COMMENTS}; with saved data: fewer of the saved ones), "
+             "snap:yes|no (the grey 'Snapshot' date tile), cards:yes|no (the author's info "
+             "cards), avatars:yes|no (comment authors' avatars; letters instead), "
+             "theme:auto|light|dark; e.g. --page ovr,comments:200,theme:dark")
     parser.add_argument(
         "--transcript", nargs="?", const="", type=transcript_spec, default=[],
         metavar="VERSIONS",
@@ -6033,15 +6120,6 @@ def parse_args(argv=None) -> argparse.Namespace:
              "column, e.g. bilingual:pl; left out with a note if YouTube has "
              "none or refuses it; or your own translation merged with --merge-json). "
              "Write the address first: yt2html URL --transcript plain,bilingual:pl")
-    parser.add_argument("--theme", choices=THEMES, default="auto", type=str.lower,
-                        help="colour theme of the page: auto (default; follows the light/dark "
-                             "setting of the device it is opened on, like YouTube's "
-                             "'Use device theme'), dark or light")
-    parser.add_argument("--no-snapshot", action="store_true",
-                        help="leave out the grey 'Snapshot' date tile "
-                             "(the date stays in 'About this copy' at the bottom)")
-    # --cookies: the short name; the long one stays (yt-dlp's name, and the
-    # Command row of existing pages uses it)
     parser.add_argument("--cookies-from-browser", "--cookies", dest="cookies_from_browser",
                         metavar="BROWSER", type=cookies_argument,
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
@@ -6051,10 +6129,6 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="also save the data (yt-dlp's metadata and what yt2html adds) "
                              "next to the page, as 'Title [ID].info.json', replacing an older "
                              "file; --load-json builds pages from it later without YouTube")
-    parser.add_argument("--overwrite", action="store_true",
-                        help="make the page again even if the video already has one in the "
-                             "output folder (recognised by '[VIDEO_ID].html' at the end of the "
-                             "file name; such videos are skipped by default)")
     parser.add_argument("--index", metavar="FILE",
                         help="archive the videos of a list file (UTF-8 text: video and "
                              "playlist addresses or ids, page names, video files of your own; "
@@ -6130,6 +6204,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "--load-json (bilingual:CODE shows the translation); without "
                              "it, the page stays as it is")
     args = parser.parse_args(argv)
+    apply_page_spec(args)
     # the options that only write a list file: (what they do, what may go with them)
     alone = {"reverse": ("only writes the list of an index page", ()),
              "reverse_details": ("only writes the list of an index page", ()),
@@ -6159,13 +6234,10 @@ def parse_args(argv=None) -> argparse.Namespace:
         return args
     if args.video_formats:
         used = [name for name, on in (
-            ("--overwrite", args.overwrite), ("--index", args.index is not None),
+            ("--page", args.page is not None), ("--index", args.index is not None),
             ("--index-only", args.index_only is not None), ("--write-json", args.write_json),
             ("--update-json", args.update_json), ("--refresh-json", args.refresh_json),
-            ("--no-comments", args.no_comments), ("--max-comments", args.max_comments is not None),
-            ("--no-cards", args.no_cards), ("--no-avatars", args.no_avatars),
             ("--transcript", bool(args.transcript)), ("--merge-json", args.merge_json),
-            ("--theme", args.theme != "auto"), ("--no-snapshot", args.no_snapshot),
             ("--video", args.video is not None)) if on]
         if used:
             parser.error(f"--video-formats makes no page, so it cannot be used with "
@@ -6182,17 +6254,18 @@ def parse_args(argv=None) -> argparse.Namespace:
                      "--merge-json adds a translation of your own)")
     if args.merge_json:
         used = [name for name, on in (("--video", args.video is not None),
-                                      ("--overwrite", args.overwrite),
+                                      ("--page ovr", args.overwrite),
                                       ("--index", args.index is not None),
                                       ("--index-only", args.index_only is not None)) if on]
         if used:
             parser.error(f"--merge-json only merges SRT files into saved data (and makes "
                          f"their pages with --transcript), so it cannot be used with "
                          f"{', '.join(used)}")
-    for name, on in (("--update-json", args.update_json), ("--refresh-json", args.refresh_json)):
+    for name, on in (("--load-json", args.load_json), ("--update-json", args.update_json),
+                     ("--refresh-json", args.refresh_json)):
         if on and args.overwrite:
-            parser.error(f"--overwrite downloads everything again and {name} keeps the saved "
-                         "data; use one of them")
+            parser.error(f"--page ovr downloads everything again from YouTube and {name} "
+                         "uses the saved data; use one of them")
     if args.video is not None and args.load_json:
         parser.error("--video needs YouTube, so it cannot be used with --load-json; "
                      "give the URL instead")
@@ -6201,7 +6274,6 @@ def parse_args(argv=None) -> argparse.Namespace:
         parser.error("--index downloads and makes the index, --index-only only makes it; "
                      "use one of them")
     if args.index_only is not None:
-        # (not "in (None, False, [])": --max-comments 0 is given, and 0 == False)
         used = [name for name, key in INDEX_ONLY_REFUSES
                 if getattr(args, key) is not None and getattr(args, key) is not False
                 and getattr(args, key) != []]

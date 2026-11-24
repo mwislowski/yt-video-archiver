@@ -33,8 +33,8 @@ def test_the_simplest_list_has_no_syntax(tmp_path):
     listing = read(tmp_path, "TESTVIDEO01\n\n  https://youtu.be/TESTVIDEO02  \n\t\n")
     assert kinds(listing.children) == [("video", "TESTVIDEO01"), ("video", "TESTVIDEO02")]
     assert listing.title == ""
-    assert listing.settings == {"numbers": "yes", "thumbnails": "yes",
-                                "layout": "plain", "dates": "yes"}     # the defaults
+    assert listing.settings == {"numbers": "yes", "thumbnails": "yes", "layout": "plain",
+                                "dates": "yes", "theme": "auto"}     # the defaults
     assert [i.line for i in listing.items()] == [1, 3]
 
 
@@ -177,17 +177,32 @@ def test_settings_in_the_header(tmp_path):
     listing = read(tmp_path, "!numbers:no\n# Title\n> An introduction.\n// comment\n\n"
                              "! Thumbnails : No\n!LAYOUT: Cards\n!Dates: NO\nTESTVIDEO01\n")
     assert listing.settings == {"numbers": "no", "thumbnails": "no", "layout": "cards",
-                                "dates": "no"}
-    listing = read(tmp_path, "!numbers: yes\n!layout: compact\nTESTVIDEO01\n")
+                                "dates": "no", "theme": "auto"}
+    listing = read(tmp_path, "!numbers: yes\n!layout: compact\n!Theme: Dark\nTESTVIDEO01\n")
     assert listing.settings == {"numbers": "yes", "thumbnails": "yes", "layout": "compact",
-                                "dates": "yes"}
+                                "dates": "yes", "theme": "dark"}
+
+
+def test_several_settings_on_a_line(tmp_path):
+    """As the "=" details: a value ends at the next "!"; both forms mixed."""
+    listing = read(tmp_path, "!numbers: no !layout:cards  !THEME: light\n!dates: no\n"
+                             "TESTVIDEO01\n")
+    assert listing.settings == {"numbers": "no", "thumbnails": "yes", "layout": "cards",
+                                "dates": "no", "theme": "light"}
 
 
 @pytest.mark.parametrize("text, message", [
     ("!tumbnails: no\n", "line 1: unknown setting: !tumbnails: no "
-                         "(known: !numbers, !thumbnails, !layout, !dates)"),
+                         "(known: !numbers, !thumbnails, !layout, !dates, !theme)"),
     ("!no-numbers\n", "line 1: unknown setting: !no-numbers (known: !numbers, !thumbnails, "
-                      "!layout, !dates)"),
+                      "!layout, !dates, !theme)"),
+    ("!theme: blue\n", "line 1: !theme: blue: !theme is one of: auto, light, dark "
+                       "(e.g. !theme: dark)"),
+    ("!numbers: no !layout: cards !numbers: yes\n", "line 1: !numbers is given twice"),
+    ("!layout: cards\n!dates: no !layout: plain\n", "line 2: !layout is given twice"),
+    ("!dates: no !lauout: cards\n", "line 1: unknown setting: !lauout: cards"),
+    ("TESTVIDEO01\n!numbers: no !dates: no\n", "line 2: !numbers: no !dates: no: settings go "
+                                               "at the top of the file"),
     ("!dates: maybe\n", "line 1: !dates: maybe: !dates is one of: yes, no (e.g. !dates: no)"),
     ("!layout: boxes\n", "line 1: !layout: boxes: !layout is one of: plain, compact, cards "
                          "(e.g. !layout: cards)"),

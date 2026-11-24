@@ -41,10 +41,13 @@ import yt2html as core
 # The list file
 # --------------------------------------------------------------------------
 
-# Settings ("!key: value", at the top of the file): the allowed values, the
-# first one the default.
+# Settings ("!key: value", at the top of the file, several on a line as the
+# "=" details: a value ends at the next "!"): the allowed values, the first
+# one the default. The index's theme comes only from !theme (the pages'
+# from --page theme:).
 SETTINGS = {"numbers": ("yes", "no"), "thumbnails": ("yes", "no"),
-            "layout": ("plain", "compact", "cards"), "dates": ("yes", "no")}
+            "layout": ("plain", "compact", "cards"), "dates": ("yes", "no"),
+            "theme": ("auto", "light", "dark")}
 LEVELS = 3   # chapters: "##" (1) to "####" (3)
 # Details of one video or file, on "=" lines above it: "!key: value", several
 # on a line (a value ends at the next "!" or at the end of the line). A "="
@@ -213,21 +216,23 @@ def read_list_file(name: str) -> ListFile:
         if not line or line.startswith("//"):
             continue
         if line.startswith("!"):                  # "!key: value", any case and spacing
-            key, _, value = line[1:].partition(":")
-            key, value = key.strip().lower(), value.strip().lower()
-            if key not in SETTINGS:
-                fail(number, f"unknown setting: {line} (known: "
-                             + ", ".join(f"!{k}" for k in SETTINGS) + ")")
-            if value not in SETTINGS[key]:
-                fail(number, f"{line}: !{key} is one of: " + ", ".join(SETTINGS[key])
-                             + f" (e.g. !{key}: {SETTINGS[key][-1]})")
             if not header:
                 fail(number, f"{line}: settings go at the top of the file, before the "
                              "first chapter, video or playlist")
-            if key in given:
-                fail(number, f"!{key} is given twice")
-            given.add(key)
-            settings[key] = value
+            for part in line.split("!")[1:]:       # several on a line, as "=" details
+                setting = "!" + part.strip()
+                key, _, value = part.partition(":")
+                key, value = key.strip().lower(), value.strip().lower()
+                if key not in SETTINGS:
+                    fail(number, f"unknown setting: {setting} (known: "
+                                 + ", ".join(f"!{k}" for k in SETTINGS) + ")")
+                if value not in SETTINGS[key]:
+                    fail(number, f"{setting}: !{key} is one of: " + ", ".join(SETTINGS[key])
+                                 + f" (e.g. !{key}: {SETTINGS[key][-1]})")
+                if key in given:
+                    fail(number, f"!{key} is given twice")
+                given.add(key)
+                settings[key] = value
             continue
         if line.startswith("#"):
             heading = HEADING.fullmatch(line)
@@ -1267,7 +1272,8 @@ def write_index(args: argparse.Namespace, playlists: dict[str, dict | None]) -> 
     output_dir = Path(args.output_dir)
     path = index_path(args.index or args.index_only, output_dir)
     try:
-        page, builder = render_index(args.list, playlists, output_dir, args.theme)
+        page, builder = render_index(args.list, playlists, output_dir,
+                                     args.list.settings["theme"])
         output_dir.mkdir(parents=True, exist_ok=True)
         core.write_atomically(path, page)
     except OSError as error:

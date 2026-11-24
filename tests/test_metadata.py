@@ -153,13 +153,13 @@ def test_the_cover_is_downloaded_and_kept_when_youtube_no_longer_gives_it(
     assert yt2html.cover_url({"id": "AbC"}) == "https://i.ytimg.com/vi/AbC/mqdefault.jpg"
     monkeypatch.setattr(yt2html, "fetch_image", lambda u: None)
     capsys.readouterr()
-    yt2html.main([url(1), "-o", str(tmp_path), "--overwrite"])
+    yt2html.main([url(1), "-o", str(tmp_path), "--page", "ovr"])
     out = capsys.readouterr().out
     assert "Cover could not be downloaded; kept from the existing page." in out
     assert "Thumbnail could not be downloaded." in out
     assert yt2html.read_page_metadata(page)["yt2html:cover"] == cover
     page.write_text("<title>t</title>", "utf-8")             # nothing to keep
-    yt2html.main([url(1), "-o", str(tmp_path), "--overwrite"])
+    yt2html.main([url(1), "-o", str(tmp_path), "--page", "ovr"])
     assert "Cover could not be downloaded." in capsys.readouterr().out
     assert "yt2html:cover" not in yt2html.read_page_metadata(page)
 
