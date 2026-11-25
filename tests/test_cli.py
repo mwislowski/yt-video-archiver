@@ -139,9 +139,9 @@ def test_no_transcript_without_the_option(capsys, info_file, tmp_path):
 
 def test_bilingual_missing_at_download_is_a_note(capsys, info, tmp_path):
     # YouTube had no German when the data was saved: rebuilt without it, no error
-    info[yt2html.TRANSCRIPT_KEY]["missing"] = {"de": {
+    info[yt2html.NOT_SAVED_KEY] = {"transcript de": {
         "reason": "YouTube offers no translation of this transcript into 'de' (available: pl)",
-        "refused": False, "date": "2026-11-05"}}
+        "date": "2026-11-05", "again": False}}
     out_dir = tmp_path / "pages"
     out_dir.mkdir()
     saved = out_dir / "x.info.json"
@@ -158,8 +158,8 @@ def test_bilingual_missing_at_download_is_a_note(capsys, info, tmp_path):
 def test_bilingual_for_a_video_without_captions(capsys, info, tmp_path, monkeypatch):
     # downloaded now: no captions at all is a note, the page is made
     def fetch(source, args):
-        return {**info, yt2html.TRANSCRIPT_KEY: None,
-                yt2html.TRANSCRIPT_MISSING_KEY: "the video has no captions"}
+        return {**info, yt2html.TRANSCRIPT_KEY: None, yt2html.NOT_SAVED_KEY: {
+            "transcript": {"reason": "the video has no captions", "again": False}}}
     monkeypatch.setattr(yt2html, "fetch_info", fetch)
     monkeypatch.setattr(yt2html, "fetch_images", lambda *a, **k: {})
     monkeypatch.setattr(yt2html, "fetch_thumbnail", lambda info: None)

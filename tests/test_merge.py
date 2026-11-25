@@ -55,8 +55,8 @@ def page(folder):
 
 def test_merge_adds_the_translation_and_leaves_the_page(capsys, tmp_path, saved):
     before = data(saved)
-    before[yt2html.TRANSCRIPT_KEY]["missing"] = {"de": {"reason": "refused", "refused": True,
-                                                        "date": "2026-11-14"}}
+    before[yt2html.NOT_SAVED_KEY] = {"transcript de": {"reason": "refused", "date": "2026-11-14",
+                                                       "again": True}}
     saved.write_text(json.dumps(before), encoding="utf-8")
     srt = own_srt(tmp_path, "de")
     code, out = run(capsys, "--json", "merge", str(srt), "-o", str(tmp_path))
@@ -71,7 +71,7 @@ def test_merge_adds_the_translation_and_leaves_the_page(capsys, tmp_path, saved)
         "own": {"file": srt.name, "date": TODAY.isoformat()}}
     assert "de" not in transcript["translations"]
     # YouTube's refusal stays noted: .translated still asks for it
-    assert transcript["missing"]["de"]["refused"]
+    assert after[yt2html.NOT_SAVED_KEY]["transcript de"]["again"]
     assert transcript["translations"]["pl"] == before[yt2html.TRANSCRIPT_KEY]["translations"]["pl"]
     assert after[yt2html.UPDATES_KEY][-1]["added"] == ["own translation de"]
     assert not list(tmp_path.glob("*.html"))
@@ -320,7 +320,7 @@ def test_youtube_s_translation_does_not_drop_an_own_one_saved_before(capsys, tmp
     transcript["translations"] = {"pl": {
         "language": "pl", "name": "Polish", "cues": [{"start": 0.0, "text": "Moje"}],
         "own": {"file": "x.pl.own.srt", "date": "2026-11-20"}}}
-    transcript.pop("missing", None)
+    old.pop(yt2html.NOT_SAVED_KEY, None)
     saved.write_text(json.dumps(old), encoding="utf-8")
     code, out = run(capsys, "TESTVIDEO01", "-o", str(tmp_path), "--json", "write",
                     "--transcript", "dual:pl.translated")

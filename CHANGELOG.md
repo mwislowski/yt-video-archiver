@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- **What the copy lacks although a command asked for it is kept in one place in the saved data** (`yt2html_not_saved`): for now the transcript and its versions, such as a translation YouTube refused, subtitles it does not have or no captions at all, each with the reason, the day and whether the same command asks for it again. `--json show` lists it in a part of its own, *Not saved*, instead of `not available` under *Transcript*. Saved data of 0.12.3 and before are read as they are and written in the new form by the next run that saves them (`--json write` that adds something, `--json refresh`, `--json merge`). The pages do not change.
+
 ## [0.12.3] - 2026-11-25
 
 ### Fixed

@@ -38,9 +38,10 @@ def rich(info):
     transcript["tracks"] = {"es.auto-generated": {"language": "es", "name": "Spanish",
                                                   "kind": "auto-generated",
                                                   "cues": transcript["cues"]}}
-    transcript["missing"] = {"fr": {"reason": "YouTube refused to send it (HTTP 429)",
-                                    "refused": True, "date": "2026-11-14"},
-                             "it": {"reason": "YouTube offers no translation into it"}}
+    info[yt2html.NOT_SAVED_KEY] = {
+        "transcript fr": {"reason": "YouTube refused to send it (HTTP 429)", "date": "2026-11-14",
+                          "again": True},
+        "transcript it": {"reason": "YouTube offers no translation into it", "again": False}}
     info["epoch"] = None
     info[yt2html.ARCHIVED_KEY] = "2026-11-22"
     info[yt2html.DOWNLOAD_KEY] = {"yt2html": "0.10.7"}
@@ -82,13 +83,13 @@ def test_the_block(capsys, tmp_path, info):
         "              translations: de (own, 23.11.2026), pl (YouTube), pl (own, 24.11.2026)",
         f"              corrections: Title [{ID}].en.fixed.srt (25.11.2026)",
         "              other subtitles: es (auto-generated)",
-        "              not available: fr (YouTube refused to send it (HTTP 429), 14.11.2026), "
-        "it (YouTube offers no translation into it)",
         "              possible: plain, timed, dual:de, dual:pl, dual:pl.translated, "
         "plain:es.auto-generated",
         "  Video:      720p av1 + en aac, 22.11.2026 (--video 720p,audio:es)",
         "              extra audio: es (dubbed)",
         "              subtitles (--video sub:, before 0.11.0): en (auto-generated)",
+        "  Not saved:  transcript fr: YouTube refused to send it (HTTP 429), 14.11.2026",
+        "              transcript it: YouTube offers no translation into it (not asked for again)",
         f"  Next to it: page, mp4 (described), 3 SRTs: Title [{ID}] old.srt, "
         "en (auto-generated), pl (own)",
         f"              missing: Title [{ID}].es.dubbed.m4a",
@@ -112,14 +113,18 @@ def test_a_plain_block_and_what_is_not_there(capsys, tmp_path, saved, info):
     data = json.loads(saved.read_text(encoding="utf-8"))
     data[yt2html.VIDEO_KEY] = {"parameters": "", "video": {"file": f"Title [{ID}].mp4", "size": 4}}
     del data[yt2html.TRANSCRIPT_KEY]
-    data[yt2html.TRANSCRIPT_MISSING_KEY] = "the video has no subtitles"
+    data[yt2html.TRANSCRIPT_KEY] = None
+    data[yt2html.NOT_SAVED_KEY] = {"transcript": {"reason": "the video has no subtitles",
+                                                  "date": "2026-11-22", "again": False}}
     data["comments"] = None
     data[yt2html.COMMENTS_MESSAGE_KEY] = "Comments are turned off."
     saved.write_text(json.dumps(data), encoding="utf-8")
     (tmp_path / f"Other name [{ID}].mp4").write_bytes(b"1234")
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
     assert "  Page:       comments turned off" in out
-    assert "  Transcript: none (the video has no subtitles)" in out
+    assert "  Transcript: none\n" in out
+    assert ("  Not saved:  transcript: the video has no subtitles, 22.11.2026 (not asked for "
+            "again)\n") in out
     assert f"  Video:      Title [{ID}].mp4, found next to the page" in out
     assert "  Next to it: no page, mp4 (not described)" in out
     (tmp_path / f"Other name [{ID}].mp4").unlink()
@@ -143,6 +148,10 @@ def test_several_files_and_the_summary(capsys, tmp_path, saved, info):
     assert len(blocks) == 3 and blocks[0].startswith("Other [")
     assert blocks[2].strip() == ("2 videos: translation pl in 1; video in 2 (1080p 1; 1 not "
                                  "described); no page for 1")
+    other[yt2html.NOT_SAVED_KEY] = {"transcript de": {"reason": "r", "again": False}}
+    (tmp_path / f"Other [{OTHER}].info.json").write_text(json.dumps(other), encoding="utf-8")
+    code, out = run(capsys, "*.info.json", "-o", str(tmp_path), "--json", "show")
+    assert out.rstrip().endswith("; something not saved in 1; no page for 1")
     # one that cannot be read: FAILED, the rest shown, code 1
     code, out = run(capsys, ID, "MISSINGVID1", "-o", str(tmp_path), "--json", "show")
     assert code == 1 and "FAILED: MISSINGVID1: no saved data for MISSINGVID1" in out
@@ -191,9 +200,9 @@ def test_other_states(capsys, tmp_path, saved):
     data[yt2html.UNAVAILABLE_KEY] = {"status": "private", "reason": "Private video"}
     data[yt2html.LIMIT_KEY] = 7
     data[yt2html.COMMENTS_CLOSED_KEY] = [{"from": "2026-11-26", "turned_off": True}]
-    data[yt2html.TRANSCRIPT_KEY]["missing"] = {
-        "pt.author": {"reason": "YouTube refused (HTTP 429)", "refused": True,
-                      "date": "2026-11-26"}}
+    data[yt2html.NOT_SAVED_KEY] = {
+        "transcript pt.author": {"reason": "YouTube refused (HTTP 429)", "date": "2026-11-26",
+                                 "again": True}}
     saved.write_text(json.dumps(data), encoding="utf-8")
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
     assert "              no longer on YouTube 26.11.2026\n" in out
@@ -216,3 +225,18 @@ def test_other_states(capsys, tmp_path, saved):
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
     assert "  Page:       comments left out, 3 chapters" in out
     assert "              possible: none" in out
+
+
+def test_data_of_0_12_3_are_shown_in_today_s_form(capsys, tmp_path, saved):
+    """The transcript's own "missing" and the reason for no transcript, as
+    0.12.3 saved them: shown in Not saved; the file is not changed."""
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    data[yt2html.TRANSCRIPT_KEY]["missing"] = {
+        "fr": {"reason": "YouTube refused to send it (HTTP 429)", "refused": True,
+               "date": "2026-11-14"}}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    before = saved.read_bytes()
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
+    assert code == 0 and saved.read_bytes() == before
+    assert "  Not saved:  transcript fr: YouTube refused to send it (HTTP 429), 14.11.2026\n" in out
+    assert f"(to try again: yt2html {ID} --json write --transcript plain,dual:fr)" in out

@@ -183,9 +183,10 @@ def test_subtitles_of_their_own_without_connection():
 
     info = {"subtitles": {"pl": caption_formats("Polish")}}
     transcript = {"language": "en", "cues": []}
+    gaps = {}
     with pytest.raises(yt2html.NoConnection):
-        yt2html.add_tracks(Offline(), info, transcript, ["pl.author"])
-    assert "missing" not in transcript
+        yt2html.add_tracks(Offline(), info, transcript, ["pl.author"], gaps)
+    assert gaps == {} and "tracks" not in transcript
 
 
 def test_whether_youtube_resolves(monkeypatch):

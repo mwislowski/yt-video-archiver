@@ -418,11 +418,11 @@ def saved(tmp_path, info):
     transcript = info[yt2html.TRANSCRIPT_KEY]
     french = {"language": "fr", "name": "French", "cues": transcript["cues"]}
     transcript["translations"] = {"fr": french}      # already there: kept, not asked for
-    transcript["missing"] = {
-        "pl": {"reason": "YouTube refused to send it (HTTP 429 Too Many Requests)",
-               "refused": True, "date": "2026-11-05"},
-        "de": {"reason": "YouTube offers no translation of this transcript into 'de'",
-               "refused": False, "date": "2026-11-05"}}
+    info[yt2html.NOT_SAVED_KEY] = {
+        "transcript pl": {"reason": "YouTube refused to send it (HTTP 429 Too Many Requests)",
+                          "date": "2026-11-05", "again": True},
+        "transcript de": {"reason": "YouTube offers no translation of this transcript into 'de'",
+                          "date": "2026-11-05", "again": False}}
     folder = tmp_path / "out"
     folder.mkdir()
     path = folder / "Title [TESTVIDEO01].info.json"

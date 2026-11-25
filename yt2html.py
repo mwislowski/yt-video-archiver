@@ -135,12 +135,10 @@ ORIGINAL_AUDIO_KEY = "yt2html_original_audio_language"
 OLANG_KEY = "yt2html_original_language_set"
 
 # The transcript: {language, name, kind, cues: [{start, text}], translations:
-# {lang: {language, name, cues, own?}}, missing: {lang: {reason, refused, date}}}
-# (missing: the translations left out; refused ones are asked for again by
-# --json write; own: {file, date} for a translation of one's own that
-# --json merge took from an SRT file, the others are YouTube's); None if the
-# video has none, absent without --transcript. All versions on the page are
-# built from the same cues.
+# {lang: {language, name, cues, own?}}} (own: {file, date} for a translation of
+# one's own that --json merge took from an SRT file, the others are YouTube's);
+# None if the video has none (the reason in NOT_SAVED_KEY), absent without
+# --transcript. All versions on the page are built from the same cues.
 TRANSCRIPT_KEY = "yt2html_transcript"
 
 # The author's info cards: [{type, title, url, image, details, message, start}];
@@ -169,7 +167,18 @@ VIDEO_KEY = "yt2html_video"
 # (position and count on the download day); None if not from a playlist.
 PLAYLIST_KEY = "yt2html_playlist"
 
-# Why the transcript is missing when TRANSCRIPT_KEY is None.
+# What the copy lacks although a command asked for it (the user, 25.11.2026:
+# one map for all of it): {key: {reason, date, again}}, the key in the words
+# of the options: "transcript" (none at all), "transcript pl" (a translation),
+# "transcript pl.author" (subtitles of their own). `again`: the same command
+# asks for it again (a refusal, a failed download), else not (YouTube does not
+# have it). The state now, without history (the runs are in UPDATES_KEY): an
+# entry goes when what it names comes. The page and --json show read it.
+NOT_SAVED_KEY = "yt2html_not_saved"
+
+# Data saved by 0.12.3 and before: why the transcript is missing, and the
+# transcript's own "missing"; read only by upgrade_saved() (transitional code:
+# notes 5.4, to be removed when no saved data have them).
 TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
 
 # What each run of --json write and --json refresh did to the saved data:
@@ -284,9 +293,11 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info, cards=not args.no_cards)
             if args.transcript:
+                gaps = {}
                 info[TRANSCRIPT_KEY] = fetch_transcript(
-                    ydl, info, source_keys(args.transcript, info, None),
+                    ydl, info, gaps, source_keys(args.transcript, info, None),
                     not_before=started + translation_wait())
+                set_gaps(info, gaps)
         return info
 
 
@@ -1619,7 +1630,63 @@ def own_shown(transcript: dict | None, spec: list | None) -> list[tuple[str, str
             if kind == "own" and code in own]
 
 
-def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
+def gap_key(source: str | None = None) -> str:
+    """The key in NOT_SAVED_KEY for the transcript itself (None) or one of its
+    sources ("pl", "pl.author")."""
+    return f"transcript {source}" if source else "transcript"
+
+
+def note_gap(gaps: dict, key: str, reason: str, again: bool) -> None:
+    """What did not come, into `gaps` (a NOT_SAVED_KEY map): why, the day,
+    and whether the same command asks for it again."""
+    gaps[key] = {"reason": reason, "date": dt.date.today().isoformat(), "again": again}
+
+
+def transcript_gaps(info: dict) -> dict:
+    """The sources of the transcript that the data lack: {"pl": entry, …}."""
+    return {key.partition(" ")[2]: entry for key, entry in (info.get(NOT_SAVED_KEY) or {}).items()
+            if key.startswith("transcript ")}
+
+
+def without_transcript_gaps(gaps: dict) -> dict:
+    """`gaps` without those of the transcript (it is downloaded again)."""
+    return {key: entry for key, entry in gaps.items() if key.partition(" ")[0] != "transcript"}
+
+
+def set_gaps(info: dict, gaps: dict) -> None:
+    """NOT_SAVED_KEY as `gaps`; none when there are none."""
+    if gaps:
+        info[NOT_SAVED_KEY] = gaps
+    else:
+        info.pop(NOT_SAVED_KEY, None)
+
+
+def upgrade_saved(info: dict) -> dict:
+    """Saved data of 0.12.3 and before in today's form: the transcript's
+    "missing" ({KEY: {reason, refused, date}}) and TRANSCRIPT_MISSING_KEY go
+    into NOT_SAVED_KEY (refused: asked for again). Transitional code (notes
+    5.4): removed once no saved data have them. Returns `info`."""
+    transcript = info.get(TRANSCRIPT_KEY)
+    old = transcript.pop("missing", None) if isinstance(transcript, dict) else None
+    gaps = {}
+    for key, entry in (old or {}).items():
+        gaps[gap_key(key)] = {"reason": entry.get("reason") or "unknown",
+                              **({"date": entry["date"]} if entry.get("date") else {}),
+                              "again": bool(entry.get("refused"))}
+    reason = info.pop(TRANSCRIPT_MISSING_KEY, None)
+    if reason and TRANSCRIPT_KEY in info and transcript is None:
+        gaps[gap_key()] = {"reason": reason, "again": False}
+    if gaps:
+        info[NOT_SAVED_KEY] = {**gaps, **(info.get(NOT_SAVED_KEY) or {})}
+    return info
+
+
+def read_saved(path: Path) -> dict:
+    """Saved data from their file, in today's form (upgrade_saved())."""
+    return upgrade_saved(json.loads(path.read_text(encoding="utf-8")))
+
+
+def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict, gaps: dict,
                      translate_to: list[str] | None = None,
                      not_before: float = 0.0) -> dict | None:
     """Download the transcript as caption cues (and its translations if asked).
@@ -1628,13 +1695,13 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     only a real browser can produce, so the same text is taken from the
     caption track the panel shows, through the URLs yt-dlp has extracted.
     What YouTube does not have or send (no captions, a translation it does
-    not offer or refuses) leaves the page without it, with the reason for
-    "About this copy"; a failed download of the transcript itself raises
+    not offer or refuses) leaves the page without it, with the reason in
+    `gaps` (NOT_SAVED_KEY) for "About this copy"; a failed download of the transcript itself raises
     TranscriptError, so that nothing is saved and the next run tries again
     (a page counts as finished once it is there).
     """
     def unavailable(reason: str) -> None:
-        info[TRANSCRIPT_MISSING_KEY] = reason
+        note_gap(gaps, gap_key(), reason, again=False)
         log(f"No transcript: {reason}.")
 
     track = choose_caption_track(info)
@@ -1662,12 +1729,12 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
                                and not original_uncertain(info))}
     translate_to = [target for target in translate_to or []   # the original itself: not
                     if base_language(key_code(target)) != base_language(lang)]
-    add_sources(ydl, info, transcript, url, translate_to, not_before)
+    add_sources(ydl, info, transcript, url, translate_to, gaps, not_before)
     return transcript
 
 
 def add_sources(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: str | None,
-                keys: list[str], not_before: float = 0.0) -> None:
+                keys: list[str], gaps: dict, not_before: float = 0.0) -> None:
     """The versions in other languages (source_keys()): translations of the
     transcript's track at `url`, and subtitles of their own; for plain and
     timed without a kind, the subtitles of their own when the translation
@@ -1675,7 +1742,7 @@ def add_sources(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: str | 
     does (the user, 25.11.2026)."""
     translations, tracks, fallbacks = split_keys(keys)
     if translations and url:
-        add_translations(ydl, info, transcript, url, translations, not_before)
+        add_translations(ydl, info, transcript, url, translations, gaps, not_before)
     for translation, fallback in fallbacks.items():
         if translation not in translations_of(transcript) and fallback not in tracks \
                 and fallback not in (transcript.get("tracks") or {}):
@@ -1683,21 +1750,22 @@ def add_sources(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: str | 
                     else "automatic subtitles")
             log(f"  Instead: {what} in '{key_code(fallback)}'.")
             tracks.append(fallback)
-    add_tracks(ydl, info, transcript, tracks)
+    add_tracks(ydl, info, transcript, tracks, gaps)
 
 
-def add_tracks(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, keys: list[str]) -> None:
+def add_tracks(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, keys: list[str],
+               gaps: dict) -> None:
     """Subtitles of their own in other languages ("pl.author", "pl.auto-generated"),
-    added to the transcript's "tracks"; what does not come is kept in
-    "missing" with the reason (YouTube has none: not asked again; a failed
-    download: asked again by --json write)."""
+    added to the transcript's "tracks"; what does not come is noted in `gaps`
+    with the reason (YouTube has none: not asked again; a failed download:
+    asked again by --json write), what comes leaves them."""
     for key in keys:
         code, kind = split_code(key)
         what = ("subtitles by the author" if kind == "author" else "automatic subtitles") \
             + f" in '{code}'"
         found = subtitles_in(info, code, kind)
         address = json3_url(found[1]) if found else None
-        reason, refused = None, False
+        reason, again = None, False
         if not address:
             reason = f"YouTube has no {what}"
         else:
@@ -1710,19 +1778,16 @@ def add_tracks(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, keys: list[s
             except Exception as error:
                 if no_connection(error):
                     raise NoConnection(failure_reason(error)) from error
-                reason, refused = refusal_reason(error), True
+                reason, again = refusal_reason(error), True
             else:
                 if cues:
                     transcript.setdefault("tracks", {})[key] = {
                         "language": found[0], "name": name, "kind": kind, "cues": cues}
-                    transcript.get("missing", {}).pop(key, None)
+                    gaps.pop(gap_key(key), None)
                     continue
                 reason = f"YouTube returned {what} empty"
         log(f"No {what}: {reason}.")
-        transcript.setdefault("missing", {})[key] = {
-            "reason": reason, "refused": refused, "date": dt.date.today().isoformat()}
-    if not transcript.get("missing"):
-        transcript.pop("missing", None)
+        note_gap(gaps, gap_key(key), reason, again)
 
 
 def json3_url(formats: list[dict]) -> str | None:
@@ -1731,10 +1796,10 @@ def json3_url(formats: list[dict]) -> str | None:
 
 
 def add_translations(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: str,
-                     targets: list[str], not_before: float = 0.0) -> None:
+                     targets: list[str], gaps: dict, not_before: float = 0.0) -> None:
     """Translations of the transcript (its track at `url`) into `targets`,
-    added to it; what does not come is kept in "missing" with the reason,
-    whether YouTube refused it (asked for again by --json write) and the day."""
+    added to it; what does not come is noted in `gaps` with the reason and
+    whether YouTube refused it (asked for again by --json write)."""
     translations = transcript.setdefault("translations", {})
     for target in targets:
         try:
@@ -1743,7 +1808,7 @@ def add_translations(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: s
                 set_own(transcript, target, translations[target])   # 25.11.2026: kept
                 translations = transcript.setdefault("translations", {})
             translations[target] = translation
-            transcript.get("missing", {}).pop(target, None)
+            gaps.pop(gap_key(target), None)
         except TranslationUnavailable as reason:
             refused = isinstance(reason, TranslationRefused)
             log(f"No translation into '{target}': {reason}.")
@@ -1751,10 +1816,7 @@ def add_translations(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: s
                 log("  The page is made without it and counts as finished; to add the "
                     "translation later: --json write (keeps the comments) or --page ovr."
                     + (TRANSLATION_HINT if "HTTP 429" in str(reason) else " Try again later."))
-            transcript.setdefault("missing", {})[target] = {
-                "reason": str(reason), "refused": refused, "date": dt.date.today().isoformat()}
-    if not transcript.get("missing"):
-        transcript.pop("missing", None)
+            note_gap(gaps, gap_key(target), str(reason), again=refused)
 
 
 # --------------------------------------------------------------------------
@@ -3865,7 +3927,7 @@ def about_transcript(info: dict, spec: list) -> str:
         return "left out"
     transcript = info[TRANSCRIPT_KEY]
     if transcript is None:
-        reason = info.get(TRANSCRIPT_MISSING_KEY)
+        reason = ((info.get(NOT_SAVED_KEY) or {}).get(gap_key()) or {}).get("reason")
         return f"none: {esc(reason)}" if reason else "none"
     kind = "auto-generated" if transcript.get("kind") == "auto" else "by the author"
     # (data saved before the check of original_uncertain() may say original)
@@ -3894,13 +3956,13 @@ def about_transcript(info: dict, spec: list) -> str:
                 f"{version} in {translated(language)}"
                 for version, language in resolved if available(transcript, language)]
     text = f"{esc(name)} ({features}); {plural(len(versions), 'version')}: {', '.join(versions)}"
-    missing = transcript.get("missing") or {}
+    missing = transcript_gaps(info)
     absent = [(version, language) for version, language in resolved
               if not available(transcript, language)]
 
     def why(language):
         entry = missing.get(language) or missing.get(split_code(language)[0])
-        return f" ({esc(missing_text(entry))})" if entry else ""
+        return f" ({esc(gap_text(entry))})" if entry else ""
 
     if absent:   # "not available: dual:fi (YouTube offers no translation …)"
         text += "; not available: " + ", ".join(f"{version}:{esc(language)}{why(language)}"
@@ -3923,9 +3985,10 @@ def format_date(iso: str) -> str:
     return dt.date.fromisoformat(iso).strftime(DATE_FORMAT)
 
 
-def missing_text(entry: dict) -> str:
-    """Why a translation was left out; a refusal with the day YouTube refused."""
-    if entry.get("refused") and entry.get("date"):
+def gap_text(entry: dict) -> str:
+    """Why something is not saved (a NOT_SAVED_KEY entry); one asked for
+    again (a refusal) with the day it was refused."""
+    if entry.get("again") and entry.get("date"):
         return f"{entry['reason']}, {format_date(entry['date'])}"
     return entry.get("reason") or "unknown"
 
@@ -4889,12 +4952,11 @@ def show_versions(transcript: dict) -> list[str]:
     return versions
 
 
-def show_transcript(info: dict) -> tuple[list[str], list[str]]:
-    """The Transcript part, and the hints for what YouTube refused."""
+def show_transcript(info: dict) -> list[str]:
+    """The Transcript part (what is not saved: show_not_saved())."""
     transcript = info.get(TRANSCRIPT_KEY)
     if not transcript:
-        reason = info.get(TRANSCRIPT_MISSING_KEY)
-        return ["none" + (f" ({reason})" if reason else "")], []
+        return ["none"]
     kind = "auto-generated" if transcript.get("kind") == "auto" else "by the author"
     name = transcript.get("name") or transcript.get("language") or "language unknown"
     lines = [f"{transcript.get('language') or '?'} ({name}, {kind}), "
@@ -4918,14 +4980,22 @@ def show_transcript(info: dict) -> tuple[list[str], list[str]]:
         lines.append("other subtitles: " + ", ".join(
             f"{track.get('language') or split_code(key)[0]} ({track.get('kind') or split_code(key)[1]})"
             for key, track in sorted(tracks.items())))
-    missing = transcript.get("missing") or {}
-    if missing:
-        lines.append("not available: " + ", ".join(
-            f"{key} ({missing_text(entry)})" for key, entry in sorted(missing.items())))
     lines.append("possible: " + (", ".join(show_versions(transcript)) or "none"))
-    hints = [f"to try again: yt2html {info.get('id')} --json write --transcript plain,"
-             + (f"plain:{key}" if "." in key else f"dual:{key}")
-             for key, entry in sorted(missing.items()) if entry.get("refused")]
+    return lines
+
+
+def show_not_saved(info: dict) -> tuple[list[str], list[str]]:
+    """The Not saved part (NOT_SAVED_KEY), and the hints for what is asked
+    for again."""
+    lines, hints = [], []
+    for key, entry in sorted((info.get(NOT_SAVED_KEY) or {}).items()):
+        day = f", {format_date(entry['date'])}" if entry.get("date") else ""
+        lines.append(f"{key}: {entry.get('reason') or 'reason unknown'}{day}"
+                     + ("" if entry.get("again") else " (not asked for again)"))
+        source = key.partition(" ")[2]
+        if entry.get("again") and source:
+            hints.append(f"to try again: yt2html {info.get('id')} --json write --transcript "
+                         f"plain," + (f"plain:{source}" if "." in source else f"dual:{source}"))
     return lines, hints
 
 
@@ -4997,17 +5067,20 @@ def show_block(info: dict, data_path: Path) -> tuple[list[str], dict]:
     size_text = f"{size / 1e6:.1f} MB" if size >= 1e6 else f"{-(-size // 1000)} kB"
     lines = [f"{info.get('title') or '(no title)'} [{info.get('id') or '?'}]  "
              f"({data_path.name}, {size_text})"]
-    transcript, hints = show_transcript(info)
+    gaps, hints = show_not_saved(info)
     files, found = show_files(info, data_path.parent)
     lines += (show_lines("Data", show_data(info)) + show_lines("Page", show_page(info))
-              + show_lines("Transcript", transcript) + show_lines("Video", show_video(info))
+              + show_lines("Transcript", show_transcript(info))
+              + show_lines("Video", show_video(info))
+              + (show_lines("Not saved", gaps) if gaps else [])
               + show_lines("Next to it", files))
     if not found["page"]:
         hints.append(f'to make the page: yt2html "{data_path.name}" --json load --transcript')
     lines += [f"  ({hint})" for hint in hints]
     record = info.get(TRANSCRIPT_KEY) or {}
     video = (info.get(VIDEO_KEY) or {}).get("video") or {}
-    found.update(transcript=bool(record.get("cues")), youtube=sorted(translations_of(record)),
+    found.update(not_saved=bool(gaps),
+                 transcript=bool(record.get("cues")), youtube=sorted(translations_of(record)),
                  own=bool(own_of(record)), fixed=bool((record.get("fixed") or {}).get("cues")),
                  quality=video.get("quality") if info.get(VIDEO_KEY) else None,
                  video=bool(video_files(data_path.parent, info.get("id"))))
@@ -5039,7 +5112,7 @@ def show_summary(found: list[dict], without: list[str]) -> str:
         parts.append(f"video in {len(videos)}" + (f" ({detail})" if detail else ""))
     else:
         parts.append("no video files")
-    for key, word in (("missing", "files missing in"),):
+    for key, word in (("not_saved", "something not saved in"), ("missing", "files missing in")):
         n = sum(1 for f in found if f[key])
         if n:
             parts.append(f"{word} {n}")
@@ -5076,7 +5149,7 @@ def show_saved(args: argparse.Namespace) -> int:
     for source in sources:
         try:
             data_path = saved_data_path(source, output_dir)
-            info = json.loads(data_path.read_text(encoding="utf-8"))
+            info = read_saved(data_path)
             lines, facts = show_block(info, data_path)
         except (OSError, ValueError) as error:
             log(f"FAILED: {source}: {getattr(error, 'strerror', None) or error}")
@@ -5634,8 +5707,9 @@ def update_data_path(source: str, output_dir: Path) -> Path | None:
 
 def missing_for_update(info: dict, args: argparse.Namespace) -> tuple[bool, list[str]]:
     """What --transcript asks for and the saved data lack: (the transcript
-    itself, the languages of the translations to fetch). Translations YouTube
-    refused are asked for again; those it does not have are not."""
+    itself, the languages of the translations to fetch). What NOT_SAVED_KEY
+    notes with `again` (YouTube refused it) is asked for again; what YouTube
+    does not have is not."""
     if not args.transcript:
         return False, []
     saved = info.get(TRANSCRIPT_KEY) or {}
@@ -5649,16 +5723,16 @@ def missing_for_update(info: dict, args: argparse.Namespace) -> tuple[bool, list
     wanted = source_keys(args.transcript, info, saved.get("language"), own)
     transcript = info[TRANSCRIPT_KEY]
     if transcript is None:
-        log(f"No transcript in the saved data ({info.get(TRANSCRIPT_MISSING_KEY) or 'none'}); "
-            "not asked for again.")
+        reason = ((info.get(NOT_SAVED_KEY) or {}).get(gap_key()) or {}).get("reason")
+        log(f"No transcript in the saved data ({reason or 'none'}); not asked for again.")
         return False, []
-    missing = transcript.get("missing") or {}
+    missing = transcript_gaps(info)
 
     def wanted_now(key):   # not in the data, and not noted as not on YouTube
         entry = missing.get(key)
         if available(transcript, key):
             return False
-        if entry and not entry.get("refused"):
+        if entry and not entry.get("again"):
             what = f"translation into '{key}'" if "." not in key else f"subtitles {key}"
             log(f"No {what} in the saved data ({entry['reason']}); not asked for again.")
             return False
@@ -5700,7 +5774,9 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
             saved = info.get(TRANSCRIPT_KEY)
             own = own_of(saved or {})
             fixed = (saved or {}).get("fixed")
-            transcript = fetch_transcript(ydl, data, targets, not_before)
+            # the transcript's notes go with it; those of this download come
+            gaps = without_transcript_gaps(info.get(NOT_SAVED_KEY) or {})
+            transcript = fetch_transcript(ydl, data, gaps, targets, not_before)
             if transcript is None and saved:
                 olang = data.get(OLANG_KEY)
                 if not olang or base_language(olang) == base_language(saved.get("language")):
@@ -5714,16 +5790,18 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                 log(f"  The saved transcript is dropped (lost: {lost}).")
             info[TRANSCRIPT_KEY] = transcript
             if transcript is None:
-                info[TRANSCRIPT_MISSING_KEY] = data.get(TRANSCRIPT_MISSING_KEY)
+                set_gaps(info, gaps)
                 return []
             keep_own_translations(transcript, own)
             keep_fixed(transcript, fixed)
-            kept = keep_youtube_translations(transcript, saved or {}, split_keys(targets)[0])
+            kept = keep_youtube_translations(transcript, saved or {}, split_keys(targets)[0], gaps)
+            set_gaps(info, gaps)
             return (["transcript"] + [f"translation {language}"
                                       for language in translations_of(transcript)
                                       if language not in kept]
                     + [f"subtitles {key}" for key in transcript.get("tracks") or {}])
         transcript = info[TRANSCRIPT_KEY]
+        gaps = dict(info.get(NOT_SAVED_KEY) or {})
         before = set(translations_of(transcript)) | set(transcript.get("tracks") or {})
         translations = split_keys(targets)[0]
         track = choose_caption_track(data)
@@ -5734,21 +5812,22 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                       "YouTube's data now")
             log(f"No translation into {', '.join(translations)}: {reason}.")
             for target in translations:
-                transcript.setdefault("missing", {})[target] = {
-                    "reason": reason, "refused": True, "date": dt.date.today().isoformat()}
+                note_gap(gaps, gap_key(target), reason, again=True)
             url = None
-        add_sources(ydl, data, transcript, url, targets, not_before)
+        add_sources(ydl, data, transcript, url, targets, gaps, not_before)
+        set_gaps(info, gaps)
         return ([f"translation {language}" for language in translations_of(transcript)
                  if language not in before]
                 + [f"subtitles {key}" for key in transcript.get("tracks") or {}
                    if key not in before])
 
 
-def keep_youtube_translations(transcript: dict, saved: dict, asked: list[str]) -> set[str]:
+def keep_youtube_translations(transcript: dict, saved: dict, asked: list[str],
+                              gaps: dict) -> set[str]:
     """--transcript ovr: a translation of YouTube's that the command asks for
     and that did not come now (refused, or no longer offered) stays as saved
     when it still fits the transcript downloaded again (the same lines at the
-    same times), instead of a note that it is missing; one that no longer fits
+    same times), instead of its note in `gaps`; one that no longer fits
     is dropped with a message. Those not asked for go, as ovr asks. Returns
     the languages kept."""
     kept = set()
@@ -5756,7 +5835,7 @@ def keep_youtube_translations(transcript: dict, saved: dict, asked: list[str]) -
     for language in asked:
         if language in translations_of(transcript) or language not in earlier:
             continue
-        reason = ((transcript.get("missing") or {}).get(language) or {}).get("reason")
+        reason = (gaps.get(gap_key(language)) or {}).get("reason")
         try:
             check_own_cues(earlier[language].get("cues") or [], transcript)
         except ValueError as problem:
@@ -5764,10 +5843,7 @@ def keep_youtube_translations(transcript: dict, saved: dict, asked: list[str]) -
                 f"one is dropped: it no longer fits the transcript ({problem}).")
             continue
         transcript.setdefault("translations", {})[language] = earlier[language]
-        missing = transcript.get("missing") or {}
-        missing.pop(language, None)
-        if not missing:
-            transcript.pop("missing", None)
+        gaps.pop(gap_key(language), None)
         kept.add(language)
         log(f"  YouTube's translation into '{language}' did not come now"
             + (f" ({reason})" if reason else "") + "; the saved one stays.")
@@ -6070,7 +6146,7 @@ def merge_own_translation(source: str, args: argparse.Namespace,
         raise ValueError(f"no saved data for {video_id} next to the file "
                          f"(looked for *[{video_id}]*.info.json in {path.parent})")
     log(f"Merging {path.name} into {data_path}")
-    info = json.loads(data_path.read_text(encoding="utf-8"))
+    info = read_saved(data_path)
     transcript = info.get(TRANSCRIPT_KEY)
     if not transcript:
         raise ValueError("the saved data have no transcript to translate (download it "
@@ -6147,7 +6223,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     updating = adding and data_path is not None
     if data_path:
         log(f"Reading {data_path}")
-        info = json.loads(data_path.read_text(encoding="utf-8"))
+        info = read_saved(data_path)
     else:
         if adding:
             found = existing_page(output_dir, video_id_from_url(source))
@@ -6215,7 +6291,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     idle = updating and not args.refresh_json and not (whole or targets) and not record
 
     saved = info.get(TRANSCRIPT_KEY) or {}
-    missing = saved.get("missing") or {}
+    missing = transcript_gaps(info)
     for version, source in (resolve_versions(args.transcript, saved)[0]
                             if args.load_json and saved else []):
         code, _ = split_code(source)

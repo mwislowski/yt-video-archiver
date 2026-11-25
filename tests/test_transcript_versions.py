@@ -274,7 +274,7 @@ def test_ovr_without_captions_now_keeps_the_saved_transcript(capsys, saved, yout
             "captions for it now. Try --transcript ovr again later.") in out
     data = json.loads(saved.read_text("utf-8"))
     assert data[yt2html.TRANSCRIPT_KEY] == before
-    assert yt2html.TRANSCRIPT_MISSING_KEY not in data
+    assert set(data[yt2html.NOT_SAVED_KEY]) == {"transcript pl", "transcript de"}  # as saved
     assert "de 0" in next(saved.parent.glob("*.html")).read_text("utf-8")
 
 
@@ -299,7 +299,10 @@ def test_ovr_with_another_olang_without_captions_drops_it_and_names_all(capsys, 
             "translation into fr; own translation de (Title [TESTVIDEO01].de.own.srt); own "
             "corrections (Title [TESTVIDEO01].en.fixed.srt); subtitles pl.author).") in out
     data = json.loads(saved.read_text("utf-8"))
-    assert data[yt2html.TRANSCRIPT_KEY] is None and data[yt2html.TRANSCRIPT_MISSING_KEY]
+    assert data[yt2html.TRANSCRIPT_KEY] is None
+    assert data[yt2html.NOT_SAVED_KEY] == {"transcript": {   # the old transcript's notes went too
+        "reason": "no captions in 'de', the original language set with --olang",
+        "date": dt.date.today().isoformat(), "again": False}}
 
 
 def test_ovr_keeps_an_asked_youtube_translation_that_did_not_come(capsys, saved, youtube):
@@ -317,7 +320,7 @@ def test_ovr_keeps_an_asked_youtube_translation_that_did_not_come(capsys, saved,
     data = json.loads(saved.read_text("utf-8"))
     transcript = data[yt2html.TRANSCRIPT_KEY]
     assert transcript["translations"]["fr"] == before
-    assert "missing" not in transcript                        # (its only note was fr's)
+    assert "transcript fr" not in data.get(yt2html.NOT_SAVED_KEY, {})
     assert "translation fr" not in data[yt2html.UPDATES_KEY][-1]["added"]
     assert "not available" not in row(next(saved.parent.glob("*.html")).read_text("utf-8"),
                                       "Transcript")
@@ -346,9 +349,9 @@ def test_ovr_drops_a_saved_youtube_translation_that_no_longer_fits(capsys, saved
     out = capsys.readouterr().out
     assert ("YouTube's translation into 'fr' did not come now, and the saved one is dropped: "
             "it no longer fits the transcript (1 line in the file,") in out
-    transcript = json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]
-    assert "fr" not in (transcript.get("translations") or {})
-    assert transcript["missing"]["fr"]["refused"]
+    data = json.loads(saved.read_text("utf-8"))
+    assert "fr" not in (data[yt2html.TRANSCRIPT_KEY].get("translations") or {})
+    assert data[yt2html.NOT_SAVED_KEY]["transcript fr"]["again"]
 
 
 def test_ovr_drops_youtube_translations_not_asked_for(capsys, saved, youtube):
@@ -419,9 +422,9 @@ def test_olang_ends_the_uncertainty():
 
 def test_olang_without_captions_in_it(fake_ydl):
     info = {**dubbed(), yt2html.OLANG_KEY: "de"}
-    assert yt2html.fetch_transcript(fake_ydl(), info) is None
-    assert info[yt2html.TRANSCRIPT_MISSING_KEY] == ("no captions in 'de', the original language "
-                                                     "set with --olang")
+    gaps = {}
+    assert yt2html.fetch_transcript(fake_ydl(), info, gaps) is None
+    assert gaps["transcript"]["reason"] == "no captions in 'de', the original language set with --olang"
 
 
 def test_olang_picks_the_main_audio():
@@ -646,8 +649,9 @@ def test_one_s_own_translation_is_not_asked_of_youtube():
 
 def test_the_author_s_subtitles_when_youtube_refuses_its_translation(fake_ydl, capsys):
     ydl = fake_ydl(fail_translations=99)
-    transcript = yt2html.fetch_transcript(ydl, with_polish(), ["pl|pl.author"])
-    assert "pl" not in transcript.get("translations", {}) and transcript["missing"]["pl"]["refused"]
+    gaps = {}
+    transcript = yt2html.fetch_transcript(ydl, with_polish(), gaps, ["pl|pl.author"])
+    assert "pl" not in transcript.get("translations", {}) and gaps["transcript pl"]["again"]
     assert list(transcript["tracks"]) == ["pl.author"]
     out = capsys.readouterr().out
     assert "  Instead: subtitles by the author in 'pl'." in out
@@ -655,14 +659,14 @@ def test_the_author_s_subtitles_when_youtube_refuses_its_translation(fake_ydl, c
     # the translation comes: the subtitles are not fetched (no request)
     yt2html.caption_cache.clear()   # (each track once per run)
     ydl = fake_ydl()
-    transcript = yt2html.fetch_transcript(ydl, with_polish(), ["pl|pl.author"])
+    transcript = yt2html.fetch_transcript(ydl, with_polish(), {}, ["pl|pl.author"])
     assert "pl" in transcript["translations"] and "tracks" not in transcript
     assert not any(url.startswith(PL_TT) for url in ydl.urls)
     # automatic subtitles of a dub when there are no author's
     yt2html.caption_cache.clear()
     ydl = fake_ydl(fail_translations=99)
     dubbed = {**with_polish(author=False, auto=True), "language": "en"}   # (two -orig tracks)
-    transcript = yt2html.fetch_transcript(ydl, dubbed, ["pl|pl.auto-generated"])
+    transcript = yt2html.fetch_transcript(ydl, dubbed, {}, ["pl|pl.auto-generated"])
     assert list(transcript["tracks"]) == ["pl.auto-generated"]
     assert "  Instead: automatic subtitles in 'pl'." in capsys.readouterr().out
 
@@ -671,7 +675,7 @@ def test_json_write_asks_for_the_translation_again_and_keeps_the_fallback(saved)
     data = json.loads(saved.read_text("utf-8"))
     transcript = data[yt2html.TRANSCRIPT_KEY]
     transcript.get("translations", {}).pop("pl", None)
-    transcript["missing"] = {"pl": {"reason": "refused", "refused": True}}
+    data[yt2html.NOT_SAVED_KEY] = {"transcript pl": {"reason": "refused", "again": True}}
     data["subtitles"] = {"pl": caption_formats("Polish", PL_TT)}
     args = yt2html.parse_args(["TESTVIDEO01", "--json", "write", "--transcript", "timed:pl"])
     # both missing: the translation, and the subtitles if it does not come
@@ -681,21 +685,22 @@ def test_json_write_asks_for_the_translation_again_and_keeps_the_fallback(saved)
                                           "cues": []}}
     assert yt2html.missing_for_update(data, args) == (False, ["pl"])
     # YouTube has no translation into pl at all: the subtitles only
-    transcript["missing"] = {"pl": {"reason": "not offered", "refused": False}}
+    data[yt2html.NOT_SAVED_KEY] = {"transcript pl": {"reason": "not offered", "again": False}}
     del transcript["tracks"]
     assert yt2html.missing_for_update(data, args) == (False, ["pl.author"])
 
 
 def test_the_author_s_subtitles_are_downloaded(fake_ydl, capsys):
     ydl = fake_ydl()
-    transcript = yt2html.fetch_transcript(ydl, with_polish(), ["pl.author", "de.author", "pl"])
+    gaps = {}
+    transcript = yt2html.fetch_transcript(ydl, with_polish(), gaps, ["pl.author", "de.author", "pl"])
     assert list(transcript["tracks"]) == ["pl.author"]
     track = transcript["tracks"]["pl.author"]
     assert (track["language"], track["name"], track["kind"]) == ("pl", "Polish", "author")
     assert any(url.startswith(PL_TT) for url in ydl.urls)
-    assert transcript["missing"]["de.author"] == {
+    assert gaps == {"transcript de.author": {
         "reason": "YouTube has no subtitles by the author in 'de'",
-        "refused": False, "date": dt.date.today().isoformat()}
+        "date": dt.date.today().isoformat(), "again": False}}
     assert "pl" in transcript["translations"]                  # and the translation as well
     out = capsys.readouterr().out
     assert "Downloading subtitles (Polish, by the author)..." in out
@@ -722,7 +727,8 @@ def test_subtitles_of_their_own_on_the_page(info):
     assert yt2html.version_source(transcript, "timed", "pl") == "pl.author"
     transcript["translations"]["pl"] = translation
     # what the data have not: named with its reason
-    transcript["missing"] = {"pl.auto-generated": {"reason": "YouTube has none", "refused": False}}
+    info[yt2html.NOT_SAVED_KEY] = {"transcript pl.auto-generated": {"reason": "YouTube has none",
+                                                                    "again": False}}
     assert row(render(info, [("plain", "pl.auto-generated")]), "Transcript").endswith(
         "not available: plain:pl.auto-generated (YouTube has none)")
     # their SRT file under their kind
@@ -740,8 +746,8 @@ def test_json_write_adds_subtitles_of_their_own(capsys, saved, youtube):
     # YouTube's data now lack them: noted, not asked for again
     assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                          "--transcript", "timed:pl.author"]) == 0
-    after = json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]
-    assert after["missing"]["pl.author"]["reason"] == "YouTube has no subtitles by the author in 'pl'"
+    after = json.loads(saved.read_text("utf-8"))[yt2html.NOT_SAVED_KEY]
+    assert after["transcript pl.author"]["reason"] == "YouTube has no subtitles by the author in 'pl'"
     capsys.readouterr()
     assert yt2html.missing_for_update(json.loads(saved.read_text("utf-8")), args) == (False, [])
     assert ("No subtitles pl.author in the saved data (YouTube has no subtitles by the author "

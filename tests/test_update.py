@@ -41,9 +41,11 @@ def test_a_refused_translation_is_added(capsys, saved, youtube):
     data = json.loads(saved.read_text("utf-8"))
     transcript = data[yt2html.TRANSCRIPT_KEY]
     assert list(transcript["translations"]) == ["fr", "pl"]
-    assert list(transcript["missing"]) == ["de", "it"]
-    assert transcript["missing"]["it"]["reason"] == ("YouTube offers no translation of this "
-                                                     "transcript into 'it' (available: fr, pl)")
+    gaps = data[yt2html.NOT_SAVED_KEY]
+    assert list(gaps) == ["transcript de", "transcript it"]             # pl came: its note went
+    assert gaps["transcript it"] == {"reason": "YouTube offers no translation of this transcript "
+                                               "into 'it' (available: fr, pl)",
+                                     "date": dt.date.today().isoformat(), "again": False}
     record = dict(data[yt2html.UPDATES_KEY][0])
     assert re.fullmatch(r"\d\d:\d\d", record.pop("time"))
     assert record == {"date": dt.date.today().isoformat(), "yt2html": yt2html.__version__,
@@ -71,7 +73,7 @@ def test_refused_again(capsys, saved, youtube):
     assert code == 0                    # decision C: the page counts as finished
     assert "to add the translation later: --json write (keeps the comments)" in out
     data = json.loads(saved.read_text("utf-8"))
-    assert data[yt2html.TRANSCRIPT_KEY]["missing"]["pl"]["date"] == dt.date.today().isoformat()
+    assert data[yt2html.NOT_SAVED_KEY]["transcript pl"]["date"] == dt.date.today().isoformat()
     assert yt2html.UPDATES_KEY not in data                      # nothing added
     html = page(saved.parent).read_text("utf-8")
     assert (f"not available: dual:pl (YouTube refused to send it (HTTP 429 Too Many "
@@ -107,7 +109,8 @@ def test_the_whole_transcript_when_the_data_have_none(capsys, saved, youtube):
     assert data[yt2html.UPDATES_KEY][0]["added"] == ["transcript", "translation pl"]
     # no captions then: noted, and not asked for again
     data[yt2html.TRANSCRIPT_KEY] = None
-    data[yt2html.TRANSCRIPT_MISSING_KEY] = "the video has no captions"
+    data[yt2html.NOT_SAVED_KEY] = {"transcript": {"reason": "the video has no captions",
+                                                  "again": False}}
     saved.write_text(json.dumps(data), encoding="utf-8")
     code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                     "--transcript")
@@ -124,7 +127,8 @@ def test_a_video_without_captions_now(capsys, saved, youtube, monkeypatch):
                "--transcript")[0] == 0
     data = json.loads(saved.read_text("utf-8"))
     assert data[yt2html.TRANSCRIPT_KEY] is None and yt2html.UPDATES_KEY not in data
-    assert data[yt2html.TRANSCRIPT_MISSING_KEY] == "the video has no captions"
+    assert data[yt2html.NOT_SAVED_KEY]["transcript"]["reason"] == "the video has no captions"
+    assert "transcript pl" not in data[yt2html.NOT_SAVED_KEY]   # the old transcript's notes went
 
 
 def test_the_transcripts_track_gone(capsys, saved, youtube, monkeypatch):
@@ -135,8 +139,9 @@ def test_the_transcripts_track_gone(capsys, saved, youtube, monkeypatch):
     assert code == 0
     reason = "the transcript's captions (English) are not in YouTube's data now"
     assert f"No translation into pl, it: {reason}." in out
-    missing = json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]["missing"]
-    assert missing["it"] == {"reason": reason, "refused": True, "date": dt.date.today().isoformat()}
+    gaps = json.loads(saved.read_text("utf-8"))[yt2html.NOT_SAVED_KEY]
+    assert gaps["transcript it"] == {"reason": reason, "date": dt.date.today().isoformat(),
+                                     "again": True}
 
 
 def test_the_page_shows_fewer_comments_the_data_keep_all(capsys, saved, youtube):
@@ -235,10 +240,12 @@ def test_update_with_a_list_file(capsys, saved, youtube, tmp_path):
 
 
 def test_a_translation_that_comes_leaves_no_note(fake_ydl):
-    transcript = {"language": "en", "name": "English",
-                  "missing": {"pl": {"reason": "r", "refused": True, "date": "2026-11-05"}}}
-    yt2html.add_translations(fake_ydl(), {}, transcript, caption_formats("x")[0]["url"], ["pl"])
-    assert "missing" not in transcript and list(transcript["translations"]) == ["pl"]
+    transcript = {"language": "en", "name": "English"}
+    gaps = {"transcript pl": {"reason": "r", "date": "2026-11-05", "again": True},
+            "audio de": {"reason": "r", "again": True}}
+    yt2html.add_translations(fake_ydl(), {}, transcript, caption_formats("x")[0]["url"], ["pl"],
+                             gaps)
+    assert list(gaps) == ["audio de"] and list(transcript["translations"]) == ["pl"]
 
 
 def test_update_helpers():
@@ -264,8 +271,9 @@ def test_update_helpers():
     assert record["added"] == ["translation pl", "video"] and record["date"] == today
     yt2html.note_update(info, {}, [], refreshed=True)          # another run, the same day
     assert [("refreshed" in u) for u in info[yt2html.UPDATES_KEY]] == [False, True]
-    assert yt2html.missing_text({"reason": "r", "refused": False, "date": "2026-11-20"}) == "r"
-    assert yt2html.missing_text({"reason": "r", "refused": True, "date": "2026-11-20"}) == "r, 20.11.2026"
+    assert yt2html.gap_text({"reason": "r", "again": False, "date": "2026-11-20"}) == "r"
+    assert yt2html.gap_text({"reason": "r", "again": True, "date": "2026-11-20"}) == "r, 20.11.2026"
+    assert yt2html.gap_text({"again": True}) == "unknown"
 
 
 # --json refresh ----------------------------------------------------------------------
@@ -582,3 +590,134 @@ def test_the_whole_transcript_uses_the_saved_original(capsys, saved, youtube, mo
     assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                "--transcript")[0] == 0
     assert seen[0] == ("pl", {"language": "en", "kind": "asr"})
+
+
+# --------------------------------------------------------------------------
+# What the copy lacks although a command asked for it (NOT_SAVED_KEY), and
+# the saved data of 0.12.3 and before (upgrade_saved(): transitional code)
+# --------------------------------------------------------------------------
+
+OLD_MISSING = {
+    "pl": {"reason": "YouTube refused to send it (HTTP 429 Too Many Requests)", "refused": True,
+           "date": "2026-11-05"},
+    "de.author": {"reason": "YouTube has no subtitles by the author in 'de'", "refused": False}}
+
+
+def test_upgrade_of_data_saved_by_0_12_3():
+    info = {yt2html.TRANSCRIPT_KEY: {"language": "en", "missing": dict(OLD_MISSING)},
+            yt2html.TRANSCRIPT_MISSING_KEY: "an old reason, from before the transcript came"}
+    assert yt2html.upgrade_saved(info) is info
+    assert info == {yt2html.TRANSCRIPT_KEY: {"language": "en"}, yt2html.NOT_SAVED_KEY: {
+        "transcript pl": {"reason": "YouTube refused to send it (HTTP 429 Too Many Requests)",
+                          "date": "2026-11-05", "again": True},
+        "transcript de.author": {"reason": "YouTube has no subtitles by the author in 'de'",
+                                 "again": False}}}
+    assert yt2html.upgrade_saved(json.loads(json.dumps(info))) == info      # once is enough
+    # no transcript: its reason, not asked for again; a note there already wins
+    info = {yt2html.TRANSCRIPT_KEY: None, yt2html.TRANSCRIPT_MISSING_KEY: "no captions",
+            yt2html.NOT_SAVED_KEY: {"audio de": {"reason": "no connection", "again": True}}}
+    assert yt2html.upgrade_saved(info)[yt2html.NOT_SAVED_KEY] == {
+        "transcript": {"reason": "no captions", "again": False},
+        "audio de": {"reason": "no connection", "again": True}}
+    assert yt2html.TRANSCRIPT_MISSING_KEY not in info
+    # the same note in both forms: today's wins
+    info = {yt2html.TRANSCRIPT_KEY: {"missing": {"pl": {"reason": "old", "refused": True}}},
+            yt2html.NOT_SAVED_KEY: {"transcript pl": {"reason": "new", "again": False}}}
+    assert yt2html.upgrade_saved(info)[yt2html.NOT_SAVED_KEY] == {
+        "transcript pl": {"reason": "new", "again": False}}
+    # without --transcript, or a "missing" left empty: nothing to note
+    assert yt2html.upgrade_saved({yt2html.TRANSCRIPT_MISSING_KEY: "x"}) == {}
+    assert yt2html.upgrade_saved({yt2html.TRANSCRIPT_KEY: {"missing": {}}}) == {
+        yt2html.TRANSCRIPT_KEY: {}}
+
+
+def test_json_write_saves_old_data_in_today_s_form(capsys, saved, youtube):
+    data = json.loads(saved.read_text("utf-8"))
+    del data[yt2html.NOT_SAVED_KEY]
+    data[yt2html.TRANSCRIPT_KEY]["missing"] = {
+        "pl": {"reason": "refused", "refused": True, "date": "2026-11-05"},
+        "de": {"reason": "not offered", "refused": False, "date": "2026-11-05"}}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                    "--transcript", "dual:pl,dual:de")
+    assert code == 0
+    assert "No translation into 'de' in the saved data (not offered); not asked for again." in out
+    data = json.loads(saved.read_text("utf-8"))
+    assert "missing" not in data[yt2html.TRANSCRIPT_KEY] and "pl" in translations(data)
+    assert data[yt2html.NOT_SAVED_KEY] == {
+        "transcript de": {"reason": "not offered", "date": "2026-11-05", "again": False}}
+
+
+def translations(data):
+    return data[yt2html.TRANSCRIPT_KEY].get("translations") or {}
+
+
+def test_ovr_drops_the_transcript_s_notes_and_keeps_the_others(capsys, saved, youtube):
+    """--transcript ovr: the notes of the transcript go with it (those of this
+    download come), what the copy lacks besides stays."""
+    data = json.loads(saved.read_text("utf-8"))
+    data[yt2html.NOT_SAVED_KEY]["audio de"] = {"reason": "no connection", "again": True}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                  "--transcript", "plain,dual:it,ovr")
+    assert code == 0
+    gaps = json.loads(saved.read_text("utf-8"))[yt2html.NOT_SAVED_KEY]
+    assert list(gaps) == ["audio de", "transcript it"]
+    assert gaps["transcript it"]["again"] is False
+
+
+def test_a_translation_that_comes_now_takes_its_note_away(capsys, saved, youtube):
+    code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                  "--transcript", "dual:pl")
+    assert code == 0
+    data = json.loads(saved.read_text("utf-8"))
+    assert "pl" in translations(data) and list(data[yt2html.NOT_SAVED_KEY]) == ["transcript de"]
+    # the last note gone: no map at all
+    data[yt2html.NOT_SAVED_KEY]["transcript de"]["again"] = True
+    data[yt2html.TRANSLATIONS_KEY]["de"] = "German"                 # offered now
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+               "--transcript", "dual:de")[0] == 0
+    data = json.loads(saved.read_text("utf-8"))
+    assert "de" in translations(data) and yt2html.NOT_SAVED_KEY not in data
+
+
+def test_only_the_transcript_s_notes_hold_back_its_versions(saved):
+    """A note on something else in the same language (an audio track) does
+    not stop a translation from being asked for."""
+    data = json.loads(saved.read_text("utf-8"))
+    data[yt2html.NOT_SAVED_KEY] = {"audio pl": {"reason": "no such track", "again": False}}
+    data[yt2html.TRANSCRIPT_KEY]["translations"] = {}
+    args = yt2html.parse_args(["TESTVIDEO01", "--json", "write", "--transcript", "dual:pl"])
+    assert yt2html.missing_for_update(data, args) == (False, ["pl"])
+    assert yt2html.transcript_gaps(data) == {}
+
+
+def test_subtitles_that_come_take_their_note_away(fake_ydl):
+    info = {"subtitles": {"pl": caption_formats("Polish")}}
+    gaps = {"transcript pl.author": {"reason": "refused", "again": True}}
+    transcript = {"language": "en", "cues": []}
+    class Refusing(fake_ydl):
+        def urlopen(self, url):
+            raise OSError("HTTP Error 429: Too Many Requests")
+
+    yt2html.add_tracks(Refusing(), info, transcript, ["pl.author"], gaps)   # asked again later
+    assert "tracks" not in transcript and gaps["transcript pl.author"]["again"] is True
+    yt2html.caption_cache.clear()
+    yt2html.add_tracks(fake_ydl(), info, transcript, ["pl.author"], gaps)
+    assert list(transcript["tracks"]) == ["pl.author"] and gaps == {}
+
+
+def test_json_merge_saves_old_data_in_today_s_form(capsys, saved, tmp_path):
+    data = json.loads(saved.read_text("utf-8"))
+    del data[yt2html.NOT_SAVED_KEY]
+    data[yt2html.TRANSCRIPT_KEY]["missing"] = {"de": {"reason": "r", "refused": True}}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    srt = saved.parent / "Title [TESTVIDEO01].de.own.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHallo\n\n2\n00:00:06,000 --> "
+                   "00:00:07,000\nZeilen\n\n3\n00:02:00,000 --> 00:02:01,000\nMusik\n",
+                   encoding="utf-8")
+    assert run(capsys, "--json", "merge", str(srt), "-o", str(saved.parent))[0] == 0
+    data = json.loads(saved.read_text("utf-8"))
+    assert "missing" not in data[yt2html.TRANSCRIPT_KEY] and "de" in data[yt2html.TRANSCRIPT_KEY]["own"]
+    assert data[yt2html.NOT_SAVED_KEY] == {"transcript de": {"reason": "r", "again": True}}

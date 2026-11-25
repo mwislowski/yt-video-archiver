@@ -131,11 +131,16 @@ def test_fetch_info_keeps_the_download_settings(monkeypatch, info):
     # --transcript dual: translations a random 70-100 s after fetching started
     asked = []
     monkeypatch.setattr(yt2html, "fetch_transcript",
-                        lambda ydl, i, languages, not_before: asked.append((languages, not_before)))
+                        lambda ydl, i, gaps, languages, not_before: asked.append((languages, not_before)))
     monkeypatch.setattr(yt2html.time, "monotonic", lambda: 1000.0)
     monkeypatch.setattr(yt2html.random, "uniform", lambda a, b: a + b)
-    yt2html.fetch_info("u", yt2html.parse_args(["u", "--transcript", "dual:pl"]))
-    assert asked == [(["pl"], 1170.0)]
+    fetched = yt2html.fetch_info("u", yt2html.parse_args(["u", "--transcript", "dual:pl"]))
+    assert asked == [(["pl"], 1170.0)] and yt2html.NOT_SAVED_KEY not in fetched
+    # what did not come is in the data
+    monkeypatch.setattr(yt2html, "fetch_transcript", lambda ydl, i, gaps, languages, not_before:
+                        yt2html.note_gap(gaps, "transcript pl", "refused", again=True))
+    fetched = yt2html.fetch_info("u", yt2html.parse_args(["u", "--transcript", "dual:pl"]))
+    assert fetched[yt2html.NOT_SAVED_KEY]["transcript pl"]["reason"] == "refused"
 
 
 # --------------------------------------------------------------------------
@@ -397,7 +402,8 @@ def test_transcript_left_out_or_missing(info):
     del info[yt2html.TRANSCRIPT_KEY]
     assert row(render(info), "Transcript") == "left out"
     info[yt2html.TRANSCRIPT_KEY] = None
-    info[yt2html.TRANSCRIPT_MISSING_KEY] = "could not be downloaded (HTTP Error 429)"
+    info[yt2html.NOT_SAVED_KEY] = {"transcript": {"reason": "could not be downloaded (HTTP Error 429)",
+                                                  "date": "2026-11-05", "again": False}}
     assert row(render(info), "Transcript") == "none: could not be downloaded (HTTP Error 429)"
 
 
@@ -428,15 +434,15 @@ def test_author_subtitles_of_an_unknown_original_language(info):
 
 
 def test_fetch_transcript_keeps_the_reason_and_the_original_language(fake_ydl):
-    info = {}
-    assert yt2html.fetch_transcript(fake_ydl(), info) is None
-    assert info[yt2html.TRANSCRIPT_MISSING_KEY] == "the video has no captions"
+    gaps = {}
+    assert yt2html.fetch_transcript(fake_ydl(), {}, gaps) is None
+    assert gaps["transcript"]["reason"] == "the video has no captions"
     english = {"automatic_captions": {"en-orig": caption_formats("English (Original)")}}
-    assert yt2html.fetch_transcript(fake_ydl(), english)["original"] is True
+    assert yt2html.fetch_transcript(fake_ydl(), english, {})["original"] is True
     german = {"subtitles": {"de": caption_formats("German")}}  # original language unknown
-    assert yt2html.fetch_transcript(fake_ydl(), german)["original"] is False
+    assert yt2html.fetch_transcript(fake_ydl(), german, {})["original"] is False
     other = {"subtitles": {"de": caption_formats("German")}, "language": "en"}
-    assert yt2html.fetch_transcript(fake_ydl(), other)["original"] is False
+    assert yt2html.fetch_transcript(fake_ydl(), other, {})["original"] is False
 
 
 # --------------------------------------------------------------------------

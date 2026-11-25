@@ -142,13 +142,13 @@ def english_info():
 
 class TestFetching:
     def test_transcript(self, fake_ydl):
-        transcript = yt2html.fetch_transcript(fake_ydl(), english_info())
+        transcript = yt2html.fetch_transcript(fake_ydl(), english_info(), {})
         assert transcript["name"] == "English" and transcript["kind"] == "auto"
         assert len(transcript["cues"]) == 3
 
     def test_two_translations_keep_timing(self, fake_ydl):
         ydl = fake_ydl()
-        transcript = yt2html.fetch_transcript(ydl, english_info(), ["pl", "de"])
+        transcript = yt2html.fetch_transcript(ydl, english_info(), {}, ["pl", "de"])
         assert set(transcript["translations"]) == {"pl", "de"}
         assert any("tlang=pl" in url for url in ydl.urls)
         texts = yt2html.align_translation(transcript["cues"], transcript["translations"]["pl"]["cues"])
@@ -157,11 +157,12 @@ class TestFetching:
     def test_refused_translation_is_left_out_with_a_note(self, fake_ydl, capsys):
         # asked once, not retried: the page is made without it (it counts as finished)
         ydl = fake_ydl(fail_translations=1)
-        transcript = yt2html.fetch_transcript(ydl, english_info(), ["pl", "de"])
+        gaps = {}
+        transcript = yt2html.fetch_transcript(ydl, english_info(), gaps, ["pl", "de"])
         assert set(transcript["translations"]) == {"de"}
-        assert transcript["missing"] == {
-            "pl": {"reason": "YouTube refused to send it (HTTP 429 Too Many Requests)",
-                   "refused": True, "date": dt.date.today().isoformat()}}
+        assert gaps == {
+            "transcript pl": {"reason": "YouTube refused to send it (HTTP 429 Too Many Requests)",
+                              "date": dt.date.today().isoformat(), "again": True}}
         assert sum("tlang=pl" in url for url in ydl.urls) == 1
         out = capsys.readouterr().out
         assert ("No translation into 'pl': YouTube refused to send it (HTTP 429 Too Many "
@@ -176,16 +177,17 @@ class TestFetching:
                 if "tlang" in url:
                     raise OSError("ERROR: [youtube] X: offline\nmore")
                 return super().urlopen(url)
-        transcript = yt2html.fetch_transcript(Broken(), english_info(), ["pl"])
-        assert transcript["missing"]["pl"]["reason"] == "the download failed (offline)"
-        assert transcript["missing"]["pl"]["refused"] is True
+        gaps = {}
+        yt2html.fetch_transcript(Broken(), english_info(), gaps, ["pl"])
+        assert gaps["transcript pl"]["reason"] == "the download failed (offline)"
+        assert gaps["transcript pl"]["again"] is True
 
     def test_waits_for_the_first_translation_only(self, fake_ydl, monkeypatch, capsys):
         monkeypatch.setattr(yt2html.time, "monotonic", lambda: 100.0)
-        yt2html.fetch_transcript(fake_ydl(), english_info(), ["pl", "de"], not_before=180.0)
+        yt2html.fetch_transcript(fake_ydl(), english_info(), {}, ["pl", "de"], not_before=180.0)
         out = capsys.readouterr().out
         assert out.count("Waiting 80 s (YouTube refuses translations requested too soon)") == 2
-        yt2html.fetch_transcript(fake_ydl(), english_info(), ["pl", "de"], not_before=180.0)
+        yt2html.fetch_transcript(fake_ydl(), english_info(), {}, ["pl", "de"], not_before=180.0)
         assert "Waiting" not in capsys.readouterr().out      # downloaded already: no wait
 
     def test_wait_is_random_within_the_range(self, monkeypatch):
@@ -198,24 +200,28 @@ class TestFetching:
     ])
     def test_translation_not_there(self, fake_ydl, target, kwargs, message, capsys):
         # what YouTube does not have: the transcript without it, with the reason
-        transcript = yt2html.fetch_transcript(fake_ydl(**kwargs), english_info(), [target, "de"])
+        gaps = {}
+        transcript = yt2html.fetch_transcript(fake_ydl(**kwargs), english_info(), gaps,
+                                              [target, "de"])
         assert target not in transcript["translations"]
         assert ("de" in transcript["translations"]) is not bool(kwargs)   # the others still come
-        assert message in transcript["missing"][target]["reason"]
-        assert transcript["missing"][target]["refused"] is False
+        assert message in gaps[f"transcript {target}"]["reason"]
+        assert gaps[f"transcript {target}"]["again"] is False
         out = capsys.readouterr().out
         assert f"No translation into '{target}': " in out and "--page ovr" not in out
 
     def test_no_translation_into_the_original_itself(self, fake_ydl, capsys):
         # plain:en of an English video is the original: nothing to ask, nothing missing
-        transcript = yt2html.fetch_transcript(fake_ydl(), english_info(), ["en-GB", "de"])
-        assert list(transcript["translations"]) == ["de"] and "missing" not in transcript
+        gaps = {}
+        transcript = yt2html.fetch_transcript(fake_ydl(), english_info(), gaps, ["en-GB", "de"])
+        assert list(transcript["translations"]) == ["de"] and gaps == {}
         assert "en-GB" not in capsys.readouterr().out
 
     def test_no_transcript(self, fake_ydl):
-        info = {}
-        assert yt2html.fetch_transcript(fake_ydl(), info, ["pl"]) is None   # a note, no error
-        assert info[yt2html.TRANSCRIPT_MISSING_KEY] == "the video has no captions"
+        gaps = {}
+        assert yt2html.fetch_transcript(fake_ydl(), {}, gaps, ["pl"]) is None   # a note, no error
+        assert gaps == {"transcript": {"reason": "the video has no captions",
+                                       "date": dt.date.today().isoformat(), "again": False}}
 
     def test_failed_download_stops(self, fake_ydl):
         class Broken(fake_ydl):
@@ -223,7 +229,7 @@ class TestFetching:
                 raise OSError("offline")
         # may pass: nothing saved, so the next run tries again
         with pytest.raises(yt2html.TranscriptError, match=r"could not download the transcript \(offline\); nothing was saved"):
-            yt2html.fetch_transcript(Broken(), english_info())
+            yt2html.fetch_transcript(Broken(), english_info(), {})
 
 
 class TestSpec:
@@ -451,10 +457,10 @@ class TestOriginalUncertain:
 
     def test_the_transcript_is_not_called_original(self):
         info = without_audio_tracks()
-        transcript = yt2html.fetch_transcript(FakeYDL(), info)
+        transcript = yt2html.fetch_transcript(FakeYDL(), info, {})
         assert transcript["language"] == "en" and transcript["original"] is False
         info[yt2html.ORIGINAL_AUDIO_KEY] = "pl"
-        transcript = yt2html.fetch_transcript(FakeYDL(), info)
+        transcript = yt2html.fetch_transcript(FakeYDL(), info, {})
         assert transcript["language"] == "pl" and transcript["original"] is True
 
     def test_on_the_page(self, info):

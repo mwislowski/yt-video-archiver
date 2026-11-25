@@ -288,16 +288,17 @@ Kurs [Un9FT291lsU]  (Kurs [Un9FT291lsU].info.json, 4.2 MB)
               translations: de (own, 23.11.2026), en (YouTube)
               corrections: Kurs [Un9FT291lsU].pl.fixed.srt (25.11.2026)
               other subtitles: en (auto-generated)
-              not available: fr (YouTube refused to send it (HTTP 429), 14.11.2026)
               possible: plain, timed, dual:de, dual:en, plain:en.auto-generated
   Video:      1080p av1 + pl aac, 22.11.2026 (--video audio:en)
               extra audio: en (auto-dubbed)
+  Not saved:  transcript fr: YouTube refused to send it (HTTP 429), 14.11.2026
   Next to it: page, mp4 (described), en.auto-dubbed.m4a, 2 SRTs: pl (auto-generated), en (translated)
   (to try again: yt2html Un9FT291lsU --json write --transcript plain,dual:fr)
 ```
 
 - **What it takes:** the sources of `--json load` (video ids, names, `.info.json` files, patterns such as `"*.info.json"`), or `--index FILE`: the videos of the list, its playlists as its index page keeps them (a playlist the index does not keep is left out, with a note). For several videos a last line sums them up: `12 videos: translation en in 9, own translations in 2; video in 12 (720p 8, 1080p 2, 480p 2; 1 not described); no page for 1` (with `--index`, also the videos of the list without saved data).
 - **`possible`:** the `--transcript` versions `--json load` can show from the data, one for each source: `dual:CODE` for a translation (`dual:CODE.translated` for YouTube's when your own is there too; `plain:` and `timed:` take the same), `plain:CODE.KIND` for subtitles of their own.
+- **`Not saved`** (only when there is something): what a command asked for and the copy lacks, with the reason and the day: a translation or subtitles YouTube refused (asked for again by the same command) or does not have (`(not asked for again)`), no captions at all (`transcript: the video has no captions`).
 - **`Next to it`:** found by the id in square brackets and the ending, as the page finds them. A video file is `described` when the data describe it (the same size): the *Video file* row and the yellow marks in *Video formats* show its quality; `not described` when they do not (downloaded without saved data, or replaced). `missing` names files the data describe that are gone.
 - **Hints** in brackets: the command that asks again for what YouTube refused, and the one that makes a missing page.
 - **Options:** `-o` and `--index` only; `--page`, `--transcript`, `--video`, `--video-formats`, `--olang` and `--take` are errors. A source without readable data is `FAILED` (exit code 1); the others are shown.
