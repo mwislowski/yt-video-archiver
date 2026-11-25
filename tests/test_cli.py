@@ -236,7 +236,7 @@ def test_load_json_takes_no_playlist_ids(capsys, tmp_path, monkeypatch):
 @pytest.mark.parametrize("options, message", [
     (["--json", "load", "--json", "write"], "--json is given more than once\n"),
     (["--json"], "argument --json: expected one argument"),
-    (["--json", "update"], "'update' is not a parameter (use write, refresh, load or merge)"),
+    (["--json", "update"], "'update' is not a parameter (use write, refresh, load, merge or show)"),
     (["--json", "merge", "--video"], "--json merge only merges SRT files into the saved data "
      "and makes no page, so it cannot be used with --video"),
     (["--json", "merge", "--page", "ovr", "--index", "list.txt"], "so it cannot be used with "

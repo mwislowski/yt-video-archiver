@@ -388,6 +388,35 @@ def videos_to_download(listing: ListFile, run: core.Run) -> list[tuple[str, str 
     return found
 
 
+def saved_list_videos(args: argparse.Namespace) -> tuple[list[str], list[str]]:
+    """--json show --index FILE: the ids of the list's YouTube videos, in its
+    order, each once: its video lines and the videos of its playlists as the
+    index page keeps them (nothing is read from YouTube); and notes for the
+    playlists it does not keep."""
+    kept = kept_playlists(index_path(args.index, Path(args.output_dir)))
+    seen, found, notes = set(), [], []
+    for item in args.list.items():
+        if item.kind == "video":
+            ids = [item.ref]
+        elif item.kind == "playlist" and (kept.get(item.ref) or {}).get("entries") is not None:
+            ids = kept[item.ref]["entries"]
+            when = kept[item.ref].get("read")
+            notes.append(f"Playlist {item.ref}: the videos as the index keeps them"
+                         + (f" (read {when_text(when)})" if when else "") + ".")
+        elif item.kind == "playlist":
+            notes.append(f"Playlist {item.ref}: not in the index page, and --json show reads "
+                         f"nothing from YouTube; its videos are left out (make the index first: "
+                         f"yt2html --index {args.index}).")
+            continue
+        else:
+            continue
+        for video_id in ids:
+            if video_id not in seen:
+                seen.add(video_id)
+                found.append(video_id)
+    return found, notes
+
+
 # --------------------------------------------------------------------------
 # The structure of the index: chapters, rows, notes
 # --------------------------------------------------------------------------

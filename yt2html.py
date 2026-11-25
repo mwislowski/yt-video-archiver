@@ -36,7 +36,7 @@ import time
 import urllib.parse
 import urllib.request
 import zlib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -3679,6 +3679,17 @@ def format_transcript_spec(spec: list[tuple[str, str | None]]) -> str:
                     for version, language in spec)
 
 
+def video_parameters(info: dict) -> str:
+    """The --video parameters that shaped the files of the data, as they
+    would be given today: defaults, "ovr" (how, not what) and, from data
+    saved before --transcript srt, "again" and the sub: items left out."""
+    return ",".join(item.strip() for item in
+                    ((info.get(VIDEO_KEY) or {}).get("parameters") or "").split(",")
+                    if item.strip() and item.strip() not in ("ovr", "again",
+                                                             f"{DEFAULT_MAX_HEIGHT}p")
+                    and not item.strip().startswith("sub:"))
+
+
 def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
                   no_avatars: bool) -> str:
     """The command that makes an equivalent copy today: the settings that
@@ -3690,11 +3701,8 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
     parts = ["yt2html", video_id if video_id and not video_id.startswith("-")
              else f"{YOUTUBE}/watch?v={video_id}"]
     if VIDEO_KEY in info:   # the files are part of the copy; "ovr" is not (how, not what)
-        # (data saved before --transcript srt may name "again" and sub: items)
-        kept = [item.strip() for item in info[VIDEO_KEY].get("parameters", "").split(",")
-                if item.strip() and item.strip() not in ("ovr", "again", f"{DEFAULT_MAX_HEIGHT}p")
-                and not item.strip().startswith("sub:")]
-        parts += ["--video"] + ([",".join(kept)] if kept else [])
+        kept = video_parameters(info)
+        parts += ["--video"] + ([kept] if kept else [])
     # --page: what differs from its defaults; ovr is not part of the copy (how, not what)
     page = []
     if "comments" not in info:
@@ -4738,6 +4746,301 @@ def list_formats(args: argparse.Namespace) -> int:
                 "more formats than listed.")
     if left:
         log(take_note(args, left))
+    return 1 if failed else 0
+
+
+# --json show (the user's decisions, 25.11.2026): what the saved data hold,
+# by the four options, with the files next to them; read only, without YouTube.
+
+SRT_KIND = re.compile(r"\.([A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)\."
+                      r"(author|auto-generated|translated|own|fixed)\.srt$", re.IGNORECASE)
+SHOW_INDENT = 14   # "  Next to it: " and the lines under it
+
+
+def show_lines(label: str, lines: list[str]) -> list[str]:
+    """One part of a video's block: the label, then its lines under each other."""
+    lines = lines or ["none"]
+    head = f"  {label + ':':<{SHOW_INDENT - 2}}"
+    return [head + lines[0]] + [" " * SHOW_INDENT + line for line in lines[1:]]
+
+
+def show_data(info: dict) -> list[str]:
+    """The Data part: the download and the later runs."""
+    epoch = info.get("epoch")
+    when = (date_time(dt.datetime.fromtimestamp(epoch)) if epoch else
+            format_date(info[ARCHIVED_KEY]) if info.get(ARCHIVED_KEY) else "date unknown")
+    version = (info.get(DOWNLOAD_KEY) or {}).get("yt2html")
+    lines = [f"downloaded {when}" + (f" (yt2html {version})" if version else "")]
+    for update in info.get(UPDATES_KEY) or []:
+        event = ("no longer on YouTube" if update.get("unavailable") else
+                 "refreshed" if update.get("refreshed") else "updated")
+        done = list(update.get("added") or [])
+        comments = update.get("comments") or {}
+        done += [plural(comments[key], word) + after for key, word, after in
+                 (("new", "new comment", ""), ("gone", "comment", " gone"),
+                  ("back", "comment", " back")) if comments.get(key)]
+        lines.append(f"{event} {format_date(update['date'])}"
+                     + (f" ({', '.join(done)})" if done else ""))
+    playlist = info.get(PLAYLIST_KEY)
+    if playlist:
+        lines.append(f"playlist: video {playlist.get('position') or '?'} of "
+                     f"{playlist.get('count') or '?'} in "
+                     f"{playlist.get('title') or playlist.get('id') or '?'}")
+    unavailable = info.get(UNAVAILABLE_KEY)
+    if unavailable:
+        lines.append(f"no longer on YouTube: {unavailable.get('reason') or 'reason unknown'}")
+    return lines
+
+
+def show_page(info: dict) -> list[str]:
+    """The Page part (--page): the comments, chapters and info cards."""
+    status = comment_status(info)
+    if status == "not-downloaded":
+        comments = "comments left out"
+    elif status in ("turned-off", "unavailable"):
+        comments = f"comments {status.replace('-', ' ')}"
+    else:
+        saved = info["comments"]
+        count_text, _ = youtube_comment_count(info)
+        comments = f"{plural(len(saved), 'comment')}" + (f" of {count_text}" if count_text else "")
+        comments += {"complete": "", "interrupted": ", interrupted (Ctrl+C)",
+                     "limited": f", limited to {info.get(LIMIT_KEY)}"}[status]
+        gone = sum(1 for c in saved if c.get(MISSING_SINCE_KEY))
+        if gone:
+            comments += f", {gone} not on YouTube"
+        closed = info.get(COMMENTS_CLOSED_KEY) or []
+        if closed and not closed[-1].get("until"):
+            comments += f", turned off on YouTube since {format_date(closed[-1]['from'])}"
+    parts = [comments]
+    chapters = next((m.get("items") or [] for m in marker_lists_of(info)
+                     if m.get("id") == "chapters"), [])
+    if chapters:
+        parts.append(plural(len(chapters), "chapter"))
+    cards = info.get(CARDS_KEY)
+    if cards:
+        parts.append(plural(len(cards), "info card"))
+    return [", ".join(parts)]
+
+
+def show_versions(transcript: dict) -> list[str]:
+    """The --transcript versions --json load can show from the data: plain
+    and timed, then for each source the shortest version that takes it
+    (dual for a translation, plain for subtitles of their own)."""
+    if not transcript.get("cues"):
+        return []
+    versions = ["plain", "timed"]
+    youtube, own = translations_of(transcript), own_of(transcript)
+    for code in sorted(set(youtube) | set(own)):
+        if code in own:
+            versions.append(f"dual:{code}")
+        if code in youtube:
+            versions.append(f"dual:{code}.translated" if code in own else f"dual:{code}")
+    versions += [f"plain:{key}" for key in sorted(transcript.get("tracks") or {})]
+    return versions
+
+
+def show_transcript(info: dict) -> tuple[list[str], list[str]]:
+    """The Transcript part, and the hints for what YouTube refused."""
+    transcript = info.get(TRANSCRIPT_KEY)
+    if not transcript:
+        reason = info.get(TRANSCRIPT_MISSING_KEY)
+        return ["none" + (f" ({reason})" if reason else "")], []
+    kind = "auto-generated" if transcript.get("kind") == "auto" else "by the author"
+    name = transcript.get("name") or transcript.get("language") or "language unknown"
+    lines = [f"{transcript.get('language') or '?'} ({name}, {kind}), "
+             f"{plural(len(transcript.get('cues') or []), 'line')}"]
+    youtube, own = translations_of(transcript), own_of(transcript)
+    shown = []
+    for code in sorted(set(youtube) | set(own)):
+        if code in youtube:
+            shown.append(f"{code} (YouTube)")
+        if code in own:
+            day = (own[code].get("own") or {}).get("date")
+            shown.append(f"{code} (own" + (f", {format_date(day)}" if day else "") + ")")
+    if shown:
+        lines.append("translations: " + ", ".join(shown))
+    fixed = transcript.get("fixed") or {}
+    if fixed.get("cues"):
+        lines.append(f"corrections: {fixed.get('file') or 'file unknown'}"
+                     + (f" ({format_date(fixed['date'])})" if fixed.get("date") else ""))
+    tracks = transcript.get("tracks") or {}
+    if tracks:
+        lines.append("other subtitles: " + ", ".join(
+            f"{track.get('language') or split_code(key)[0]} ({track.get('kind') or split_code(key)[1]})"
+            for key, track in sorted(tracks.items())))
+    missing = transcript.get("missing") or {}
+    if missing:
+        lines.append("not available: " + ", ".join(
+            f"{key} ({missing_text(entry)})" for key, entry in sorted(missing.items())))
+    lines.append("possible: " + (", ".join(show_versions(transcript)) or "none"))
+    hints = [f"to try again: yt2html {info.get('id')} --json write --transcript plain,"
+             + (f"plain:{key}" if "." in key else f"dual:{key}")
+             for key, entry in sorted(missing.items()) if entry.get("refused")]
+    return lines, hints
+
+
+def show_video(info: dict) -> list[str]:
+    """The Video part: what --video took, as the data describe it."""
+    record = info.get(VIDEO_KEY)
+    if not record:
+        return ["none"]
+    video = record.get("video") or {}
+    lines = []
+    if video:
+        what = " ".join(str(v) for v in (video.get("quality"), video.get("codec")) if v)
+        if video.get("audio"):
+            what += f" + {video['audio']}" + (f" {video['audio_codec']}"
+                                               if video.get("audio_codec") else "")
+        when = format_date(video["date"]) if video.get("date") else "found next to the page"
+        parameters = video_parameters(info)
+        lines.append(f"{what or video.get('file') or 'video'}, {when}"
+                     + (f" (--video {parameters})" if parameters else ""))
+    extra = record.get("extra_audio") or []
+    if extra:
+        lines.append("extra audio: " + ", ".join(
+            track["audio"] + (f" ({track['role']})" if track.get("role") else "")
+            for track in extra))
+    subtitles = record.get("subtitles") or []
+    if subtitles:
+        lines.append("subtitles (--video sub:, before 0.11.0): " + ", ".join(
+            f"{s.get('code')} ({s.get('kind')})" for s in subtitles))
+    return lines or ["none"]
+
+
+def show_files(info: dict, folder: Path) -> tuple[list[str], dict]:
+    """The Next to it part: the page, the video files (whether the data
+    describe them: the Video file row and the yellow marks need it), the
+    extra audio and the SRT files; and what the summary counts."""
+    ident = info.get("id")
+    record = info.get(VIDEO_KEY) or {}
+    video = record.get("video") or {}
+    found = {"page": bool(files_with_id(folder, ident, (".html",)))}
+    parts = ["page" if found["page"] else "no page"]
+    videos = video_files(folder, ident)
+    found["described"] = False
+    for path in videos:
+        same = bool(video.get("quality")) and video.get("size") == path.stat().st_size
+        found["described"] = found["described"] or same
+        parts.append(f"{path.suffix.lstrip('.')} ({'described' if same else 'not described'})")
+    missing = [video["file"]] if video.get("file") and not videos else []
+    for track in record.get("extra_audio") or []:
+        key = (track["audio"], track.get("role"))
+        if file_by_suffix(folder, ident, audio_suffix(key), "audio files"):
+            parts.append(audio_suffix(key).lstrip("."))
+        else:
+            missing.append(track.get("file") or audio_suffix(key).lstrip("."))
+    srt = files_with_id(folder, ident, (".srt",))
+    if srt:
+        kinds = [f"{m.group(1)} ({m.group(2).lower()})" if (m := SRT_KIND.search(p.name))
+                 else p.name for p in srt]
+        parts.append(f"{plural(len(srt), 'SRT')}: {', '.join(kinds)}")
+    lines = [", ".join(parts)]
+    if missing:
+        lines.append("missing: " + ", ".join(missing))
+    found["missing"] = bool(missing)
+    return lines, found
+
+
+def show_block(info: dict, data_path: Path) -> tuple[list[str], dict]:
+    """The block of one video, and what the summary counts of it."""
+    size = data_path.stat().st_size
+    size_text = f"{size / 1e6:.1f} MB" if size >= 1e6 else f"{-(-size // 1000)} kB"
+    lines = [f"{info.get('title') or '(no title)'} [{info.get('id') or '?'}]  "
+             f"({data_path.name}, {size_text})"]
+    transcript, hints = show_transcript(info)
+    files, found = show_files(info, data_path.parent)
+    lines += (show_lines("Data", show_data(info)) + show_lines("Page", show_page(info))
+              + show_lines("Transcript", transcript) + show_lines("Video", show_video(info))
+              + show_lines("Next to it", files))
+    if not found["page"]:
+        hints.append(f'to make the page: yt2html "{data_path.name}" --json load --transcript')
+    lines += [f"  ({hint})" for hint in hints]
+    record = info.get(TRANSCRIPT_KEY) or {}
+    video = (info.get(VIDEO_KEY) or {}).get("video") or {}
+    found.update(transcript=bool(record.get("cues")), youtube=sorted(translations_of(record)),
+                 own=bool(own_of(record)), fixed=bool((record.get("fixed") or {}).get("cues")),
+                 quality=video.get("quality") if info.get(VIDEO_KEY) else None,
+                 video=bool(video_files(data_path.parent, info.get("id"))))
+    return lines, found
+
+
+def show_summary(found: list[dict], without: list[str]) -> str:
+    """The last line for several videos: what the data and the files have."""
+    parts = []
+    translations = Counter(code for f in found for code in f["youtube"])
+    texts = [f"translation {code} in {n}" for code, n in sorted(translations.items())]
+    for key, word in (("own", "own translations"), ("fixed", "corrections")):
+        n = sum(1 for f in found if f[key])
+        if n:
+            texts.append(f"{word} in {n}")
+    no_transcript = sum(1 for f in found if not f["transcript"])
+    if no_transcript:
+        texts.append(f"no transcript in {no_transcript}")
+    parts.append(", ".join(texts) or "no translations")
+    videos = [f for f in found if f["video"]]
+    if videos:
+        qualities = Counter(f["quality"] for f in videos if f["quality"])
+        detail = [", ".join(f"{q} {n}" for q, n in sorted(
+            qualities.items(), key=lambda item: -int(re.match(r"\d*", item[0]).group() or 0)))]
+        undescribed = sum(1 for f in videos if not f["described"])
+        if undescribed:
+            detail.append(f"{undescribed} not described")
+        detail = "; ".join(d for d in detail if d)
+        parts.append(f"video in {len(videos)}" + (f" ({detail})" if detail else ""))
+    else:
+        parts.append("no video files")
+    for key, word in (("missing", "files missing in"),):
+        n = sum(1 for f in found if f[key])
+        if n:
+            parts.append(f"{word} {n}")
+    pages = sum(1 for f in found if not f["page"])
+    if pages:
+        parts.append(f"no page for {pages}")
+    if without:
+        parts.append(f"no saved data for {len(without)} ({', '.join(without)})")
+    return f"{plural(len(found), 'video')}: " + "; ".join(parts)
+
+
+def show_saved(args: argparse.Namespace) -> int:
+    """--json show: a block for each saved data file (the sources as for
+    --json load, or the videos of --index FILE: its video lines and the
+    playlists as the index page keeps them, nothing read from YouTube), then
+    a summary for several. 1 when a source given in the command has no
+    readable data; a video of the list without data is only counted."""
+    output_dir = Path(args.output_dir)
+    without = []
+    if args.index is not None:
+        import yt2html_index   # (here: that module imports this one)
+        ids, notes = yt2html_index.saved_list_videos(args)
+        for note in notes:
+            log(note)
+        sources = []
+        for video_id in ids:
+            if file_with_id(output_dir, video_id, (".info.json",), "saved data files"):
+                sources.append(video_id)
+            else:
+                without.append(video_id)
+    else:
+        sources = args.sources
+    failed, found = 0, []
+    for source in sources:
+        try:
+            data_path = saved_data_path(source, output_dir)
+            info = json.loads(data_path.read_text(encoding="utf-8"))
+            lines, facts = show_block(info, data_path)
+        except (OSError, ValueError) as error:
+            log(f"FAILED: {source}: {getattr(error, 'strerror', None) or error}")
+            failed += 1
+            continue
+        if found:
+            print()
+        print("\n".join(lines), flush=True)
+        found.append(facts)
+    if len(found) > 1 or (found and without):
+        print()
+        print(show_summary(found, without), flush=True)
+    elif without:
+        print(f"No saved data for {', '.join(without)}.")
     return 1 if failed else 0
 
 
@@ -6371,7 +6674,7 @@ class Once(argparse.Action):
         setattr(namespace, self.dest, values)
 
 
-JSON_PARAMETERS = ("write", "refresh", "load", "merge")
+JSON_PARAMETERS = ("write", "refresh", "load", "merge", "show")
 
 DEFAULT_TAKE = 100   # videos that ask YouTube, at most, in one run (--take)
 
@@ -6433,7 +6736,7 @@ def json_parameter(value: str) -> str:
     """--json: one of JSON_PARAMETERS, any case."""
     if value.strip().lower() not in JSON_PARAMETERS:
         raise argparse.ArgumentTypeError(
-            f"'{value}' is not a parameter (use write, refresh, load or merge); the "
+            f"'{value}' is not a parameter (use write, refresh, load, merge or show); the "
             f"video's address goes before --json")
     return value.strip().lower()
 
@@ -6446,8 +6749,8 @@ def apply_json_parameter(args: argparse.Namespace) -> None:
     mode = args.json
     args.write_json = mode == "write"
     args.update_json = mode == "write" and not args.overwrite
-    args.refresh_json, args.load_json, args.merge_json = (
-        mode == "refresh", mode == "load", mode == "merge")
+    args.refresh_json, args.load_json, args.merge_json, args.show_json = (
+        mode == "refresh", mode == "load", mode == "merge", mode == "show")
 
 
 def apply_page_spec(args: argparse.Namespace) -> None:
@@ -6693,7 +6996,7 @@ def collect_sources(args: argparse.Namespace) -> list[str]:
     youtu.be/ID and watch?v=ID); anything else (playlist URLs, .info.json
     paths) must match exactly. Raises ValueError if there is nothing to do.
     """
-    files = args.load_json or args.merge_json   # file names as they are
+    files = args.load_json or args.merge_json or args.show_json   # file names as they are
     what = "file" if files else "URL"
     seen = set()
     args.sources = [placed_source(source, args.output_dir) for source in args.sources]
@@ -6793,7 +7096,10 @@ def parse_args(argv=None) -> argparse.Namespace:
              "-o) or merge (add a translation of your own, SRT files 'Title [ID].CODE.own.srt', "
              "or your corrections of the transcript, 'Title [ID].CODE.fixed.srt' in its "
              "language, each with the lines and times of the transcript, merged into the data "
-             "with the same id; makes no page: --json load then shows it)")
+             "with the same id; makes no page: --json load then shows it) or show (list what "
+             "the saved data hold, without YouTube: the transcript and its translations with "
+             "the versions --json load can show, the comments, the video files, the files next "
+             "to them; sources as for load, or --index FILE)")
     parser.add_argument("--cookies", metavar="BROWSER", type=cookies_argument,
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in; a profile after a colon: "
@@ -6887,6 +7193,16 @@ def parse_args(argv=None) -> argparse.Namespace:
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
+    if args.show_json:
+        used = [name for name, on in (("--page", args.page is not None),
+                                      ("--transcript", bool(args.transcript) or args.transcript_ovr),
+                                      ("--video", args.video is not None),
+                                      ("--video-formats", args.video_formats),
+                                      ("--olang", bool(args.olang)),
+                                      ("--take", args.take is not None)) if on]
+        if used:
+            parser.error(f"--json show only shows what the saved data hold, so it cannot be "
+                         f"used with {', '.join(used)}")
     if args.take is not None and args.json in ("load", "merge"):
         parser.error(f"--take counts the videos that need YouTube, and --json {args.json} "
                      f"asks YouTube for nothing; leave --take out")
@@ -6955,7 +7271,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
-    if (args.load_json or args.merge_json) and args.cookies:
+    if (args.load_json or args.merge_json or args.show_json) and args.cookies:
         log(f"Note: --cookies has no effect with --json {args.json} "
             f"(nothing is downloaded).")
     try:
@@ -7092,6 +7408,8 @@ def main(argv=None) -> int:
 
     if args.video_formats:
         return list_formats(args)
+    if args.show_json:
+        return show_saved(args)
     listing = args.index is not None or args.index_only is not None
     if listing:
         import yt2html_index as index   # (here: that module imports this one)

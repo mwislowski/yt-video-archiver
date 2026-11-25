@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+
+- **`--json show`:** lists what the saved data hold, without YouTube and without changing anything: the download and later runs, the comments, the transcript with its translations (YouTube's and your own), corrections, other subtitles, what YouTube refused, and the `--transcript` versions `--json load` can show from them, the video files `--video` took, and the files next to the data (whether the data describe the video file). Sources as for `--json load`, or `--index FILE`; several videos end with a summary.
+
 ## [0.12.0] - 2026-11-25
 
 ### Added

@@ -125,6 +125,7 @@ Two more options belong to the transcript and to signing in: `--olang CODE` (the
 | Make a page again from saved data only, offline | `yt2html VIDEO_ID --json load --transcript` |
 | Merge a translation of your own into the saved data | `yt2html --json merge "Title [id].pl.own.srt"` |
 | Merge your corrections of the transcript's text into the saved data | `yt2html --json merge "Title [id].en.fixed.srt"` |
+| See what the saved data hold (translations, video files, …), offline | `yt2html "*.info.json" --json show` |
 | When YouTube asks to sign in or to confirm you are not a bot | `yt2html "URL" --cookies firefox` |
 | Versions of the program and yt-dlp; all options | `yt2html --version`; `yt2html --help` |
 
@@ -227,6 +228,7 @@ The data a page is made from can be saved next to it as `Title [id].info.json`: 
 | `refresh` | as `write`, and refreshes what changes over time | the video's data with the comments, then what is missing | refreshed; the comments merged with the saved ones | as saved, with a note and, from another day, a *Refreshed* tile |
 | `load` | makes the page from saved data only | nothing (images aside) | as saved | as saved |
 | `merge` | adds a translation of your own (an SRT file) to saved data; makes no page | nothing | as saved | as saved, with a note of the update |
+| `show` | lists what saved data hold; makes no page, changes nothing | nothing | as saved | as saved |
 
 Without `--json` the program neither reads nor writes saved data: `--page ovr` then makes the page from YouTube alone, and an older data file stays as it was, no longer matching the page.
 
@@ -274,6 +276,31 @@ What stays: the comments, the counts (views, likes), the description and the cop
 - **What the file must be:** as for a translation, the same lines starting at the same moments, only their text corrected, so every translation still fits. A `.fixed.srt` in another language, or an `.own.srt` in the transcript's own language, is an error that names the right file name.
 - **What it saves:** the corrected text beside YouTube's, which stays in the data; corrections already there are replaced (with a message). `--transcript ovr` keeps them when they still fit the transcript downloaded again, else drops them with a message; `--page ovr --json write` downloads new data without them (named among what was lost).
 - **On the page:** the corrected text everywhere the original is shown (plain, timed, the left column of `dual`, the player's subtitles), headed `English, auto-generated, with own corrections`; *About this copy* adds to the *Transcript* row `the original with own corrections (Title [id].en.fixed.srt, 25.11.2026)`. The page cannot show YouTube's text instead, and the original's SRT file of `--transcript srt` stays YouTube's text (the source to correct).
+
+**`--json show`** lists what saved data hold, by the options that put it there, and which files lie next to them; it asks YouTube for nothing and changes nothing:
+
+```
+Kurs [Un9FT291lsU]  (Kurs [Un9FT291lsU].info.json, 4.2 MB)
+  Data:       downloaded 22.11.2026 23:01 (yt2html 0.10.7)
+              updated 25.11.2026 (translation en)
+  Page:       412 comments of 430, 2 not on YouTube, 12 chapters
+  Transcript: pl (Polish, auto-generated), 812 lines
+              translations: de (own, 23.11.2026), en (YouTube)
+              corrections: Kurs [Un9FT291lsU].pl.fixed.srt (25.11.2026)
+              other subtitles: en (auto-generated)
+              not available: fr (YouTube refused to send it (HTTP 429), 14.11.2026)
+              possible: plain, timed, dual:de, dual:en, plain:en.auto-generated
+  Video:      1080p av1 + pl aac, 22.11.2026 (--video audio:en)
+              extra audio: en (auto-dubbed)
+  Next to it: page, mp4 (described), en.auto-dubbed.m4a, 2 SRTs: pl (auto-generated), en (translated)
+  (to try again: yt2html Un9FT291lsU --json write --transcript plain,dual:fr)
+```
+
+- **What it takes:** the sources of `--json load` (video ids, names, `.info.json` files, patterns such as `"*.info.json"`), or `--index FILE`: the videos of the list, its playlists as its index page keeps them (a playlist the index does not keep is left out, with a note). For several videos a last line sums them up: `12 videos: translation en in 9, own translations in 2; video in 12 (720p 8, 1080p 2, 480p 2; 1 not described); no page for 1` (with `--index`, also the videos of the list without saved data).
+- **`possible`:** the `--transcript` versions `--json load` can show from the data, one for each source: `dual:CODE` for a translation (`dual:CODE.translated` for YouTube's when your own is there too; `plain:` and `timed:` take the same), `plain:CODE.KIND` for subtitles of their own.
+- **`Next to it`:** found by the id in square brackets and the ending, as the page finds them. A video file is `described` when the data describe it (the same size): the *Video file* row and the yellow marks in *Video formats* show its quality; `not described` when they do not (downloaded without saved data, or replaced). `missing` names files the data describe that are gone.
+- **Hints** in brackets: the command that asks again for what YouTube refused, and the one that makes a missing page.
+- **Options:** `-o` and `--index` only; `--page`, `--transcript`, `--video`, `--video-formats`, `--olang` and `--take` are errors. A source without readable data is `FAILED` (exit code 1); the others are shown.
 
 ### Many videos
 
