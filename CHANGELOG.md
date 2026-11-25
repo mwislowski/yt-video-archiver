@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-25
+
 ### Added
 
 - **`--json show`:** lists what the saved data hold, without YouTube and without changing anything: the download and later runs, the comments, the transcript with its translations (YouTube's and your own), corrections, other subtitles, what YouTube refused, and the `--transcript` versions `--json load` can show from them, the video files `--video` took, and the files next to the data (whether the data describe the video file). Sources as for `--json load`, or `--index FILE`; several videos end with a summary.
@@ -335,7 +337,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.8...v0.11.0
 [0.10.8]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.7...v0.10.8
