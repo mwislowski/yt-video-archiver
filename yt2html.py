@@ -5718,8 +5718,10 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                 return []
             keep_own_translations(transcript, own)
             keep_fixed(transcript, fixed)
+            kept = keep_youtube_translations(transcript, saved or {}, split_keys(targets)[0])
             return (["transcript"] + [f"translation {language}"
-                                      for language in translations_of(transcript)]
+                                      for language in translations_of(transcript)
+                                      if language not in kept]
                     + [f"subtitles {key}" for key in transcript.get("tracks") or {}])
         transcript = info[TRANSCRIPT_KEY]
         before = set(translations_of(transcript)) | set(transcript.get("tracks") or {})
@@ -5740,6 +5742,36 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                  if language not in before]
                 + [f"subtitles {key}" for key in transcript.get("tracks") or {}
                    if key not in before])
+
+
+def keep_youtube_translations(transcript: dict, saved: dict, asked: list[str]) -> set[str]:
+    """--transcript ovr: a translation of YouTube's that the command asks for
+    and that did not come now (refused, or no longer offered) stays as saved
+    when it still fits the transcript downloaded again (the same lines at the
+    same times), instead of a note that it is missing; one that no longer fits
+    is dropped with a message. Those not asked for go, as ovr asks. Returns
+    the languages kept."""
+    kept = set()
+    earlier = translations_of(saved)
+    for language in asked:
+        if language in translations_of(transcript) or language not in earlier:
+            continue
+        reason = ((transcript.get("missing") or {}).get(language) or {}).get("reason")
+        try:
+            check_own_cues(earlier[language].get("cues") or [], transcript)
+        except ValueError as problem:
+            log(f"  YouTube's translation into '{language}' did not come now, and the saved "
+                f"one is dropped: it no longer fits the transcript ({problem}).")
+            continue
+        transcript.setdefault("translations", {})[language] = earlier[language]
+        missing = transcript.get("missing") or {}
+        missing.pop(language, None)
+        if not missing:
+            transcript.pop("missing", None)
+        kept.add(language)
+        log(f"  YouTube's translation into '{language}' did not come now"
+            + (f" ({reason})" if reason else "") + "; the saved one stays.")
+    return kept
 
 
 def transcript_parts(transcript: dict) -> list[str]:

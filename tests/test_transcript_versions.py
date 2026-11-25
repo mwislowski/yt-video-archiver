@@ -302,6 +302,65 @@ def test_ovr_with_another_olang_without_captions_drops_it_and_names_all(capsys, 
     assert data[yt2html.TRANSCRIPT_KEY] is None and data[yt2html.TRANSCRIPT_MISSING_KEY]
 
 
+def test_ovr_keeps_an_asked_youtube_translation_that_did_not_come(capsys, saved, youtube):
+    """dual:fr,ovr when YouTube refuses fr now: the saved fr still fits the
+    transcript downloaded again, so it stays (before: replaced by a note that
+    it was refused); not counted as added."""
+    before = json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]["translations"]["fr"]
+    youtube["fail_translations"] = 1
+    code = yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                         "--transcript", "plain,dual:fr,ovr"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert ("YouTube's translation into 'fr' did not come now (YouTube refused to send it "
+            "(HTTP 429 Too Many Requests)); the saved one stays.") in out
+    data = json.loads(saved.read_text("utf-8"))
+    transcript = data[yt2html.TRANSCRIPT_KEY]
+    assert transcript["translations"]["fr"] == before
+    assert "missing" not in transcript                        # (its only note was fr's)
+    assert "translation fr" not in data[yt2html.UPDATES_KEY][-1]["added"]
+    assert "not available" not in row(next(saved.parent.glob("*.html")).read_text("utf-8"),
+                                      "Transcript")
+
+
+def test_ovr_takes_a_youtube_translation_that_came_now(capsys, saved, youtube):
+    data = json.loads(saved.read_text("utf-8"))
+    for cue in data[yt2html.TRANSCRIPT_KEY]["translations"]["fr"]["cues"]:
+        cue["text"] = "an old line"
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                         "--transcript", "plain,dual:fr,ovr"]) == 0
+    assert "did not come now" not in capsys.readouterr().out
+    french = json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]["translations"]["fr"]
+    assert all(cue["text"] != "an old line" for cue in french["cues"])     # the new one
+
+
+def test_ovr_drops_a_saved_youtube_translation_that_no_longer_fits(capsys, saved, youtube):
+    data = json.loads(saved.read_text("utf-8"))
+    french = data[yt2html.TRANSCRIPT_KEY]["translations"]["fr"]
+    french["cues"] = french["cues"][:1]                      # made from other captions
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    youtube["fail_translations"] = 1
+    assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                         "--transcript", "plain,dual:fr,ovr"]) == 0
+    out = capsys.readouterr().out
+    assert ("YouTube's translation into 'fr' did not come now, and the saved one is dropped: "
+            "it no longer fits the transcript (1 line in the file,") in out
+    transcript = json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]
+    assert "fr" not in (transcript.get("translations") or {})
+    assert transcript["missing"]["fr"]["refused"]
+
+
+def test_ovr_drops_youtube_translations_not_asked_for(capsys, saved, youtube):
+    """plain,ovr: the saved fr is not asked for, so it goes (the user's
+    decision 25.11.2026: ovr overwrites; one's own work is what stays)."""
+    assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                         "--transcript", "plain,ovr"]) == 0
+    transcript = json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]
+    assert "fr" not in (transcript.get("translations") or {})
+    assert "did not come now" not in capsys.readouterr().out
+
+
 def test_transcript_parts():
     transcript = {"language": "en", "cues": [], "translations": {"pl": {}, "fr": {}},
                   "own": {"de": {"own": {"date": "2026-11-01"}}}, "fixed": {"cues": []}}
