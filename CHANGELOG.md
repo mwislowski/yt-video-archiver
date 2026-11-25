@@ -4,8 +4,6 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
-## [0.12.3] - 2026-11-25
-
 ### Fixed
 
 - **A joining of image and sound that did not finish is no longer taken for the video.** When `Ctrl+C` or a full disk stopped ffmpeg while it joined the downloaded parts, yt-dlp left `Title [id].temp.mp4`, cut short; the next `--video` said `Video skipped (file exists)`, and the page and the index played that file. Now it counts as unfinished, like the parts `Title [id].f399.mp4`, so the same command downloads the video again (yt-dlp reuses the parts still there). The same holds for an extra audio track (`….temp.m4a`).
@@ -349,8 +347,7 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.3...HEAD
-[0.12.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.2...v0.12.3
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.2...HEAD
 [0.12.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.11.0...v0.12.0
