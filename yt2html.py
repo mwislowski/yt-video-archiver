@@ -46,7 +46,7 @@ from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
 from yt_dlp.utils import ISO639Utils
 
 # The program version; pyproject.toml reads it from here (single source).
-__version__ = "0.12.1"
+__version__ = "0.12.2"
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -5445,11 +5445,20 @@ def entry_video_id(entry: dict) -> str | None:
     return video_id_from_url(entry.get("url") or "")
 
 
+# A later page of a list that YouTube sends without its videos ("Incomplete
+# data received", after yt-dlp's retries) is only a warning by default: the
+# list then ends there, as if it were YouTube's whole list. With this, it is
+# an error, so a playlist is "could not be read" (the index uses the list it
+# kept) instead of a shorter one.
+WHOLE_LIST = {"raise_incomplete_data": [""]}
+
+
 def fetch_playlist(url: str, args: argparse.Namespace) -> dict:
     """A playlist's data (title, channel, description, playlist_count, ...)
     with its flat entries: only the list of its videos, in playlist order,
     none of them extracted (one request per ~100 videos)."""
-    opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True}
+    opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True,
+            "extractor_args": {"youtube": WHOLE_LIST}}
     if args.cookies:
         opts["cookiesfrombrowser"] = cookies_spec(args.cookies)
     with yt_dlp.YoutubeDL(opts) as ydl:

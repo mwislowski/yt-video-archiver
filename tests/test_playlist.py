@@ -194,6 +194,27 @@ def test_fetch_playlist_reads_only_the_list(monkeypatch):
     assert FakePlaylistYDL.calls == [("short", False), ("real", False)]
     assert FakePlaylistYDL.opts["extract_flat"] == "in_playlist"
     assert FakePlaylistYDL.opts["cookiesfrombrowser"] == ("firefox", None, None, None)
+    assert FakePlaylistYDL.opts["extractor_args"] == {"youtube": yt2html.WHOLE_LIST}
+
+
+def test_a_list_sent_in_part_is_an_error_not_a_shorter_list():
+    """yt-dlp's own retry loop for a later page of a list (YoutubeTabIE):
+    YouTube's answer without the videos ends the list by default (None, a
+    warning); with WHOLE_LIST it is an error, so the playlist counts as not
+    read. A change in yt-dlp (the name of the argument) fails here."""
+    from yt_dlp.extractor.youtube import YoutubeTabIE
+
+    def later_page(opts):
+        ie = YoutubeTabIE(yt2html.yt_dlp.YoutubeDL({**opts, "quiet": True,
+                                                    "no_warnings": True}))
+        ie._call_api = lambda **kwargs: {}            # the answer, without the list
+        ie._extract_context = lambda *a, **k: {}
+        return ie._extract_response("PLx", {"continuation": "c"},
+                                    check_get_keys="onResponseReceivedActions")
+
+    assert later_page({}) is None
+    with pytest.raises(yt2html.yt_dlp.utils.ExtractorError, match="Incomplete data received"):
+        later_page({"extractor_args": {"youtube": yt2html.WHOLE_LIST}})
 
 
 def test_fetch_playlist_rejects_a_video(monkeypatch):

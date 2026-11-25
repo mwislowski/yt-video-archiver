@@ -4,6 +4,12 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-25
+
+### Fixed
+
+- **A playlist YouTube sends only in part is no longer taken as its whole list.** When a later page of a playlist came without its videos (yt-dlp: *Incomplete data received*, after its retries), yt-dlp ended the list there with only a warning: the index showed the downloaded videos after that point as removed from the playlist, left out the others and kept the shortened list. Now the playlist counts as not read, so the index uses the list it kept, as when YouTube cannot be reached. `--channel` stops with `FAILED: URL: Incomplete data received` instead of writing a shortened list.
+
 ## [0.12.1] - 2026-11-25
 
 ### Added
@@ -337,7 +343,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.10.8...v0.11.0

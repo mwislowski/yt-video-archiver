@@ -300,6 +300,15 @@ def test_ctrl_c_and_failures_write_nothing(tmp_path, capsys, channel, monkeypatc
     code, out = run(capsys, "@somebody", str(tmp_path / "a.txt"), "last:3")
     assert code == 1 and f"FAILED: {CHANNEL}" in out
 
+    def sent_in_part(url, args):           # yt-dlp's error from a later page
+        yield {"channel": "x"}
+        yield entry(1, 2)
+        raise yt2html.yt_dlp.utils.ExtractorError("Incomplete data received", expected=True)
+
+    monkeypatch.setattr(index, "fetch_channel", sent_in_part)
+    code, out = run(capsys, "@somebody", str(tmp_path / "a.txt"), "last:3")
+    assert code == 1 and f"FAILED: {CHANNEL}: Incomplete data received" in out
+
     def stopped(url, args):
         yield {"channel": "x"}
         raise KeyboardInterrupt
@@ -367,7 +376,8 @@ def test_fetch_channel_reads_lazily_with_approximate_dates(monkeypatch):
     assert next(found)["id"] == "CHANNELVI01"
     found.close()
     opts = calls[0][1]
-    assert opts["extractor_args"] == {"youtubetab": {"approximate_date": [""]}}
+    assert opts["extractor_args"] == {"youtubetab": {"approximate_date": [""]},
+                                      "youtube": yt2html.WHOLE_LIST}
     assert opts["extract_flat"] == "in_playlist" and opts["cookiesfrombrowser"][0] == "firefox"
     assert calls[1:] == [("extract", CHANNEL, False, None),
                          ("extract", "https://real/videos", False, "YoutubeTab"),

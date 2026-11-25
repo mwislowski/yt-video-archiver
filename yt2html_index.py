@@ -1686,7 +1686,8 @@ def fetch_channel(url: str, args: argparse.Namespace):
     channel's data, then its videos one by one, newest first, a page read only
     when it is reached (so stopping early saves the rest)."""
     opts = {"skip_download": True, "extract_flat": "in_playlist", "noprogress": True,
-            "quiet": True, "extractor_args": {"youtubetab": {"approximate_date": [""]}}}
+            "quiet": True, "extractor_args": {"youtubetab": {"approximate_date": [""]},
+                                              "youtube": core.WHOLE_LIST}}
     if args.cookies:
         opts["cookiesfrombrowser"] = core.cookies_spec(args.cookies)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1748,6 +1749,9 @@ def channel_list(args: argparse.Namespace) -> int:
         return 130
     except yt_dlp.utils.DownloadError:
         core.log(f"FAILED: {url}")              # yt-dlp has already said why
+        return 1
+    except yt_dlp.utils.ExtractorError as error:   # from a later page, read lazily
+        core.log(f"FAILED: {url}: {core.failure_reason(error)}")
         return 1
     if period:
         core.log(f"Read {core.plural(read, 'video')} of the list; "

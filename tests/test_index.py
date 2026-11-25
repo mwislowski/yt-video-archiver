@@ -13,6 +13,8 @@ import yt_dlp
 import yt2html
 import yt2html_index as index
 
+REAL_FETCH_PLAYLIST = yt2html.fetch_playlist   # before the fixture replaces it
+
 DATA = Path(__file__).parent / "data"
 PLAYLIST_ID = "PLtest1234567890"
 PLAYLIST = f"https://www.youtube.com/playlist?list={PLAYLIST_ID}"
@@ -874,6 +876,47 @@ def test_without_youtube_the_kept_playlist_is_used(tmp_path, youtube, capsys):
                      r"using the list kept in the index \(read \d\d\.\d\d\.\d{4} \d\d:\d\d\)\.", out)
     result = (tmp_path / "series.html").read_text(encoding="utf-8")
     assert len(rows(result)) == 2 and "Test playlist" in result
+
+
+def test_a_playlist_sent_in_part_takes_the_kept_list(tmp_path, youtube, capsys, monkeypatch):
+    """yt-dlp's error from a later page of the list (WHOLE_LIST: "Incomplete
+    data received", raised while the entries are read): the playlist counts
+    as not read, so the kept list stays and no video is taken for removed."""
+    youtube.playlists[PLAYLIST_ID] = [entry(1), entry(2), entry(3)]
+    listing = write_list(tmp_path, f"{PLAYLIST_ID}\n")
+    yt2html.main(["--index-only", listing, "-o", str(tmp_path)])
+    for number in (1, 2, 3):
+        page(tmp_path, f"TESTVIDEO0{number}", playlist=PLAYLIST_ID,
+             **{"playlist-position": str(number)})
+
+    class InPart:                                   # yt-dlp's side, as it reads the list
+        def __init__(self, opts):
+            assert opts["extractor_args"] == {"youtube": yt2html.WHOLE_LIST}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download, process, ie_key=None):
+            def entries():
+                yield entry(1)
+                raise yt_dlp.utils.ExtractorError("Incomplete data received", expected=True)
+            return {"_type": "playlist", "title": "Test playlist", "entries": entries()}
+
+    real = yt_dlp.YoutubeDL
+    monkeypatch.setattr(yt2html, "fetch_playlist", REAL_FETCH_PLAYLIST)
+    monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL",
+                        lambda opts: InPart(opts) if "extract_flat" in opts else real(opts))
+    capsys.readouterr()
+    assert yt2html.main(["--index-only", listing, "-o", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert f"Playlist {PLAYLIST_ID} could not be read (Incomplete data received); " in out
+    result = (tmp_path / "series.html").read_text(encoding="utf-8")
+    assert removed_rows(result) == [] and len(rows(result)) == 3
+    assert (index.kept_playlists(tmp_path / "series.html")[PLAYLIST_ID]["entries"]
+            == ["TESTVIDEO01", "TESTVIDEO02", "TESTVIDEO03"])
 
 
 def test_a_playlist_never_read(tmp_path, youtube, capsys):
