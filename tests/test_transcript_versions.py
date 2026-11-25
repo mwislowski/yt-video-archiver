@@ -241,6 +241,74 @@ def test_ovr_downloads_the_transcript_again_and_keeps_own_translations_that_fit(
     assert after["own"]["pl"]["own"]
 
 
+def with_own_work(saved):
+    """Saved data with an own German translation and own corrections."""
+    data = json.loads(saved.read_text("utf-8"))
+    transcript = data[yt2html.TRANSCRIPT_KEY]
+    cues = transcript["cues"]
+    yt2html.set_own(transcript, "de", {
+        "language": "de", "name": "German",
+        "cues": [{"start": c["start"], "text": f"de {i}"} for i, c in enumerate(cues)],
+        "own": {"file": "Title [TESTVIDEO01].de.own.srt", "date": "2026-11-01"}})
+    transcript["fixed"] = {"cues": [{"start": c["start"], "text": f"fixed {i}"}
+                                    for i, c in enumerate(cues)],
+                           "file": "Title [TESTVIDEO01].en.fixed.srt", "date": "2026-11-01"}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    return data[yt2html.TRANSCRIPT_KEY]
+
+
+@pytest.mark.parametrize("olang", [[], ["--olang", "en-GB"]])
+def test_ovr_without_captions_now_keeps_the_saved_transcript(capsys, saved, youtube,
+                                                             monkeypatch, olang):
+    """--transcript ovr when YouTube's data have no captions now (the saved
+    transcript came from them, the language is the same): nothing new came,
+    so the saved one stays whole, with a warning (before: all of it, one's
+    own translations and corrections included, was gone without a word)."""
+    before = with_own_work(saved)
+    monkeypatch.setattr(yt2html, "choose_caption_track", lambda info: None)
+    code = yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                         "--transcript", "plain,dual:de,ovr", *olang])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert ("The saved transcript (English) stays, with all it holds: YouTube's data have no "
+            "captions for it now. Try --transcript ovr again later.") in out
+    data = json.loads(saved.read_text("utf-8"))
+    assert data[yt2html.TRANSCRIPT_KEY] == before
+    assert yt2html.TRANSCRIPT_MISSING_KEY not in data
+    assert "de 0" in next(saved.parent.glob("*.html")).read_text("utf-8")
+
+
+def test_ovr_with_another_olang_without_captions_drops_it_and_names_all(capsys, saved, youtube,
+                                                                       monkeypatch):
+    """--olang de --transcript ovr on a video without German captions: done as
+    asked (the transcript would be in the wrong language), but every part
+    lost is named, with the files to merge again."""
+    transcript = with_own_work(saved)
+    transcript_tracks = {"pl.author": {"language": "pl", "name": "Polish", "kind": "author",
+                                       "cues": transcript["cues"]}}
+    data = json.loads(saved.read_text("utf-8"))
+    data[yt2html.TRANSCRIPT_KEY]["tracks"] = transcript_tracks
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(yt2html, "choose_caption_track", lambda info: None)
+    code = yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                         "--transcript", "plain,ovr", "--olang", "de"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "No transcript: no captions in 'de', the original language set with --olang." in out
+    assert ("The saved transcript is dropped (lost: the transcript in 'en'; YouTube's "
+            "translation into fr; own translation de (Title [TESTVIDEO01].de.own.srt); own "
+            "corrections (Title [TESTVIDEO01].en.fixed.srt); subtitles pl.author).") in out
+    data = json.loads(saved.read_text("utf-8"))
+    assert data[yt2html.TRANSCRIPT_KEY] is None and data[yt2html.TRANSCRIPT_MISSING_KEY]
+
+
+def test_transcript_parts():
+    transcript = {"language": "en", "cues": [], "translations": {"pl": {}, "fr": {}},
+                  "own": {"de": {"own": {"date": "2026-11-01"}}}, "fixed": {"cues": []}}
+    assert yt2html.transcript_parts(transcript) == [
+        "the transcript in 'en'", "YouTube's translations into fr, pl", "own translation de"]
+
+
 # --olang -------------------------------------------------------------------------------------
 
 def test_olang_parsing(capsys):

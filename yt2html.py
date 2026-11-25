@@ -5697,9 +5697,21 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
         data = with_page_choices(fresh, info)
         not_before = started + translation_wait()
         if whole:
-            own = own_of(info.get(TRANSCRIPT_KEY) or {})
-            fixed = (info.get(TRANSCRIPT_KEY) or {}).get("fixed")
+            saved = info.get(TRANSCRIPT_KEY)
+            own = own_of(saved or {})
+            fixed = (saved or {}).get("fixed")
             transcript = fetch_transcript(ydl, data, targets, not_before)
+            if transcript is None and saved:
+                olang = data.get(OLANG_KEY)
+                if not olang or base_language(olang) == base_language(saved.get("language")):
+                    # captions the saved transcript came from, missing now: not a new version
+                    log(f"  The saved transcript ({saved.get('name') or saved.get('language')}) "
+                        f"stays, with all it holds: YouTube's data have no captions for it "
+                        f"now. Try --transcript ovr again later.")
+                    return []
+                # --olang chose another language, and it has no captions: as asked, but named
+                lost = "; ".join(transcript_parts(saved))
+                log(f"  The saved transcript is dropped (lost: {lost}).")
             info[TRANSCRIPT_KEY] = transcript
             if transcript is None:
                 info[TRANSCRIPT_MISSING_KEY] = data.get(TRANSCRIPT_MISSING_KEY)
@@ -5728,6 +5740,27 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                  if language not in before]
                 + [f"subtitles {key}" for key in transcript.get("tracks") or {}
                    if key not in before])
+
+
+def transcript_parts(transcript: dict) -> list[str]:
+    """What a saved transcript holds, for a message when it is dropped: the
+    transcript, YouTube's translations, one's own (with their files, to merge
+    again), corrections, other subtitles."""
+    parts = [f"the transcript in '{transcript.get('language')}'"]
+    youtube = sorted(translations_of(transcript))
+    if youtube:
+        parts.append(f"YouTube's translation{'s' if len(youtube) > 1 else ''} into "
+                     f"{', '.join(youtube)}")
+    for language, entry in sorted(own_of(transcript).items()):
+        file = (entry.get("own") or {}).get("file")
+        parts.append(f"own translation {language}" + (f" ({file})" if file else ""))
+    fixed = transcript.get("fixed") or {}
+    if fixed.get("cues"):
+        parts.append("own corrections" + (f" ({fixed['file']})" if fixed.get("file") else ""))
+    tracks = sorted(transcript.get("tracks") or {})
+    if tracks:
+        parts.append(f"subtitles {', '.join(tracks)}")
+    return parts
 
 
 def keep_own_translations(transcript: dict, own: dict) -> None:
