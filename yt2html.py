@@ -1609,13 +1609,14 @@ def set_own(transcript: dict, language: str, entry: dict) -> None:
 
 def own_shown(transcript: dict | None, spec: list | None) -> list[tuple[str, str]]:
     """[(language, day added)] of the translations of one's own (--json merge)
-    that the page shows, in any version."""
+    that the page shows, in any version: only those the data have (a ".own"
+    version without one is "not available" on the page, not an error)."""
     transcript = transcript or {}
     own = own_of(transcript)
-    shown = [source for _, source in resolve_versions(spec or [], transcript)[0]]
-    return [(split_code(source)[0], own[split_code(source)[0]]["own"].get("date") or "")
-            for source in dict.fromkeys(shown)
-            if source and split_code(source)[1] == "own"]
+    shown = [source for _, source in resolve_versions(spec or [], transcript)[0] if source]
+    return [(code, own[code]["own"].get("date") or "")
+            for code, kind in map(split_code, dict.fromkeys(shown))
+            if kind == "own" and code in own]
 
 
 def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
@@ -7270,6 +7271,13 @@ def parse_args(argv=None) -> argparse.Namespace:
         parser.error("--transcript ovr downloads the saved transcript again, so it needs "
                      "--json write or --json refresh (without saved data the transcript is "
                      "downloaded anyway)")
+    own = [version_text(version, token) for version, token in args.transcript
+           if token and split_code(token)[1] == "own"]
+    if own and args.json is None:
+        # one's own translations are only in the saved data (--json merge)
+        kind = "is a translation" if len(own) == 1 else "are translations"
+        parser.error(f"{', '.join(own)} {kind} of your own, kept only in saved data: "
+                     f"add --json write (or --json load)")
     if args.olang and args.json in ("load", "merge"):
         parser.error(f"--olang chooses what is downloaded, so it cannot be used with --json "
                      f"{args.json}; use --json write --transcript ovr to download the "

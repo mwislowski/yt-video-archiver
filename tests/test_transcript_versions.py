@@ -153,6 +153,58 @@ def test_ovr_needs_json_write_or_refresh(capsys, argv):
             "or --json refresh") in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("spec, message", [
+    ("plain,dual:pl.own", "dual:pl.own is a translation of your own"),
+    ("plain:PL.own,dual:de.own", "plain:pl.own, dual:de.own are translations of your own")])
+def test_own_versions_need_saved_data(capsys, spec, message):
+    """One's own translations are only in the saved data (--json merge): such
+    a version without --json is an error before anything is downloaded."""
+    with pytest.raises(SystemExit):
+        yt2html.parse_args(["URL", "--transcript", spec])
+    assert (f"{message}, kept only in saved data: add --json write (or --json load)"
+            in capsys.readouterr().err)
+    for json_parameter in ("write", "refresh", "load"):
+        yt2html.parse_args(["URL", "--transcript", spec, "--json", json_parameter])
+
+
+def test_an_own_version_the_data_lack_is_not_available(info):
+    """Not an error of the video (before: KeyError, the video FAILED): the
+    page is made, its Transcript row says what is not there."""
+    html = render(info, [("plain", None), ("dual", "pl.own")])
+    assert "not available: dual:pl.own" in row(html, "Transcript")
+    assert sections(html) == [("transcript original", "")]
+
+
+def test_page_ovr_with_an_own_version_makes_the_page(capsys, saved, youtube, monkeypatch, info):
+    """--page ovr --json write replaces the data with what YouTube has (the
+    own translation is lost, as the console says): the page follows the new
+    data instead of failing after they were saved."""
+    data = json.loads(saved.read_text("utf-8"))
+    transcript = data[yt2html.TRANSCRIPT_KEY]
+    yt2html.set_own(transcript, "de", {"language": "de", "name": "German",
+                                       "cues": transcript["cues"],
+                                       "own": {"file": "x.de.own.srt", "date": "2026-11-01"}})
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(yt2html, "fetch_info", lambda source, args: json.loads(json.dumps(info)))
+    code = yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--page", "ovr",
+                         "--json", "write", "--transcript", "plain,dual:de.own"])
+    out = capsys.readouterr().out
+    assert code == 0 and "(lost: own translation de)" in out and "FAILED" not in out
+    page = next(saved.parent.glob("*.html")).read_text("utf-8")
+    assert "not available: dual:de.own" in row(page, "Transcript")
+    assert "own" not in json.loads(saved.read_text("utf-8"))[yt2html.TRANSCRIPT_KEY]
+
+
+def test_json_load_with_an_own_version_where_youtube_refused(capsys, saved):
+    """The data note YouTube's refusal of 'pl': --json load lets plain:pl.own
+    through (that check is by language) and makes the page."""
+    code = yt2html.main([saved.name, "-o", str(saved.parent), "--json", "load",
+                         "--transcript", "plain,plain:pl.own"])
+    assert code == 0, capsys.readouterr().out
+    page = next(saved.parent.glob("*.html")).read_text("utf-8")
+    assert "not available: plain:pl.own" in row(page, "Transcript")
+
+
 def test_ovr_is_not_a_version():
     args = yt2html.parse_args(["URL", "--transcript", "timed,ovr", "--json", "write"])
     assert args.transcript == [("timed", None)] and args.transcript_ovr

@@ -6,6 +6,7 @@ All notable changes to this project. Versions: the second number for new feature
 
 ### Fixed
 
+- **A `.own` version without a translation of your own in that language no longer fails the video.** `--transcript dual:pl.own` where the saved data have no own Polish translation (for example after `--page ovr --json write`, which had already saved the new data when the page failed) gave `FAILED: …: 'pl'` and no page; now the page is made and its *Transcript* row says `not available: dual:pl.own`. Without `--json` such a version is an error before anything is downloaded: `dual:pl.own is a translation of your own, kept only in saved data: add --json write (or --json load)`.
 - **A joining of image and sound that did not finish is no longer taken for the video.** When `Ctrl+C` or a full disk stopped ffmpeg while it joined the downloaded parts, yt-dlp left `Title [id].temp.mp4`, cut short; the next `--video` said `Video skipped (file exists)`, and the page and the index played that file. Now it counts as unfinished, like the parts `Title [id].f399.mp4`, so the same command downloads the video again (yt-dlp reuses the parts still there). The same holds for an extra audio track (`….temp.m4a`).
 
 ## [0.12.2] - 2026-11-25

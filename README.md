@@ -170,7 +170,7 @@ Without `--transcript` the page has no transcript (and none is downloaded). `--t
 | `plain:pl.author` | the author's subtitles in that language |
 | `timed:pl.auto-generated` | the automatic subtitles of an audio track in that language (a dub) |
 | `plain:pl.translated` | YouTube's machine translation of the original's subtitles |
-| `plain:pl.own` | a translation of your own, merged with `--json merge` (see *Saved data*) |
+| `plain:pl.own` | a translation of your own, merged with `--json merge` (see *Saved data*); it is only in the saved data, so it needs `--json write` (or `refresh`, `load`); without `--json` it is an error, and where the data have none in that language the page says `not available: plain:pl.own` |
 
 `dual:CODE` puts the translation of the same lines beside the original, so it takes only a translation: without a kind your own, else YouTube's; `dual:pl.own` and `dual:pl.translated` choose one. Your own and YouTube's can both be in the saved data and on one page (`dual:pl.own,dual:pl.translated`), to compare them. The author's and automatic subtitles have other lines and times than the original: their section is headed e.g. *Polish, by the author*. What `--video-formats` lists under *subtitles* is what `.author` and `.auto-generated` can take.
 
