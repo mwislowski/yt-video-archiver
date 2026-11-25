@@ -314,7 +314,7 @@ For a series of videos you want to keep together, write them into a **list file*
 
 ### List files and their index
 
-A list file is a plain text file (UTF-8, Notepad's default; any extension: `series.txt`, `series.md`) with one video or playlist per line. `yt2html --index series.txt` archives what the list names and is not in the folder yet, then makes the **index page** `series.html` in the output folder (`-o`, next to the pages: its links are relative). `yt2html --index-only series.txt` only makes the index, from what is in the folder, and downloads nothing. The program only reads the list file, never changes it; it may lie anywhere. One list file per run; a URL in the same command is an error (add it to the file).
+A list file is a plain text file (UTF-8, Notepad's default; any extension: `series.txt`, `series.md`) with one video or playlist per line. `yt2html --index series.txt` archives what the list names and is not in the folder yet, then makes the **index page** `series.html` in the output folder (`-o`, next to the pages: its links are relative). It replaces only an index: when a page of that name is there that yt2html did not make as an index (your own `index.html`, or a video's page for a list named like it), the run stops before anything is downloaded and says so. `yt2html --index-only series.txt` only makes the index, from what is in the folder, and downloads nothing. The program only reads the list file, never changes it; it may lie anywhere. One list file per run; a URL in the same command is an error (add it to the file).
 
 The simplest list is just addresses or ids:
 

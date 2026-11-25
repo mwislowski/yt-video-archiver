@@ -1028,14 +1028,15 @@ def test_ctrl_c_while_reading_the_playlists(tmp_path, youtube, capsys, monkeypat
     def interrupted(source, args):
         raise KeyboardInterrupt
     monkeypatch.setattr(yt2html, "fetch_playlist", interrupted)
-    (tmp_path / "series.html").write_text("earlier index", encoding="utf-8")
+    earlier = '<meta name="yt2html:index" content="list"><title>Earlier</title>earlier index'
+    (tmp_path / "series.html").write_text(earlier, encoding="utf-8")
     listing = write_list(tmp_path, f"TESTVIDEO01\n{PLAYLIST_ID}\n")
     assert yt2html.main([option, listing, "-o", str(tmp_path)]) == 130
     out = capsys.readouterr().out
     assert ("Interrupted (Ctrl+C) while reading the playlists: nothing was downloaded and the "
             "index was not changed.") in out
     assert youtube.fetched == []
-    assert (tmp_path / "series.html").read_text(encoding="utf-8") == "earlier index"
+    assert (tmp_path / "series.html").read_text(encoding="utf-8") == earlier
 
 
 def test_index_only_downloads_nothing(tmp_path, youtube, capsys):
@@ -1054,6 +1055,33 @@ def test_the_output_folder_is_made(tmp_path, youtube):
     listing = write_list(tmp_path, "TESTVIDEO01\n")
     assert yt2html.main(["--index-only", listing, "-o", str(tmp_path / "new" / "pages")]) == 0
     assert (tmp_path / "new" / "pages" / "series.html").is_file()
+
+
+@pytest.mark.parametrize("option", ["--index", "--index-only"])
+def test_the_index_never_replaces_a_page_that_is_not_an_index(tmp_path, youtube, capsys, option):
+    """Before any request: one's own index.html (list index.txt), or a video's
+    page (list "Lecture 1 [ID].txt") is not replaced by the index; replaced,
+    the video's page would then be taken for the index (its [ID])."""
+    own = tmp_path / "index.html"
+    own.write_text("<html><body>my own start page</body></html>", encoding="utf-8")
+    video_page = page(tmp_path, "TESTVIDEO01", name="Lecture 1 [TESTVIDEO01].html")
+    before = video_page.read_bytes()
+    for name, path in (("index.txt", own), ("Lecture 1 [TESTVIDEO01].txt", video_page)):
+        listing = write_list(tmp_path, f"TESTVIDEO01\n{PLAYLIST_ID}\n", name=name)
+        with pytest.raises(SystemExit):
+            yt2html.main([option, listing, "-o", str(tmp_path)])
+        assert (f"{path} is not an index made by yt2html, and the index of {name} would "
+                f"replace it; rename the list file or move that page") in capsys.readouterr().err
+    assert own.read_text(encoding="utf-8") == "<html><body>my own start page</body></html>"
+    assert video_page.read_bytes() == before
+    assert youtube.lists_read == [] and youtube.fetched == []
+
+
+def test_json_show_with_a_list_writes_no_index_so_any_page_may_be_there(tmp_path, youtube, capsys):
+    (tmp_path / "index.html").write_text("<html>my own</html>", encoding="utf-8")
+    listing = write_list(tmp_path, "TESTVIDEO01\n", name="index.txt")
+    assert yt2html.main(["--json", "show", "--index", listing, "-o", str(tmp_path)]) == 0
+    assert (tmp_path / "index.html").read_text(encoding="utf-8") == "<html>my own</html>"
 
 
 def test_an_index_that_cannot_be_written(tmp_path, youtube, capsys):

@@ -307,6 +307,18 @@ def index_path(list_file: str, output_dir: Path) -> Path:
     return output_dir / (Path(list_file).stem + ".html")
 
 
+def check_index_target(list_file: str, output_dir: Path) -> None:
+    """Before any request: the index replaces only an index. A page there with
+    the index's name that yt2html did not make as an index (one's own
+    index.html, a video's page for "Lecture 1 [ID].txt") is a ListFileError:
+    replaced, it would be lost, and a video page would then be the index."""
+    path = index_path(list_file, output_dir)
+    if path.is_file() and "yt2html:index" not in core.read_page_metadata(path):
+        raise ListFileError(f"{path} is not an index made by yt2html, and the index of "
+                            f"{Path(list_file).name} would replace it; rename the list file "
+                            f"or move that page")
+
+
 # --------------------------------------------------------------------------
 # Playlists: read from YouTube, else the list kept in the earlier index
 # --------------------------------------------------------------------------

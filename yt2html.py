@@ -7345,6 +7345,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         import yt2html_index   # (here: that module imports this one)
         try:
             args.list = yt2html_index.read_list_file(list_file)
+            if args.json != "show":          # (show writes no index)
+                yt2html_index.check_index_target(list_file, Path(args.output_dir))
         except yt2html_index.ListFileError as error:
             parser.error(str(error))
         return args
