@@ -4,14 +4,16 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-25
+
 ### Fixed
 
-- **`--transcript dual:fr,ovr` no longer loses the saved French translation when YouTube refuses it now** (often: HTTP 429). It was replaced by a note that it was refused; now it stays as saved when it still fits the transcript downloaded again (`YouTube's translation into 'fr' did not come now (…); the saved one stays.`), and is dropped with a message when it does not. Translations the command does not ask for are not kept, as before.
 - **`--transcript ovr` no longer loses the saved transcript when YouTube's data have no captions.** The transcript, YouTube's translations, your own translations and corrections all went, with only `No transcript: the video has no captions.` on the console. Now the saved transcript stays as it is, with a warning (nothing new came). Only when `--olang` chose another language that has no captions is it dropped, as asked, and the console names everything lost, with the SRT files of your own to merge again.
+- **`--transcript dual:fr,ovr` no longer loses the saved French translation when YouTube refuses it now** (often: HTTP 429). It was replaced by a note that it was refused; now it stays as saved when it still fits the transcript downloaded again (`YouTube's translation into 'fr' did not come now (…); the saved one stays.`), and is dropped with a message when it does not. Translations the command does not ask for are not kept, as before.
 - **The index never replaces a page that is not an index.** `--index index.txt` wrote `index.html` over your own page of that name, and a list named like a video's page (`Lecture 1 [ID].txt`) replaced that page, which was then taken for the index. Now such a run stops before anything is downloaded: `…\index.html is not an index made by yt2html, and the index of index.txt would replace it; rename the list file or move that page`.
-- **Every option is an error when given twice, as README says.** `--transcript`, `--video`, `--olang`, `-o`, `--cookies`, `--index` and `--index-only` silently kept the last value: `--video 720p --video audio:pl` downloaded 1080p, `--transcript timed --transcript dual:pl` showed only `dual`. Now each says `--video is given more than once; put all its parameters in one, comma-separated`, as `--page`, `--json` and `--take` did.
-- **A `.own` version without a translation of your own in that language no longer fails the video.** `--transcript dual:pl.own` where the saved data have no own Polish translation (for example after `--page ovr --json write`, which had already saved the new data when the page failed) gave `FAILED: …: 'pl'` and no page; now the page is made and its *Transcript* row says `not available: dual:pl.own`. Without `--json` such a version is an error before anything is downloaded: `dual:pl.own is a translation of your own, kept only in saved data: add --json write (or --json load)`.
 - **A joining of image and sound that did not finish is no longer taken for the video.** When `Ctrl+C` or a full disk stopped ffmpeg while it joined the downloaded parts, yt-dlp left `Title [id].temp.mp4`, cut short; the next `--video` said `Video skipped (file exists)`, and the page and the index played that file. Now it counts as unfinished, like the parts `Title [id].f399.mp4`, so the same command downloads the video again (yt-dlp reuses the parts still there). The same holds for an extra audio track (`….temp.m4a`).
+- **A `.own` version without a translation of your own in that language no longer fails the video.** `--transcript dual:pl.own` where the saved data have no own Polish translation (for example after `--page ovr --json write`, which had already saved the new data when the page failed) gave `FAILED: …: 'pl'` and no page; now the page is made and its *Transcript* row says `not available: dual:pl.own`. Without `--json` such a version is an error before anything is downloaded: `dual:pl.own is a translation of your own, kept only in saved data: add --json write (or --json load)`.
+- **Every option is an error when given twice, as README says.** `--transcript`, `--video`, `--olang`, `-o`, `--cookies`, `--index` and `--index-only` silently kept the last value: `--video 720p --video audio:pl` downloaded 1080p, `--transcript timed --transcript dual:pl` showed only `dual`. Now each says `--video is given more than once; put all its parameters in one, comma-separated`, as `--page`, `--json` and `--take` did.
 
 ## [0.12.2] - 2026-11-25
 
@@ -352,7 +354,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.11.0...v0.12.0
