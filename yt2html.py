@@ -31,6 +31,7 @@ import os
 import random
 import re
 import shutil
+import socket
 import sys
 import time
 import urllib.parse
@@ -1258,6 +1259,46 @@ class TranslationUnavailable(Exception):
     by trying again): the page is made without it, with a note."""
 
 
+class NoConnection(Exception):
+    """The computer cannot reach YouTube (the name does not resolve, the
+    network is unreachable; the user's run of 25.11.2026): the run stops
+    before anything of the video is written, so its page and data stay as
+    they were and the next run does the rest."""
+
+
+# What a lost connection looks like in an error, unlike a refusal (HTTP 429)
+# or a passing failure: the name does not resolve or there is no network.
+NO_CONNECTION_RE = re.compile(
+    r"getaddrinfo failed|Failed to resolve|Name or service not known|nodename nor servname"
+    r"|Temporary failure in name resolution|No address associated with hostname"
+    r"|Network is unreachable|No route to host|\[Errno 1100[1-4]\]|\[WinError 100(?:51|65)\]",
+    re.IGNORECASE)
+
+
+def no_connection(error: BaseException | None) -> bool:
+    """Whether an error (or one it came from) is a lost connection."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if NO_CONNECTION_RE.search(str(error)):
+            return True
+        info = getattr(error, "exc_info", None)   # yt-dlp's DownloadError
+        inner = info[1] if isinstance(info, tuple) and len(info) > 1 else None
+        error = error.__cause__ or error.__context__ or inner
+    return False
+
+
+def connected() -> bool:
+    """Whether YouTube's name resolves now: checked before a page made with
+    YouTube's data replaces the one there, so a connection lost on the way
+    does not leave it with placeholders for its images."""
+    try:
+        socket.getaddrinfo("www.youtube.com", 443)
+        return True
+    except OSError:
+        return False
+
+
 class TranslationRefused(TranslationUnavailable):
     """YouTube did not send the translation (HTTP 429 or another failure): the
     page is made without it, with a note; --page ovr tries again later."""
@@ -1367,6 +1408,8 @@ def fetch_translation(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict,
     try:
         cues = download_cues(ydl, with_query(url, tlang=target), not_before)
     except Exception as error:
+        if no_connection(error):
+            raise NoConnection(failure_reason(error)) from error
         raise TranslationRefused(refusal_reason(error))
     if not cues:
         raise TranslationUnavailable(f"YouTube returned no translation into '{target}'")
@@ -1608,7 +1651,7 @@ def fetch_transcript(ydl: yt_dlp.YoutubeDL, info: dict,
     log(f"Downloading transcript ({label})...")
     try:
         cues = download_cues(ydl, url)
-    except Exception as error:
+    except Exception as error:   # (a lost connection: main() stops the run on it)
         raise TranscriptError(f"could not download the transcript ({error}); nothing was saved.")
     if not cues:
         return unavailable("YouTube returned it empty")
@@ -1664,6 +1707,8 @@ def add_tracks(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, keys: list[s
             try:
                 cues = download_cues(ydl, address)
             except Exception as error:
+                if no_connection(error):
+                    raise NoConnection(failure_reason(error)) from error
                 reason, refused = refusal_reason(error), True
             else:
                 if cues:
@@ -1704,7 +1749,7 @@ def add_translations(ydl: yt_dlp.YoutubeDL, info: dict, transcript: dict, url: s
             if refused:
                 log("  The page is made without it and counts as finished; to add the "
                     "translation later: --json write (keeps the comments) or --page ovr."
-                    + TRANSLATION_HINT)
+                    + (TRANSLATION_HINT if "HTTP 429" in str(reason) else " Try again later."))
             transcript.setdefault("missing", {})[target] = {
                 "reason": str(reason), "refused": refused, "date": dt.date.today().isoformat()}
     if not transcript.get("missing"):
@@ -6139,6 +6184,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     if replaced:
         log(replaced_data_note(replaced, info))
     if not deferred:
+        if found and not args.load_json and not connected():
+            raise NoConnection("the connection was lost before the page was made again")
         save_json("Updated" if updating else "Saved")
 
     def shown(note: bool = False) -> dict:
@@ -7316,9 +7363,18 @@ def main(argv=None) -> int:
         except TakeReached:
             left_for_next_run()
             return None
-        except yt_dlp.utils.DownloadError:
+        except NoConnection:
+            counts["failed"] += 1
+            raise
+        except yt_dlp.utils.DownloadError as error:
+            if no_connection(error):
+                counts["failed"] += 1
+                raise NoConnection(failure_reason(error)) from error
             log(f"FAILED: {source}")  # yt-dlp has already printed the reason
         except Exception as error:
+            if no_connection(error):
+                counts["failed"] += 1
+                raise NoConnection(failure_reason(error)) from error
             log(f"FAILED: {source}: {error}")
         counts["failed"] += 1
         return None
@@ -7362,15 +7418,13 @@ def main(argv=None) -> int:
             log(f"Video skipped: {reason}")
             videos["skipped"] += 1
             return
-        except yt_dlp.utils.DownloadError as error:
-            log(f"Video FAILED: {failure_reason(error)}. The page is saved; run the same "
-                "command again to retry.")
-            videos["failed"] += 1
-            return
         except Exception as error:
-            log(f"Video FAILED: {error}. The page is saved; run the same command again "
-                "to retry.")
             videos["failed"] += 1
+            if no_connection(error):
+                raise NoConnection(failure_reason(error)) from error
+            log(f"Video FAILED: "
+                f"{failure_reason(error) if isinstance(error, yt_dlp.utils.DownloadError) else error}"
+                ". The page is saved; run the same command again to retry.")
             return
         videos["failed" if result.pop("_failures", 0) else "downloaded" if new
                else "skipped"] += 1
@@ -7424,7 +7478,7 @@ def main(argv=None) -> int:
         counts["failed"] += unread
     seen = set()  # video ids handled in this run
     playlists = 0
-    interrupted = False
+    interrupted = offline = False
     try:
         if listing:
             archive_list(index.videos_to_download(args.list, run))
@@ -7449,12 +7503,18 @@ def main(argv=None) -> int:
         interrupted = True
         log("Interrupted (Ctrl+C). Run the same command again to continue: "
             "videos with a page are skipped.")
+    except NoConnection as error:
+        offline = True
+        log(f"FAILED: no connection to YouTube ({error}). The run stops here: this video "
+            f"and the ones after it are as they were. Run the same command again when the "
+            f"connection is back.")
     index_failed = listing and not index.write_index(args, lists)
-    if sum(counts.values()) > 1 or playlists or listing or interrupted:
+    if sum(counts.values()) > 1 or playlists or listing or interrupted or offline:
         log(f"Done: {counts['saved']} saved, {counts['skipped']} skipped (page exists), "
             f"{counts['failed']} failed"
             + (f", {len(without_data)} without saved data" if without_data else "")
-            + (f", {counts['left']} left for the next run" if counts["left"] else "") + "."
+            + (f", {counts['left']} left for the next run" if counts["left"] else "")
+            + (", stopped: no connection" if offline else "") + "."
             + (f" Videos: {videos['downloaded']} downloaded, {videos['skipped']} skipped, "
                f"{videos['failed']} failed." if args.video is not None else ""))
     if counts["left"]:

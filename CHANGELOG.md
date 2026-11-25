@@ -8,6 +8,11 @@ All notable changes to this project. Versions: the second number for new feature
 
 - **`--json show`:** lists what the saved data hold, without YouTube and without changing anything: the download and later runs, the comments, the transcript with its translations (YouTube's and your own), corrections, other subtitles, what YouTube refused, and the `--transcript` versions `--json load` can show from them, the video files `--video` took, and the files next to the data (whether the data describe the video file). Sources as for `--json load`, or `--index FILE`; several videos end with a summary.
 
+### Fixed
+
+- **A lost connection stops the run** instead of failing every video after it (each after yt-dlp's six attempts): `FAILED: no connection to YouTube (…)`, the `Done:` line ends with `stopped: no connection`. The video it happened to stays as it was: a translation or subtitles that could not be downloaded for that reason are not noted as refused, and a page whose connection was lost before it was made again is not replaced (before, it lost its avatars and images to placeholders).
+- After a translation that failed for another reason than `HTTP 429`, the console no longer gives the advice about `HTTP 429`.
+
 ## [0.12.0] - 2026-11-25
 
 ### Added

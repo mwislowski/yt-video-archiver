@@ -67,6 +67,9 @@ def pytest_collection_modifyitems(config, items):
 # No network and no waiting in offline tests
 # --------------------------------------------------------------------------
 
+REAL_CONNECTED = yt2html.connected   # (the tests of it: test_connection.py)
+
+
 @pytest.fixture(autouse=True)
 def offline(monkeypatch, request):
     """Images are never downloaded and time.sleep does not wait."""
@@ -74,6 +77,7 @@ def offline(monkeypatch, request):
     if "online" in request.keywords:
         return
     monkeypatch.setattr(yt2html, "fetch_image", lambda url: None)
+    monkeypatch.setattr(yt2html, "connected", lambda: True)
     monkeypatch.setattr(time, "sleep", lambda seconds: None)
 
 
