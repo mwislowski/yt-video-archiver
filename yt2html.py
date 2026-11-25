@@ -46,7 +46,7 @@ from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
 from yt_dlp.utils import ISO639Utils
 
 # The program version; pyproject.toml reads it from here (single source).
-__version__ = "0.12.2"
+__version__ = "0.12.3"
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -3449,13 +3449,17 @@ PLAYER_JS = r"""
 """
 
 
-# "Title [id].f399.mp4": one format of an unfinished --video download
-FORMAT_PART_RE = re.compile(r"\.f[0-9][^.]*\.[^.]+$")
+# "Title [id].f399.mp4": one format of an unfinished --video download;
+# "Title [id].temp.mp4" (or ".pl.dubbed.temp.m4a"): yt-dlp's file of a
+# merge or fix-up that did not finish (prepend_extension(…, "temp"); left
+# behind on Ctrl+C or a full disk, cut short). Neither is a finished file.
+FORMAT_PART_RE = re.compile(r"\.(f[0-9][^.]*|temp)\.[^.]+$")
 
 
 def video_files(folder: Path, ident: str | None) -> list[Path]:
     """The finished video files with the video's id in their name, sorted by
-    name (files_with_id()): not the formats of an unfinished --video download.
+    name (files_with_id()): not the formats or the temporary file of an
+    unfinished --video download (FORMAT_PART_RE).
     The page and the index take the same files."""
     return [p for p in files_with_id(folder, ident, VIDEO_FILE_EXTENSIONS)
             if not FORMAT_PART_RE.search(p.name)]
@@ -6617,7 +6621,7 @@ def files_at_hand(folder: Path, ident: str | None, spec: dict) -> list | None:
     def endings(extension: str) -> list[tuple[str, str | None, Path]]:
         found = []
         for path in files_with_id(folder, ident, (extension,)):
-            if FORMAT_PART_RE.search(path.name):   # a format of an unfinished download
+            if FORMAT_PART_RE.search(path.name):   # a part of an unfinished download
                 continue
             parts = path.name[path.name.rindex(f"[{ident}]") + len(ident) + 2:].split(".")
             if len(parts) in (3, 4) and LANGUAGE_CODE.fullmatch(parts[1]):

@@ -236,6 +236,8 @@ def test_video_part_files_are_not_a_video(tmp_path, youtube):
     yt2html.main([URL, "-o", str(tmp_path)])
     # one format of an interrupted download: not taken as the video
     (tmp_path / (page(tmp_path).stem + ".f399.mp4")).write_bytes(b"x")
+    # yt-dlp's file of a joining that did not finish (Ctrl+C, a full disk): cut short
+    (tmp_path / (page(tmp_path).stem + ".temp.mp4")).write_bytes(b"half")
     assert yt2html.video_files_for({"id": "TESTVIDEO01"}, tmp_path) == []
     assert yt2html.main([URL, "-o", str(tmp_path), "--video"]) == 0
     assert youtube["downloads"]
@@ -960,6 +962,8 @@ def test_files_at_hand_rules(tmp_path):
     assert found("720p") == []                                       # nothing asked
     make("Title [TESTVIDEO01].mp4", "Title [TESTVIDEO01].f140.m4a")   # not an extra track
     assert found("audio:de") is None
+    make("Title [TESTVIDEO01].de.temp.m4a")     # a fix-up that did not finish (a track
+    assert found("audio:de") is None            # without a role: "temp" is no role)
     make("Title [TESTVIDEO01].de.descriptive.m4a")
     assert found("audio:de") is None                    # an audio description only if asked
     assert found("audio:de.descriptive") == [(("de", "descriptive"),

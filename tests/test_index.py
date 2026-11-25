@@ -292,8 +292,9 @@ def test_formats_of_an_unfinished_video_download_are_not_the_video(tmp_path):
     page(tmp_path, "TESTVIDEO01")
     mp4(tmp_path / "Title [TESTVIDEO01].f399.mp4", 65)
     (tmp_path / "Title [TESTVIDEO01].f251.webm").write_bytes(b"audio only")
+    mp4(tmp_path / "Title [TESTVIDEO01].temp.mp4", 65)       # a joining that did not finish
     row, = rows(html(tmp_path, "TESTVIDEO01\n"))
-    assert "data-file" not in row and "f399" not in row
+    assert "data-file" not in row and "f399" not in row and "temp" not in row
     mp4(tmp_path / "Title [TESTVIDEO01].mp4", 65)
     row, = rows(html(tmp_path, "TESTVIDEO01\n"))
     assert 'data-file="Title%20%5BTESTVIDEO01%5D.mp4"' in row and "f399" not in row
@@ -1429,7 +1430,7 @@ def test_reverse_a_folder(tmp_path, capsys):
     folder = tmp_path / "videos"
     folder.mkdir()
     for name in ["02 b.mp4", "01 a.MKV", "10 c.webm", "2 d.m4v", "Zebra.mp4", "apple.mp4",
-                 "#1 intro.mp4", "Title [TESTVIDEO01].mp4", "Title [TESTVIDEO01].f399.mp4",
+                 "#1 intro.mp4", "Title [TESTVIDEO01].mp4", "Title [TESTVIDEO01].f399.mp4", "Title [TESTVIDEO01].temp.mp4",
                  "Title [TESTVIDEO01].pl.dubbed.m4a", "notes.txt", "clip.avi", "x.mp4.part"]:
         (folder / name).write_bytes(b"x")
     (folder / "sub").mkdir()
