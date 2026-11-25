@@ -23,8 +23,8 @@ def stamp(ms):
 
 
 def own_srt(folder, language, texts=("Hallo", "Zeilen", "[Musik]"), starts=STARTS,
-            name="Title [TESTVIDEO01]"):
-    path = folder / f"{name}.{language}.own.srt"
+            name="Title [TESTVIDEO01]", kind="own"):
+    path = folder / f"{name}.{language}.{kind}.srt"
     blocks = [f"{i}\n{stamp(s)} --> {stamp(s + 2000)}\n{t}\n"
               for i, (s, t) in enumerate(zip(starts, texts), 1)]
     path.write_text("\n".join(blocks), encoding="utf-8")
@@ -127,7 +127,8 @@ def test_an_own_translation_replaces_an_earlier_own_one(capsys, tmp_path, saved)
 
 @pytest.mark.parametrize("make, message", [
     (lambda folder: own_srt(folder, "en"),
-     "'en' is the language of the transcript itself (English, auto-generated)"),
+     "'en' is the language of the transcript itself (English, auto-generated); corrections to "
+     "it go in 'Title [TESTVIDEO01].en.fixed.srt'"),
     (lambda folder: own_srt(folder, "en-GB"), "'en-GB' is the language of the transcript itself"),
     (lambda folder: own_srt(folder, "de", ("a", "b")),
      "2 lines in the file, 3 in the transcript (English, auto-generated): not made from the "
@@ -156,8 +157,9 @@ def test_names_that_are_no_translation_of_ones_own(capsys, tmp_path, saved):
                  "Title [TESTVIDEO01].own.srt"):
         (tmp_path / name).write_text("1\n00:00:00,000 --> 00:00:01,000\nx\n", encoding="utf-8")
         code, out = run(capsys, "--json", "merge", str(tmp_path / name), "-o", str(tmp_path))
-        assert code == 1 and (f"{name}: the name of a translation of your own ends with "
-                              "'.CODE.own.srt', e.g. 'Title [ID].pl.own.srt'") in out
+        assert code == 1 and (f"{name}: the name ends with '.CODE.own.srt' (a translation of "
+                              "your own, e.g. 'Title [ID].pl.own.srt') or '.CODE.fixed.srt' (the "
+                              "transcript with your corrections, e.g. 'Title [ID].en.fixed.srt')") in out
 
 
 def test_data_without_a_transcript(capsys, tmp_path, saved):
@@ -326,3 +328,86 @@ def test_youtube_s_translation_does_not_drop_an_own_one_saved_before(capsys, tmp
     after = data(saved)[yt2html.TRANSCRIPT_KEY]
     assert after["own"]["pl"]["cues"][0]["text"] == "Moje"
     assert "own" not in after["translations"]["pl"] and after["translations"]["pl"]["cues"]
+
+
+# The transcript with one's own corrections: "Title [ID].en.fixed.srt" (25.11.2026) ---------
+
+def fixed_srt(folder, texts=("Hello and welcome!", "Lines", "[music]"), **kw):
+    return own_srt(folder, "en", texts, kind="fixed", **kw)
+
+
+def test_corrections_of_the_transcript(capsys, tmp_path, saved):
+    before = data(saved)[yt2html.TRANSCRIPT_KEY]
+    srt = fixed_srt(tmp_path)
+    code, out = run(capsys, "--json", "merge", str(srt), "-o", str(tmp_path))
+    assert code == 0
+    transcript = data(saved)[yt2html.TRANSCRIPT_KEY]
+    # YouTube's text stays; the corrections beside it
+    assert transcript["cues"] == before["cues"]
+    assert transcript["fixed"] == {"cues": [{"start": 0.0, "text": "Hello and welcome!"},
+                                            {"start": 6.0, "text": "Lines"},
+                                            {"start": 120.0, "text": "[music]"}],
+                                   "file": srt.name, "date": TODAY.isoformat()}
+    assert data(saved)[yt2html.UPDATES_KEY][-1]["added"] == ["own corrections of the transcript"]
+    assert f"Updated metadata: {saved} (own corrections of the transcript, 3 lines)" in out
+    assert (f'to show it: yt2html "{saved.name}" -o "{tmp_path}" --json load --transcript'
+            in out) and not list(tmp_path.glob("*.html"))
+    run(capsys, saved.name, "-o", str(tmp_path), "--json", "load", "--transcript",
+        "plain,dual:pl,srt")
+    html = page(tmp_path)
+    # on the page: the corrected text everywhere the original is, with a note
+    assert "Hello and welcome!" in html and "English, auto-generated, with own corrections" in html
+    assert '<span class="text">Lines</span><span class="text">pl: lines</span>' in html
+    assert row(html, "Transcript").endswith(
+        f"2 versions: plain, dual with Polish (auto-translated); the original with own "
+        f"corrections ({srt.name}, {TODAY.strftime(yt2html.DATE_FORMAT)}); SRT files next to "
+        f"the page: en (auto-generated), pl (translated)")
+    # the SRT file of the original: YouTube's text
+    original = next(tmp_path.glob("*.en.auto-generated.srt")).read_text("utf-8")
+    assert "Hello and welcome!" not in original
+    # the word in either case
+    upper = srt.rename(tmp_path / "Title [TESTVIDEO01].en.FIXED.srt")
+    code, out = run(capsys, "--json", "merge", str(upper), "-o", str(tmp_path))
+    assert code == 0 and data(saved)[yt2html.TRANSCRIPT_KEY]["fixed"]["file"] == upper.name
+    assert yt2html.fixed_view({"cues": [{"start": 0, "text": "a"}],
+                               "fixed": {"cues": [{"start": 0, "text": "b"}, {"start": 1}]}}
+                              )["cues"][0]["text"] == "a"    # (does not fit: YouTube's)
+
+
+def test_corrections_replaced_and_checked(capsys, tmp_path, saved):
+    run(capsys, "--json", "merge", str(fixed_srt(tmp_path)), "-o", str(tmp_path))
+    earlier = data(saved)
+    earlier[yt2html.TRANSCRIPT_KEY]["fixed"]["date"] = "2026-11-01"
+    saved.write_text(json.dumps(earlier), encoding="utf-8")
+    code, out = run(capsys, "--json", "merge", str(fixed_srt(tmp_path, ("A", "B", "C"))),
+                    "-o", str(tmp_path))
+    assert code == 0 and "Replaces the corrections added on 01.11.2026." in out
+    assert [c["text"] for c in data(saved)[yt2html.TRANSCRIPT_KEY]["fixed"]["cues"]] == ["A", "B", "C"]
+    # another language, other lines: errors, nothing saved
+    code, out = run(capsys, "--json", "merge", str(own_srt(tmp_path, "de", kind="fixed")),
+                    "-o", str(tmp_path))
+    assert code == 1 and ("'de' is not the language of the transcript (English, auto-generated, "
+                          "with own corrections): corrections are in its language, '.en.fixed.srt'; "
+                          "a translation of your own is '.de.own.srt'") in out
+    code, out = run(capsys, "--json", "merge", str(fixed_srt(tmp_path, ("a", "b"), starts=STARTS[:2])),
+                    "-o", str(tmp_path))
+    assert code == 1 and "2 lines in the file, 3 in the transcript" in out
+    assert [c["text"] for c in data(saved)[yt2html.TRANSCRIPT_KEY]["fixed"]["cues"]] == ["A", "B", "C"]
+
+
+def test_corrections_with_transcript_ovr_and_page_ovr(capsys, tmp_path, saved, youtube):
+    run(capsys, "--json", "merge", str(fixed_srt(tmp_path)), "-o", str(tmp_path))
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(tmp_path), "--json", "write",
+                    "--transcript", "plain,ovr")
+    assert code == 0 and data(saved)[yt2html.TRANSCRIPT_KEY]["fixed"]["file"].endswith(".en.fixed.srt")
+    # no longer fitting: dropped, with a message
+    old = data(saved)
+    old[yt2html.TRANSCRIPT_KEY]["fixed"]["cues"][1]["start"] = 7.0
+    saved.write_text(json.dumps(old), encoding="utf-8")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(tmp_path), "--json", "write",
+                    "--transcript", "plain,ovr")
+    assert "Own corrections of the transcript dropped: they no longer fit it (line 2 starts" in out
+    assert "fixed" not in data(saved)[yt2html.TRANSCRIPT_KEY]
+    # --page ovr --json write names what is lost
+    run(capsys, "--json", "merge", str(fixed_srt(tmp_path)), "-o", str(tmp_path))
+    assert "(lost: own corrections of the transcript)" in yt2html.replaced_data_note(saved, data(saved))

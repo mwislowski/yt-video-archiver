@@ -124,6 +124,7 @@ Two more options belong to the transcript and to signing in: `--olang CODE` (the
 | Refresh counts and comments in the saved data | `yt2html VIDEO_ID --json refresh --transcript` |
 | Make a page again from saved data only, offline | `yt2html VIDEO_ID --json load --transcript` |
 | Merge a translation of your own into the saved data | `yt2html --json merge "Title [id].pl.own.srt"` |
+| Merge your corrections of the transcript's text into the saved data | `yt2html --json merge "Title [id].en.fixed.srt"` |
 | When YouTube asks to sign in or to confirm you are not a bot | `yt2html "URL" --cookies firefox` |
 | Versions of the program and yt-dlp; all options | `yt2html --version`; `yt2html --help` |
 
@@ -267,6 +268,12 @@ What stays: the comments, the counts (views, likes), the description and the cop
 - **What it saves:** the translation as your own translation into that language, with the file's name and the day, beside YouTube's translation into it if the data have one (that stays). A version without a kind then takes yours, so `--json write` no longer asks YouTube for its translation into that language, unless you ask for it by name (`dual:pl.translated`). A translation of your own already there is replaced (with a message). `--page ovr --json write` downloads new data without it (the console names it among what was lost); the SRT file stays, merge it again.
 - **On the page:** *About this copy* names it in the *Transcript* row (`dual with Polish (own translation)`) and adds the run to *Downloaded* (`…; updated 22.11.2026 14:05`); *Video formats* lists the translations of your own the page shows. The *Command* row leaves them out: a command cannot get them from YouTube.
 - **Options:** only `-o`; `--transcript`, `--page`, `--video`, `--index` and the others are errors (with `--transcript`, the message gives the `--json load` command that shows the translation).
+
+**Corrections of the transcript** go the same way: automatic subtitles often have obvious mistakes (names, terms, misheard words). Correct the original's SRT file (step 1 above) and save it as `Title [id].en.fixed.srt`, in the transcript's language; `yt2html --json merge "Title [id].en.fixed.srt"` merges it and `--json load --transcript` shows it.
+
+- **What the file must be:** as for a translation, the same lines starting at the same moments, only their text corrected, so every translation still fits. A `.fixed.srt` in another language, or an `.own.srt` in the transcript's own language, is an error that names the right file name.
+- **What it saves:** the corrected text beside YouTube's, which stays in the data; corrections already there are replaced (with a message). `--transcript ovr` keeps them when they still fit the transcript downloaded again, else drops them with a message; `--page ovr --json write` downloads new data without them (named among what was lost).
+- **On the page:** the corrected text everywhere the original is shown (plain, timed, the left column of `dual`, the player's subtitles), headed `English, auto-generated, with own corrections`; *About this copy* adds to the *Transcript* row `the original with own corrections (Title [id].en.fixed.srt, 25.11.2026)`. The page cannot show YouTube's text instead, and the original's SRT file of `--transcript srt` stays YouTube's text (the source to correct).
 
 ### Many videos
 
@@ -439,7 +446,7 @@ At the bottom of every page, *About this copy* is folded to a single grey line w
 - A chapter list in a video description becomes real chapters on YouTube only if it starts at `0:00`, has at least three timestamps in ascending order and each chapter is at least 10 seconds long.
 - Typical page size: a few hundred KB up to a few MB for thousands of comments.
 - Keep the pages themselves, not only the saved data: a page holds its images, while `--json load` downloads the thumbnail and avatars again, and YouTube may remove them over the years (missing avatars become letters). Rebuilding from saved data is for a newer look of the page; the extra audio switches and the dated *Video file* row come back only if the data know the files: saved with `--json write` in the same run as `--video`, or added later with `--json write --video …`.
-- An SRT file is written over whenever the transcript it comes from changes, so corrections made in it by hand are lost: correct a translation in your own `.own.srt` file and merge it again.
+- An SRT file is written over whenever the transcript it comes from changes, so corrections made in it by hand are lost: correct a translation in your own `.own.srt` file, or the original in a `.fixed.srt` file, and merge it again.
 
 ## Troubleshooting
 

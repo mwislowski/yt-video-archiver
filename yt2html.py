@@ -2650,7 +2650,21 @@ def transcript_note(transcript: dict) -> str:
     note = transcript.get("name") or transcript.get("language") or ""
     if transcript.get("kind") == "auto":
         note = f"{note}, auto-generated" if note else "auto-generated"
+    if transcript.get("fixed"):
+        note = f"{note}, with own corrections"
     return note
+
+
+def fixed_view(transcript: dict) -> dict:
+    """The transcript as the page shows it: with the text of one's own
+    corrections (--json merge of "Title [ID].en.fixed.srt", the user,
+    25.11.2026) where the data have them, at YouTube's times; the data keep
+    YouTube's text (the SRT file of --transcript srt is made from it)."""
+    fixed = (transcript.get("fixed") or {}).get("cues")
+    cues = transcript.get("cues") or []
+    if not fixed or len(fixed) != len(cues):
+        return transcript
+    return {**transcript, "cues": [{**cue, "text": line["text"]} for cue, line in zip(cues, fixed)]}
 
 
 def align_translation(cues: list[dict], translated: list[dict]) -> list[str]:
@@ -3835,6 +3849,11 @@ def about_transcript(info: dict, spec: list) -> str:
                                                 for version, language in absent)
     if notes:
         text += "; " + "; ".join(esc(note) for note in notes)
+    fixed = transcript.get("fixed") or {}
+    if fixed.get("cues"):
+        text += (f"; the original with own corrections ({esc(fixed.get('file') or '')}, "
+                 f"{format_date(fixed['date']) if fixed.get('date') else ''})"
+                 .replace(", )", ")"))
     if ("srt", None) in spec:
         files = [f"{code} ({kind})" for code, kind, _ in srt_tracks(info, spec)]
         text += "; SRT files next to the page: " + (esc(", ".join(files)) if files else "none")
@@ -4852,7 +4871,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     spec = [("plain", None)] if transcript_spec is None else transcript_spec
     if transcript and spec:  # "none" (an empty spec) also hides a stored one
         chapters = next((m.get("items") or [] for m in markers if m.get("id") == "chapters"), [])
-        sections = render_transcripts(transcript, chapters, video_id, spec)
+        sections = render_transcripts(fixed_view(transcript), chapters, video_id, spec)
         if sections and original_uncertain(info):   # once, under the first heading
             sections[0] = sections[0].replace("</h2>", "</h2>" + uncertain_note(info))
         body.extend(sections)
@@ -5317,12 +5336,14 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
         not_before = started + translation_wait()
         if whole:
             own = own_of(info.get(TRANSCRIPT_KEY) or {})
+            fixed = (info.get(TRANSCRIPT_KEY) or {}).get("fixed")
             transcript = fetch_transcript(ydl, data, targets, not_before)
             info[TRANSCRIPT_KEY] = transcript
             if transcript is None:
                 info[TRANSCRIPT_MISSING_KEY] = data.get(TRANSCRIPT_MISSING_KEY)
                 return []
             keep_own_translations(transcript, own)
+            keep_fixed(transcript, fixed)
             return (["transcript"] + [f"translation {language}"
                                       for language in translations_of(transcript)]
                     + [f"subtitles {key}" for key in transcript.get("tracks") or {}])
@@ -5504,9 +5525,11 @@ def video_added(result: dict, previous: dict) -> list[str]:
 # --json merge: a translation of one's own (an SRT file) into the saved data
 # --------------------------------------------------------------------------
 
-# "Title [ID].pl.own.srt": "own" sets it apart from the kinds of YouTube's
-# subtitles in file names (author, auto-generated, translated)
-OWN_SRT = re.compile(r"\.([A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)\.own\.srt$", re.IGNORECASE)
+# "Title [ID].pl.own.srt", a translation of one's own, and "Title [ID].en.fixed.srt",
+# the transcript with one's own corrections (the user, 25.11.2026): the words set
+# them apart from the kinds of YouTube's subtitles in file names (author,
+# auto-generated, translated)
+OWN_SRT = re.compile(r"\.([A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)\.(own|fixed)\.srt$", re.IGNORECASE)
 SRT_TIMING = re.compile(r"^\s*(\d+):(\d{2}):(\d{2})[,.](\d{3})\s*-->")
 
 
@@ -5546,6 +5569,49 @@ def check_own_cues(cues: list[dict], transcript: dict) -> None:
                              f"({track}): not made from the transcript's captions")
 
 
+def merge_fixed(path: Path, info: dict, data_path: Path, transcript: dict, language: str,
+                same: bool) -> Path:
+    """--json merge of "Title [ID].en.fixed.srt": the transcript's text with
+    one's own corrections (the user, 25.11.2026: obvious mistakes of
+    automatic captions), at its lines and times, so every translation still
+    fits; kept beside YouTube's text ("fixed"), which stays in the data. The
+    page shows it, with a note."""
+    if not same:
+        raise ValueError(f"'{language}' is not the language of the transcript "
+                         f"({transcript_note(transcript)}): corrections are in its language, "
+                         f"'.{transcript.get('language')}.fixed.srt'; a translation of your own "
+                         f"is '.{language}.own.srt'")
+    cues = srt_cues(path)
+    check_own_cues(cues, transcript)
+    earlier = transcript.get("fixed") or {}
+    if earlier.get("date"):
+        log(f"  Replaces the corrections added on {format_date(earlier['date'])}.")
+    transcript["fixed"] = {"cues": cues, "file": path.name, "date": dt.date.today().isoformat()}
+    note_update(info, {}, ["own corrections of the transcript"])
+    write_atomically(data_path, json.dumps(info, ensure_ascii=False, indent=1))
+    log(f"Updated metadata: {data_path} (own corrections of the transcript, "
+        f"{plural(len(cues), 'line')})")
+    folder = "" if data_path.parent == Path(DEFAULT_OUTPUT_DIR) else f' -o "{data_path.parent}"'
+    log(f"  The page is unchanged; to show it: yt2html \"{data_path.name}\"{folder} --json load "
+        f"--transcript")
+    return data_path
+
+
+def keep_fixed(transcript: dict, fixed: dict | None) -> None:
+    """--transcript ovr: one's own corrections stay when they still fit the
+    transcript downloaded again (its lines at its times), else they are
+    dropped with a message."""
+    if not (fixed or {}).get("cues"):
+        return
+    try:
+        check_own_cues(fixed["cues"], transcript)
+    except ValueError as problem:
+        log(f"  Own corrections of the transcript dropped: they no longer fit it ({problem}); "
+            f"fix {fixed.get('file') or 'their file'} and merge it again.")
+        return
+    transcript["fixed"] = fixed
+
+
 def merge_own_translation(source: str, args: argparse.Namespace,
                           outcome: dict | None = None) -> Path | None:
     """--json merge: a translation of one's own, "Title [ID].CODE.own.srt",
@@ -5561,8 +5627,10 @@ def merge_own_translation(source: str, args: argparse.Namespace,
                          else f"no such file: {source}")
     named = OWN_SRT.search(path.name)
     if not named:
-        raise ValueError(f"{path.name}: the name of a translation of your own ends with "
-                         "'.CODE.own.srt', e.g. 'Title [ID].pl.own.srt'")
+        raise ValueError(f"{path.name}: the name ends with '.CODE.own.srt' (a translation of "
+                         "your own, e.g. 'Title [ID].pl.own.srt') or '.CODE.fixed.srt' (the "
+                         "transcript with your corrections, e.g. 'Title [ID].en.fixed.srt')")
+    fix = named.group(2).lower() == "fixed"
     language = standard_code(named.group(1))
     if not recognised_code(language, set()):
         raise ValueError(f"{path.name}: '{named.group(1)}' is not a language code "
@@ -5580,9 +5648,13 @@ def merge_own_translation(source: str, args: argparse.Namespace,
     if not transcript:
         raise ValueError("the saved data have no transcript to translate (download it "
                          "with --json write --transcript first)")
-    if base_language(language) == base_language(transcript.get("language")):
+    same = base_language(language) == base_language(transcript.get("language"))
+    if fix:
+        return merge_fixed(path, info, data_path, transcript, language, same)
+    if same:
         raise ValueError(f"'{language}' is the language of the transcript itself "
-                         f"({transcript_note(transcript)})")
+                         f"({transcript_note(transcript)}); corrections to it go in "
+                         f"'{OWN_SRT.sub('', path.name)}.{transcript.get('language')}.fixed.srt'")
     earlier = own_of(transcript).get(language)
     cues = srt_cues(path)
     check_own_cues(cues, transcript)
@@ -5925,6 +5997,8 @@ def replaced_data_note(path: Path, fresh: dict) -> str:
     own = sorted(own_of(transcript))
     if own:
         lost.append(f"own translation{'s' if len(own) > 1 else ''} {', '.join(own)}")
+    if (transcript.get("fixed") or {}).get("cues"):
+        lost.append("own corrections of the transcript")
     gone = sum(1 for c in old.get("comments") or [] if c.get(MISSING_SINCE_KEY))
     if gone:
         lost.append(f"{plural(gone, 'comment')} no longer on YouTube")
@@ -6716,9 +6790,10 @@ def parse_args(argv=None) -> argparse.Namespace:
              "ones, those YouTube no longer has kept and marked; a video gone from YouTube is "
              "recorded), load (make the pages only from saved data, without YouTube: .info.json "
              "files, also as patterns with * or ?, or video ids and page names looked up in "
-             "-o) or merge (add a translation of your own: SRT files 'Title [ID].CODE.own.srt' "
-             "with the lines and times of the transcript, merged into the data with the same "
-             "id; makes no page: --json load then shows it)")
+             "-o) or merge (add a translation of your own, SRT files 'Title [ID].CODE.own.srt', "
+             "or your corrections of the transcript, 'Title [ID].CODE.fixed.srt' in its "
+             "language, each with the lines and times of the transcript, merged into the data "
+             "with the same id; makes no page: --json load then shows it)")
     parser.add_argument("--cookies", metavar="BROWSER", type=cookies_argument,
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in; a profile after a colon: "
