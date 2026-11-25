@@ -63,12 +63,15 @@ def test_merge_adds_the_translation_and_leaves_the_page(capsys, tmp_path, saved)
     assert code == 0
     after = data(saved)
     transcript = after[yt2html.TRANSCRIPT_KEY]
-    assert transcript["translations"]["de"] == {
+    # in a place of its own, beside YouTube's translations (25.11.2026)
+    assert transcript["own"]["de"] == {
         "language": "de", "name": "German",
         "cues": [{"start": 0.0, "text": "Hallo"}, {"start": 6.0, "text": "Zeilen"},
                  {"start": 120.0, "text": "[Musik]"}],
         "own": {"file": srt.name, "date": TODAY.isoformat()}}
-    assert "missing" not in transcript   # not asked of YouTube again
+    assert "de" not in transcript["translations"]
+    # YouTube's refusal stays noted: .translated still asks for it
+    assert transcript["missing"]["de"]["refused"]
     assert transcript["translations"]["pl"] == before[yt2html.TRANSCRIPT_KEY]["translations"]["pl"]
     assert after[yt2html.UPDATES_KEY][-1]["added"] == ["own translation de"]
     assert not list(tmp_path.glob("*.html"))
@@ -76,9 +79,12 @@ def test_merge_adds_the_translation_and_leaves_the_page(capsys, tmp_path, saved)
     assert f"Updated metadata: {saved} (own translation into 'de', 3 lines)" in out
     assert (f'The page is unchanged; to show the translation: yt2html "{saved.name}" '
             f'-o "{tmp_path}" --json load --transcript plain,dual:de') in out
-    # --json write then asks YouTube for nothing in that language
-    args = argparse.Namespace(transcript=[("plain", None), ("dual", "de")])
+    # --json write then asks YouTube for nothing in that language, unless asked
+    # for its translation by name
+    args = argparse.Namespace(transcript=[("plain", None), ("dual", "de"), ("plain", "de")])
     assert yt2html.missing_for_update(after, args) == (False, [])
+    args = argparse.Namespace(transcript=[("dual", "de.translated")])
+    assert yt2html.missing_for_update(after, args) == (False, ["de"])
 
 
 def test_the_page_then_from_the_data(capsys, tmp_path, saved):
@@ -108,21 +114,18 @@ def test_the_page_then_from_the_data(capsys, tmp_path, saved):
 def test_an_own_translation_replaces_an_earlier_own_one(capsys, tmp_path, saved):
     run(capsys, "--json", "merge", str(own_srt(tmp_path, "de")), "-o", str(tmp_path))
     earlier = data(saved)
-    earlier[yt2html.TRANSCRIPT_KEY]["translations"]["de"]["own"]["date"] = "2026-11-01"
+    earlier[yt2html.TRANSCRIPT_KEY]["own"]["de"]["own"]["date"] = "2026-11-01"
     saved.write_text(json.dumps(earlier), encoding="utf-8")
     code, out = run(capsys, "--json", "merge", str(own_srt(tmp_path, "de", ("A", "B", "C"))),
                     "-o", str(tmp_path))
     assert code == 0
     assert "Replaces the own translation into 'de' added on 01.11.2026." in out
-    translation = data(saved)[yt2html.TRANSCRIPT_KEY]["translations"]["de"]
+    translation = data(saved)[yt2html.TRANSCRIPT_KEY]["own"]["de"]
     assert [c["text"] for c in translation["cues"]] == ["A", "B", "C"]
     assert translation["own"]["date"] == TODAY.isoformat()
 
 
 @pytest.mark.parametrize("make, message", [
-    (lambda folder: own_srt(folder, "pl"),
-     "the saved data have YouTube's translation into 'pl'; a translation of your own is "
-     "not merged over it"),
     (lambda folder: own_srt(folder, "en"),
      "'en' is the language of the transcript itself (English, auto-generated)"),
     (lambda folder: own_srt(folder, "en-GB"), "'en-GB' is the language of the transcript itself"),
@@ -200,8 +203,9 @@ def test_a_pattern_merges_every_file(capsys, tmp_path, saved):
     code, out = run(capsys, "--json", "merge", str(tmp_path / "*.own.srt"),
                     str(tmp_path / "*.OWN.SRT"), "-o", str(tmp_path))
     assert code == 0 and "Done: 2 saved, 0 skipped (page exists), 0 failed." in out
-    translations = data(saved)[yt2html.TRANSCRIPT_KEY]["translations"]
-    assert set(translations) == {"pl", "de", "fr"} and translations["fr"]["name"] == "French"
+    transcript = data(saved)[yt2html.TRANSCRIPT_KEY]
+    assert set(transcript["translations"]) == {"pl"} and set(transcript["own"]) == {"de", "fr"}
+    assert transcript["own"]["fr"]["name"] == "French"
     # one run of its own for each file (the order differs between systems: Windows
     # matches names in any case, so there both patterns find both files, taken once)
     assert sorted(u["added"] for u in data(saved)[yt2html.UPDATES_KEY]) == [
@@ -271,3 +275,54 @@ def test_no_own_line_without_formats(info):
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 5),
                                transcript_spec=[("dual", "de")])
     assert "none in the data" in html and "own translations:" not in html
+
+
+def test_own_beside_youtube_s_translation(capsys, tmp_path, saved):
+    # the saved data have YouTube's Polish: one's own goes beside it (25.11.2026)
+    code, out = run(capsys, "--json", "merge", str(own_srt(tmp_path, "pl", ("Raz", "Dwa", "Trzy"))),
+                    "-o", str(tmp_path))
+    assert code == 0
+    transcript = data(saved)[yt2html.TRANSCRIPT_KEY]
+    assert "pl" in transcript["translations"] and "pl" in transcript["own"]
+    run(capsys, saved.name, "-o", str(tmp_path), "--json", "load", "--transcript",
+        "dual:pl,dual:pl.translated,plain:pl")
+    html = page(tmp_path)
+    # without a kind: one's own first; by name: YouTube's
+    assert row(html, "Transcript").endswith(
+        "3 versions: dual with Polish (own translation), dual with Polish (auto-translated), "
+        "plain in Polish (own translation)")
+    assert html.count('data-lang="pl"') == 3 and "Raz" in html
+
+
+def test_own_translations_saved_before(capsys, tmp_path, saved):
+    # data saved before 25.11.2026 keep one's own among the translations: read
+    # as one's own, moved to its place when merged again
+    old = data(saved)
+    old[yt2html.TRANSCRIPT_KEY]["translations"]["de"] = {
+        "language": "de", "name": "German", "cues": [{"start": 0.0, "text": "Alt"}],
+        "own": {"file": "x.de.own.srt", "date": "2026-11-20"}}
+    saved.write_text(json.dumps(old), encoding="utf-8")
+    transcript = data(saved)[yt2html.TRANSCRIPT_KEY]
+    assert set(yt2html.own_of(transcript)) == {"de"}
+    assert set(yt2html.translations_of(transcript)) == {"pl"}
+    assert yt2html.version_source(transcript, "dual", "de") == "de.own"
+    code, out = run(capsys, "--json", "merge", str(own_srt(tmp_path, "de")), "-o", str(tmp_path))
+    assert "Replaces the own translation into 'de' added on 20.11.2026." in out
+    transcript = data(saved)[yt2html.TRANSCRIPT_KEY]
+    assert "de" not in transcript["translations"] and transcript["own"]["de"]["cues"][0]["text"] == "Hallo"
+
+
+def test_youtube_s_translation_does_not_drop_an_own_one_saved_before(capsys, tmp_path, saved, youtube):
+    old = data(saved)
+    transcript = old[yt2html.TRANSCRIPT_KEY]
+    transcript["translations"] = {"pl": {
+        "language": "pl", "name": "Polish", "cues": [{"start": 0.0, "text": "Moje"}],
+        "own": {"file": "x.pl.own.srt", "date": "2026-11-20"}}}
+    transcript.pop("missing", None)
+    saved.write_text(json.dumps(old), encoding="utf-8")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(tmp_path), "--json", "write",
+                    "--transcript", "dual:pl.translated")
+    assert code == 0
+    after = data(saved)[yt2html.TRANSCRIPT_KEY]
+    assert after["own"]["pl"]["cues"][0]["text"] == "Moje"
+    assert "own" not in after["translations"]["pl"] and after["translations"]["pl"]["cues"]

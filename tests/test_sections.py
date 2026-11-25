@@ -471,7 +471,7 @@ def test_subtitles_cycle_and_language_buttons(info):
     # the dots are drawn in CSS: hollow and filled ones have the same size
     assert ".player .dots i{width:6px;height:6px;border-radius:50%;border:1.5px solid currentColor;" in yt2html.CSS
     assert ".player .dots i.full{background:currentColor}" in yt2html.CSS
-    assert "bilinguals.map(function (list, i)" in js            # one language button per bilingual
+    assert "bilinguals.map(function (group, i)" in js           # one language button per language
     assert "box.hidden = true;" in js                           # nothing under the video at first
     assert ".player .now-playing .line{color:var(--muted);font-size:18px;" in yt2html.CSS
     # the translation stands out from the original lines, faintly, only through the variables

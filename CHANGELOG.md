@@ -4,6 +4,12 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- **Your own translations stand beside YouTube's:** the saved data keep a translation of your own (`--json merge`) in a place of its own, so the same language can have both. `--json merge` no longer refuses a language YouTube's translation is in (YouTube's stays), `plain:pl.translated` always means YouTube's and `plain:pl.own` yours, also when both are there, and one page can show both (`dual:pl.own,dual:pl.translated`). A note that YouTube refused its translation stays after a merge (`.translated` asks for it again). Data saved before work as they are: a translation of your own among YouTube's is read as yours, and moved to its place the next time the data are saved with it (a merge, `--transcript ovr`, or YouTube's translation into that language added).
+- **Without a kind, `plain:CODE` and `timed:CODE` take your own translation, else YouTube's, else the author's subtitles, else the automatic subtitles of a dub** (in 0.11.0 the author's and a dub's came first): those two are rare and have other lines and times; they are downloaded only when YouTube does not give its translation (one request, only when the video has them), and `--json write` asks for YouTube's translation again later. `dual:CODE` without a kind takes your own translation, else YouTube's.
+- **Two translations of one language on a page:** the language button under the video carries a small index (`pl₁`, `pl₂`, in the order of the transcripts); a click on the active one goes to the next, after the last off; another language keeps the one shown last.
+
 ## [0.11.0] - 2026-11-24
 
 ### Changed
