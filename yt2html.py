@@ -6723,15 +6723,22 @@ def page_spec(value: str) -> dict:
     return spec
 
 
+ONCE_GIVEN = "_given_once"   # the options Once has seen in this command
+
+
 class Once(argparse.Action):
     """An option that may be given only once: a second --page would silently
     replace the first (argparse keeps the last), so it is an error; all
-    parameters go in one comma-separated value."""
+    parameters go in one comma-separated value. What was given is kept apart
+    (ONCE_GIVEN, removed after parsing), not read from the value: an option
+    with a default (--transcript [], -o the current folder) counts too."""
     def __call__(self, parser, namespace, values, option_string=None):
-        if getattr(namespace, self.dest) is not None:
+        given = namespace.__dict__.setdefault(ONCE_GIVEN, set())
+        if self.dest in given:
             parser.error(f"{option_string} is given more than once"
                          + ("; put all its parameters in one, comma-separated"
-                            if self.dest == "page" else ""))
+                            if self.dest in ("page", "transcript", "video") else ""))
+        given.add(self.dest)
         setattr(namespace, self.dest, values)
 
 
@@ -7109,7 +7116,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "output folder (-o). With --json merge: SRT files of your own "
                              "translations. Not with --index / --index-only (the videos "
                              "then come from the list file)")
-    parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR,
+    parser.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR, action=Once,
                         help="folder for the generated pages, their saved data and files "
                              "(default: the current folder); a file given by its name is "
                              "taken there, one given with a path elsewhere is an error")
@@ -7124,7 +7131,7 @@ def parse_args(argv=None) -> argparse.Namespace:
              "cards), avatars:yes|no (comment authors' avatars; letters instead), "
              "theme:auto|light|dark; e.g. --page ovr,comments:200,theme:dark")
     parser.add_argument(
-        "--transcript", nargs="?", const="", type=transcript_spec, default=[],
+        "--transcript", nargs="?", const="", type=transcript_spec, default=[], action=Once,
         metavar="VERSIONS",
         help="also add the transcript (without this option the page has none): alone, "
              "as continuous text in the original language; or versions, comma-separated, "
@@ -7139,7 +7146,7 @@ def parse_args(argv=None) -> argparse.Namespace:
              "refuses is left out with a note. Write the address first: yt2html URL "
              "--transcript plain,dual:pl")
     parser.add_argument(
-        "--olang", type=olang_code, default=None, metavar="CODE",
+        "--olang", type=olang_code, default=None, action=Once, metavar="CODE",
         help="the video's original language, when you know it better than YouTube shows it: "
              "the transcript is in it, the video's main audio and the Languages table follow it")
     parser.add_argument(
@@ -7161,11 +7168,11 @@ def parse_args(argv=None) -> argparse.Namespace:
              "the saved data hold, without YouTube: the transcript and its translations with "
              "the versions --json load can show, the comments, the video files, the files next "
              "to them; sources as for load, or --index FILE)")
-    parser.add_argument("--cookies", metavar="BROWSER", type=cookies_argument,
+    parser.add_argument("--cookies", metavar="BROWSER", type=cookies_argument, action=Once,
                         help="use cookies from a browser (firefox, chrome, edge, ...) "
                              "when YouTube asks to sign in; a profile after a colon: "
                              "\"firefox:PROFILE_FOLDER\" (its folder name or path)")
-    parser.add_argument("--index", metavar="FILE",
+    parser.add_argument("--index", metavar="FILE", action=Once,
                         help="archive the videos of a list file (UTF-8 text: video and "
                              "playlist addresses or ids, page names, video files of your own; "
                              "a '# Title', '## Chapter' to '#### Chapter', '> notes', "
@@ -7177,11 +7184,12 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "YouTube each time (the index keeps their lists for when YouTube "
                              "cannot be reached). With --json load, --json write or "
                              "--json refresh: those, then the index")
-    parser.add_argument("--index-only", metavar="FILE",
+    parser.add_argument("--index-only", metavar="FILE", action=Once,
                         help="only make the index page of a list file from what is in the "
                              "output folder, downloading nothing (playlists: only their lists "
                              "are read); with -o and --cookies only")
-    parser.add_argument("--video", nargs="?", const="", type=video_spec, metavar="PARAMETERS",
+    parser.add_argument("--video", nargs="?", const="", type=video_spec, action=Once,
+                        metavar="PARAMETERS",
                         help="also download the video itself, after its page, as an mp4 "
                              "named like the page (needs ffmpeg): the best quality up to "
                              "1080p in AV1, else H.264, with the original audio; then the "
@@ -7215,6 +7223,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "(with the parameter that chooses each, the codec and the size) "
                              "and the audio tracks it can add; no page is made")
     args = parser.parse_args(argv)
+    vars(args).pop(ONCE_GIVEN, None)
     args.take_limit = (DEFAULT_TAKE if args.take is None else
                        None if args.take == "all" else args.take)
     args.taken = set()   # the videos that asked YouTube in this run (taking())

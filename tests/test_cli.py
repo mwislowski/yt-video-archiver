@@ -49,6 +49,36 @@ def test_invalid_transcript_option_is_rejected(capsys):
     assert "given more than once" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("options, message", [
+    (["--transcript", "timed", "--transcript", "dual:pl"],
+     "--transcript is given more than once; put all its parameters in one, comma-separated"),
+    (["--transcript", "--transcript", "srt"], "--transcript is given more than once"),
+    (["--video", "720p", "--video", "audio:pl"],
+     "--video is given more than once; put all its parameters in one, comma-separated"),
+    (["--video", "--video"], "--video is given more than once"),
+    (["--olang", "pl", "--olang", "en"], "--olang is given more than once\n"),
+    (["-o", "a", "-o", "b"], "-o is given more than once\n"),
+    (["-o", "a", "--output-dir", "a"], "--output-dir is given more than once\n"),
+    (["--cookies", "firefox", "--cookies", "chrome"], "--cookies is given more than once\n"),
+    (["--index", "a.txt", "--index", "b.txt"], "--index is given more than once\n"),
+    (["--index-only", "a.txt", "--index-only", "b.txt"], "--index-only is given more than once\n")])
+def test_every_option_at_most_once(capsys, options, message):
+    """README: a second one is an error, not a replacement (argparse would keep
+    the last: --video 720p --video audio:pl downloaded 1080p). Options with a
+    default (--transcript [], -o the current folder) count too."""
+    sources = [] if options[0].startswith("--index") else ["URL"]
+    with pytest.raises(SystemExit):
+        yt2html.parse_args(sources + options)
+    assert message in capsys.readouterr().err
+
+
+def test_once_leaves_nothing_behind():
+    args = yt2html.parse_args(["URL", "--transcript", "timed", "--video", "720p", "-o", "out",
+                               "--olang", "pl", "--json", "write"])
+    assert args.transcript == [("timed", None)] and args.output_dir == "out"
+    assert yt2html.ONCE_GIVEN not in vars(args)
+
+
 def test_load_json_saves_in_current_folder(capsys, info_file, tmp_path, monkeypatch):
     work = info_file.parent
     monkeypatch.chdir(work)
