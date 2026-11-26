@@ -373,3 +373,28 @@ def test_only_images_of_youtube_s_servers_are_taken_first():
     for url in (ELSEWHERE, "https://ytimg.com.example.org/x.jpg", "https://notytimg.com/x.jpg",
                 "not a url"):
         assert not yt2html.on_youtube(url), url
+
+
+def test_the_image_notes_follow_the_page_made_again(capsys, pictured, monkeypatch):
+    """Commit 6 of the series (notes 5.4): offline, what does not come is
+    noted in the page; made again later, the same note keeps its first day;
+    once the images come, the notes go (the page keeps {})."""
+    import datetime as dt
+    import json
+    page_notes = lambda: yt2html.page_image_notes(next(pictured.parent.glob("*.html")))
+    images_served(monkeypatch, online=False)
+    assert load(capsys, pictured)[0] == 0
+    notes = page_notes()
+    assert {"thumbnail", "cover", "avatars", "images"} <= set(notes)
+    assert all(n["date"] == dt.date.today().isoformat() and n["again"] for n in notes.values())
+    # made again, still offline: the same notes, their first day kept
+    page = next(pictured.parent.glob("*.html"))
+    text = page.read_text(encoding="utf-8").replace(dt.date.today().isoformat(), "2026-11-01")
+    page.write_text(text, encoding="utf-8")
+    assert load(capsys, pictured)[0] == 0
+    assert {n["date"] for n in page_notes().values()} == {"2026-11-01"}
+    # online: they come, the notes go; the data are not written (load)
+    before = pictured.read_bytes()
+    images_served(monkeypatch)
+    assert load(capsys, pictured)[0] == 0
+    assert page_notes() == {} and pictured.read_bytes() == before

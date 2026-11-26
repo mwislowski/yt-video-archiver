@@ -1,6 +1,7 @@
 """--json show: what the saved data hold, by the four options, with the files next to them
 (the user's decisions, 25.11.2026)."""
 
+import datetime as dt
 import json
 
 import pytest
@@ -92,6 +93,8 @@ def test_the_block(capsys, tmp_path, info):
         "              transcript pl       saved: YouTube's translation; own translation, "
         "24.11.2026",
         "              comments            saved: 7 of 9, 1 not on YouTube",
+        "              images              unknown: the page was made before this version",
+        "                                  (--json load makes it again and notes them)",
         "              video file          saved: 720p av1 + en aac, 22.11.2026 "
         "(--video 720p,audio:es)",
         "              subtitle files      saved: en (auto-generated) (--video sub:, before 0.11.0)",
@@ -514,3 +517,97 @@ def test_comments_not_all_there_with_the_day(info):
     rows = yt2html.show_contents(info)
     assert ("comments", "partly saved", ["1 of 9, interrupted (Ctrl+C), 21.11.2026",
                                          "(--json refresh gets the rest)"]) in rows
+
+
+# The images: notes in the page (commit 6 of the series; the user's decisions 26-27.11.2026)
+
+def test_image_gaps(info):
+    avatars = {url: "data:x" for url in yt2html.avatar_urls(info)}
+    extra = {url: "data:x" for url in yt2html.extra_image_urls(info)}
+    full = dict(thumbnail="data:t", cover="data:c", avatar_uris=avatars, extra_images=extra,
+                no_avatars=False)
+    assert yt2html.image_gaps(info, **full) == {}
+    today = dt.date.today().isoformat()
+    some = sorted(yt2html.comment_avatar_urls(info))
+    gaps = yt2html.image_gaps(info, None, None, {u: "d" for u in some[1:]}, {}, False)
+    assert gaps == {
+        "thumbnail": {"reason": "thumbnail could not be downloaded", "date": today, "again": True},
+        "cover": {"reason": "cover could not be downloaded", "date": today, "again": True},
+        "channel avatar": {"reason": "channel avatar could not be downloaded", "date": today,
+                           "again": True},
+        "avatars": {"reason": f"1 of {len(some)} comment avatars could not be downloaded",
+                    "date": today, "again": True},
+        **({"images": {"reason": f"{len(extra)} of {len(extra)} other images could not be "
+                                 "downloaded", "date": today, "again": True}} if extra else {})}
+    # the same reason keeps its first day; another reason is of today
+    before = {"thumbnail": {"reason": "thumbnail could not be downloaded", "date": "2026-11-01"},
+              "avatars": {"reason": "5 of 9 comment avatars could not be downloaded",
+                          "date": "2026-11-01"}}
+    gaps = yt2html.image_gaps(info, None, None, {u: "d" for u in some[1:]}, {}, False, before)
+    assert gaps["thumbnail"]["date"] == "2026-11-01" and gaps["avatars"]["date"] == today
+    # the comment avatars left out are not missing
+    assert "avatars" not in yt2html.image_gaps(info, None, None, {}, {}, True)
+
+
+def test_the_page_keeps_its_image_notes(tmp_path, info):
+    page = tmp_path / "p.html"
+    page.write_text(yt2html.render_page(info, "data:t", {}, dt.date(2026, 11, 27),
+                                        cover="data:c"), encoding="utf-8")
+    notes = yt2html.page_image_notes(page)
+    expected = ({"channel avatar"} if yt2html.channel_avatar_url(info) else set()) | {"avatars"} | (
+        {"images"} if yt2html.extra_image_urls(info) else set())
+    assert set(notes) == expected and notes["avatars"]["again"] is True
+    avatars = {url: "data:x" for url in yt2html.avatar_urls(info)}
+    extra = {url: "data:x" for url in yt2html.extra_image_urls(info)}
+    page.write_text(yt2html.render_page(info, "data:t", avatars, dt.date(2026, 11, 27),
+                                        cover="data:c", extra_images=extra), encoding="utf-8")
+    assert yt2html.page_image_notes(page) == {}   # none missing: there all the same
+    assert yt2html.read_page_metadata(page)["yt2html:not-saved"] == "{}"
+    page.write_text("<title>x</title>", encoding="utf-8")   # a page made before
+    assert yt2html.page_image_notes(page) is None and yt2html.page_image_notes(None) is None
+    page.write_text('<meta name="yt2html:not-saved" content="[1]"><title>x</title>',
+                    encoding="utf-8")
+    assert yt2html.page_image_notes(page) is None
+    page.write_text('<meta name="yt2html:not-saved" content="{"><title>x</title>',
+                    encoding="utf-8")
+    assert yt2html.page_image_notes(page) is None
+
+
+def test_the_images_in_contents(capsys, tmp_path, saved):
+    html = tmp_path / f"Title [{ID}].html"
+    html.write_text('<meta name="yt2html:not-saved" content="{}"><title>x</title>',
+                    encoding="utf-8")
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
+    assert "              images              saved\n" in out
+    notes = {"thumbnail": {"reason": "thumbnail could not be downloaded", "date": "2026-11-27",
+                           "again": True},
+             "avatars": {"reason": "3 of 120 comment avatars could not be downloaded",
+                         "date": "2026-11-20", "again": True}}
+    html.write_text('<meta name="yt2html:not-saved" content="'
+                    + yt2html.esc(json.dumps(notes)) + '"><title>x</title>', encoding="utf-8")
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
+    assert ("              images              partly saved: thumbnail could not be downloaded\n"
+            "                                  3 of 120 comment avatars could not be downloaded\n"
+            "                                  (since 20.11.2026; each page build tries again)\n"
+            ) in out
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show:brief")
+    assert "partly saved: images" in out
+    # a page made before the notes: unknown, not missing
+    html.write_text("<title>x</title>", encoding="utf-8")
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show:brief")
+    assert "images" not in out
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
+    assert ("              images              unknown: the page was made before this version\n"
+            "                                  (--json load makes it again and notes them)\n") in out
+    html.unlink()   # no page: no line
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show:full")
+    assert "images" not in out.split("  Next to it:")[0]
+    assert yt2html.contents_images({}, {}, {"avatars": {"reason": "r"}}) == [
+        ("images", "partly saved", ["r", "(each page build tries again)"])]
+
+
+def test_all_images_missing_fit_the_width(info):
+    notes = {key: {"reason": f"120 of 120 {key}{yt2html.IMAGES_MISSING}", "date": "2026-11-27"}
+             for key in yt2html.IMAGE_PARTS}
+    for line in yt2html.contents_lines(yt2html.contents_images(info, {}, notes)):
+        assert yt2html.SHOW_INDENT + len(line) <= yt2html.SHOW_WIDTH, line

@@ -3052,7 +3052,7 @@ def run_moment(update: dict) -> str:
 
 
 def page_metadata(info: dict, archived: dt.date, cover: str | None = None,
-                  data: str | None = None) -> dict[str, str]:
+                  data: str | None = None, not_saved: dict | None = None) -> dict[str, str]:
     """Data for the index, kept invisibly in the page's <head> as
     <meta name="yt2html:..."> (read back by read_page_metadata()). Only the
     values that are known: an empty one is left out, never written empty.
@@ -3085,12 +3085,67 @@ def page_metadata(info: dict, archived: dt.date, cover: str | None = None,
                                       if playlist.get("id") and playlist.get("position")
                                       else None),
         "yt2html:data": data,   # the saved data it is made from (data_mark())
+        # the images the page lacks (image_gaps()), {} for none: always there,
+        # so a page without it is one made before (page_image_notes())
+        PAGE_NOTES_TAG: None if not_saved is None else json.dumps(not_saved,
+                                                                   ensure_ascii=False),
         "yt2html:cover": cover,   # last: by far the longest
     }
     return {name: value for name, value in tags.items() if value}
 
 
 META_RE = re.compile(r'<meta name="(yt2html:[a-z-]+)" content="([^"]*)">')
+PAGE_NOTES_TAG = "yt2html:not-saved"   # the images a page lacks, as NOT_SAVED_KEY's notes
+# The images of a page that can be missing, in this order (image_gaps()), and
+# how each note's reason names them.
+IMAGE_PARTS = ("thumbnail", "cover", "channel avatar", "avatars", "images")
+IMAGES_MISSING = " could not be downloaded"
+
+
+def image_gaps(info: dict, thumbnail: str | None, cover: str | None,
+               avatar_uris: dict[str, str], extra_images: dict[str, str], no_avatars: bool,
+               before: dict | None = None) -> dict:
+    """The images the page asks for and lacks (notes 5.4, the user's decisions
+    26.11.2026: kept in the page, where the images are, as PAGE_NOTES_TAG, in
+    the form of NOT_SAVED_KEY): {"avatars": {reason, date, again: true}, …}.
+    Each build of the page tries them again; a reason that stays keeps the
+    first day from `before` (the notes of the page made again). The comment
+    avatars left out (--page avatars:no) are not missing."""
+    today = dt.date.today().isoformat()
+    gaps = {}
+
+    def note(key: str, what: str) -> None:
+        old = (before or {}).get(key) or {}
+        reason = what + IMAGES_MISSING
+        gaps[key] = {"reason": reason, "date": old.get("date") if old.get("reason") == reason
+                     and old.get("date") else today, "again": True}
+
+    if not thumbnail:
+        note("thumbnail", "thumbnail")
+    if not cover:
+        note("cover", "cover")
+    channel = channel_avatar_url(info)
+    if channel and channel not in avatar_uris:
+        note("channel avatar", "channel avatar")
+    for key, wanted, got, name in (
+            ("avatars", set() if no_avatars else comment_avatar_urls(info), avatar_uris,
+             "comment avatars"),
+            ("images", extra_image_urls(info), extra_images, "other images")):
+        missing = sum(1 for url in wanted if url not in got)
+        if missing:
+            note(key, f"{missing} of {len(wanted)} {name}")
+    return gaps
+
+
+def page_image_notes(path: Path | None) -> dict | None:
+    """The image notes a page keeps (PAGE_NOTES_TAG); None without a page or
+    for one made before them (transitional: notes 5.4)."""
+    value = read_page_metadata(path).get(PAGE_NOTES_TAG) if path else None
+    try:
+        notes = json.loads(value) if value is not None else None
+    except ValueError:
+        return None
+    return notes if isinstance(notes, dict) else None
 META_READ_BYTES = 65536  # read in pieces until <title>: the metadata is above it
 
 
@@ -5063,6 +5118,7 @@ def show_data(info: dict) -> list[str]:
 # what the data hold, what a command asked for and did not get (NOT_SAVED_KEY),
 # and, for the full map only, what no command asked for.
 SAVED, PARTLY_SAVED, NOT_SAVED, NOT_ASKED = "saved", "partly saved", "not saved", "not asked for"
+UNKNOWN = "unknown"   # the images of a page made before their notes (transitional)
 CONTENTS_LABEL_WIDTH = 18   # "extra audio en", "transcript fr"; a longer label shifts its line
 SHOW_LEVELS = ("brief", "standard", "full")   # --json show:LEVEL; standard when not given
 
@@ -5075,7 +5131,7 @@ def gap_state_text(entry: dict) -> str:
             + ("" if entry.get("again") else " (not asked for again)"))
 
 
-def contents_playlist(info: dict, gaps: dict) -> list[tuple]:
+def contents_playlist(info: dict, gaps: dict, page=None) -> list[tuple]:
     playlist = info.get(PLAYLIST_KEY)
     if not playlist:
         return [("playlist", NOT_ASKED, ["downloaded on its own"])]
@@ -5084,7 +5140,7 @@ def contents_playlist(info: dict, gaps: dict) -> list[tuple]:
                                  f"{playlist.get('title') or playlist.get('id') or '?'}"])]
 
 
-def contents_video_page(info: dict, gaps: dict) -> list[tuple]:
+def contents_video_page(info: dict, gaps: dict, page=None) -> list[tuple]:
     status = watch_page_status(info)
     if status == "read":
         return [("video page", SAVED, [])]
@@ -5097,7 +5153,7 @@ def contents_video_page(info: dict, gaps: dict) -> list[tuple]:
                                        "(--page ovr downloads it anew)"])]
 
 
-def contents_markers(info: dict, gaps: dict) -> list[tuple]:
+def contents_markers(info: dict, gaps: dict, page=None) -> list[tuple]:
     """Chapters first, then the other timestamp lists, as in "About this copy"."""
     lists = marker_lists_of(info)
     read = watch_page_status(info) != "failed"
@@ -5113,7 +5169,7 @@ def contents_markers(info: dict, gaps: dict) -> list[tuple]:
     return [("markers", SAVED, ["; ".join(parts) or "none"])]
 
 
-def contents_cards(info: dict, gaps: dict) -> list[tuple]:
+def contents_cards(info: dict, gaps: dict, page=None) -> list[tuple]:
     if CARDS_KEY in info:
         cards = info[CARDS_KEY]
         return [("info cards", SAVED, [str(len(cards)) if cards else "none"])]
@@ -5122,7 +5178,7 @@ def contents_cards(info: dict, gaps: dict) -> list[tuple]:
     return [("info cards", NOT_ASKED, [])]
 
 
-def contents_transcript(info: dict, gaps: dict) -> list[tuple]:
+def contents_transcript(info: dict, gaps: dict, page=None) -> list[tuple]:
     """The transcript, then each of its sources (a translation, YouTube's or
     one's own, subtitles of their own) with what is noted of it."""
     note = transcript_gap(info)
@@ -5160,7 +5216,7 @@ def contents_transcript(info: dict, gaps: dict) -> list[tuple]:
     return rows
 
 
-def contents_comments(info: dict, gaps: dict) -> list[tuple]:
+def contents_comments(info: dict, gaps: dict, page=None) -> list[tuple]:
     status = comment_status(info)
     if status == "not-downloaded":
         return [("comments", NOT_ASKED, ["--page comments:no"])]
@@ -5187,7 +5243,24 @@ def contents_comments(info: dict, gaps: dict) -> list[tuple]:
     return [("comments", PARTLY_SAVED if status == "interrupted" else SAVED, texts)]
 
 
-def contents_video_file(info: dict, gaps: dict) -> list[tuple]:
+def contents_images(info: dict, gaps: dict, page=None) -> list[tuple]:
+    """The images, from the notes the page keeps (`page`: page_image_notes(),
+    "unknown" for a page made before them, None without a page: no line)."""
+    if page is None:
+        return []
+    if page == "unknown":   # transitional (notes 5.4): pages made before 0.14
+        return [("images", UNKNOWN, ["the page was made before this version",
+                                     "(--json load makes it again and notes them)"])]
+    notes = [page[key] for key in IMAGE_PARTS if key in page]
+    if not notes:
+        return [("images", SAVED, [])]
+    days = sorted(n["date"] for n in notes if n.get("date"))
+    return [("images", PARTLY_SAVED, [n.get("reason") or "reason unknown" for n in notes]
+             + [(f"(since {format_date(days[0])}; " if days else "(")
+                + "each page build tries again)"])]
+
+
+def contents_video_file(info: dict, gaps: dict, page=None) -> list[tuple]:
     record = info.get(VIDEO_KEY) or {}
     video = record.get("video") or {}
     note = gaps.get("video")
@@ -5213,7 +5286,7 @@ def contents_video_file(info: dict, gaps: dict) -> list[tuple]:
     return rows
 
 
-def contents_extra_audio(info: dict, gaps: dict) -> list[tuple]:
+def contents_extra_audio(info: dict, gaps: dict, page=None) -> list[tuple]:
     rows = [(f"extra audio {track['audio']}", SAVED, [track["role"]] if track.get("role") else [])
             for track in (info.get(VIDEO_KEY) or {}).get("extra_audio") or []]
     rows += [(f"extra audio {key.partition(' ')[2]}", NOT_SAVED, [gap_state_text(entry)])
@@ -5233,17 +5306,19 @@ ELEMENTS = (
     ("info cards", "cards", contents_cards),
     ("transcript", "transcript", contents_transcript),
     ("comments", "comments", contents_comments),
+    ("images", "", contents_images),
     ("video file", VIDEO_GAP, contents_video_file),
     ("extra audio", "audio", contents_extra_audio),
 )
 
 
-def show_contents(info: dict) -> list[tuple]:
+def show_contents(info: dict, page=None) -> list[tuple]:
     """Each part of the copy (ELEMENTS) with its state: [(label, state,
     [text, …])]; a note no part reads comes last under its own key, so
-    nothing noted is left out."""
+    nothing noted is left out. `page`: the image notes of the page next to
+    the data (contents_images())."""
     gaps = info.get(NOT_SAVED_KEY) or {}
-    rows = [row for _, _, describe in ELEMENTS for row in describe(info, gaps)]
+    rows = [row for _, _, describe in ELEMENTS for row in describe(info, gaps, page)]
     owned = {notes for _, notes, _ in ELEMENTS if notes}
     rows += [(key, NOT_SAVED, [gap_state_text(entry)]) for key, entry in sorted(gaps.items())
              if key.partition(" ")[0] not in owned]
@@ -5364,7 +5439,9 @@ def show_block(info: dict, data_path: Path, level: str = "standard") -> tuple[li
     size = data_path.stat().st_size
     size_text = f"{size / 1e6:.1f} MB" if size >= 1e6 else f"{-(-size // 1000)} kB"
     head = f"{info.get('title') or '(no title)'} [{info.get('id') or '?'}]"
-    rows = show_contents(info)
+    pages = files_with_id(data_path.parent, info.get("id"), (".html",))
+    rows = show_contents(info, None if not pages else page_image_notes(pages[0]) or (
+        {} if PAGE_NOTES_TAG in read_page_metadata(pages[0]) else "unknown"))
     files, found = show_files(info, data_path.parent, data_mark(data_path.read_bytes()))
     record = info.get(TRANSCRIPT_KEY) or {}
     video = (info.get(VIDEO_KEY) or {}).get("video") or {}
@@ -5548,14 +5625,15 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 from_json: bool = False, built: dt.datetime | None = None,
                 video_files: list[str] | None = None, video_size: int | None = None,
                 audio_files: dict | None = None, cover: str | None = None,
-                data: str | None = None) -> str:
+                data: str | None = None, image_notes: dict | None = None) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
     `avatar_uris`, `extra_images` ({image url: data URI}) and `cover` (only
     in the metadata, for the index). `no_avatars`,
     `from_json` and `built` (the build time, default now) are only described
     in "About this copy". `video_files` and `audio_files` ({(code, role):
     file}) are what was found next to the page; `data` the mark of the saved
-    data it is made from (data_mark(), in the metadata)."""
+    data it is made from (data_mark(), in the metadata); `image_notes` those
+    of the page made again (image_gaps()), for the first day of a note."""
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -5696,7 +5774,10 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         f'<meta name="generator" content="yt2html {__version__} (yt-video-archiver)">',
         f'<meta name="source-url" content="{esc(url)}">',
         *(f'<meta name="{name}" content="{esc(value)}">'
-          for name, value in page_metadata(info, archived, cover, data).items()),
+          for name, value in page_metadata(
+              info, archived, cover, data,
+              image_gaps(info, thumbnail, cover, avatar_uris, extra_images or {}, no_avatars,
+                         image_notes)).items()),
         f"<title>{esc(title)}</title>",
         f'<meta name="color-scheme" content="{COLOR_SCHEMES.get(theme, "dark")}">',
         # The body is already rendered here, so every avatar class is known.
@@ -6775,7 +6856,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
                            extra_images=images["extra"],
                            no_avatars=args.no_avatars, from_json=bool(data_path),
                            video_files=video_files, video_size=video_size,
-                           audio_files=audio_files, data=mark)
+                           audio_files=audio_files, data=mark,
+                           image_notes=page_image_notes(found))
         return page
 
     def save(verb: str) -> None:
