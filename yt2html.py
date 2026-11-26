@@ -6081,6 +6081,43 @@ def refresh_saved(info: dict, fresh: dict) -> dict | None:
     return stats
 
 
+def merge_video_record(previous: dict, result: dict, image_new: bool) -> dict:
+    """VIDEO_KEY after a run of --video: what the run found or downloaded
+    (`result`) over the saved record (`previous`), file by file (review A3:
+    the record was replaced by the run's, so audio:de after audio:pl lost pl,
+    and --json refresh --video every track). The video file: the run's, else
+    the saved one; the extra tracks by (audio, role), the run's over the
+    saved, the others kept in their order, also for a file no longer there
+    (the user, 25.11.2026: its data stay; the page greys out its switch until
+    the file is back); the old sub: subtitles kept. "parameters": those of the image from
+    the run that downloaded it (`image_new`), else the saved ones, with the
+    audio: items of both."""
+    if not previous:
+        return result
+    merged = {**previous, **{key: value for key, value in result.items()
+                             if key != "extra_audio"}}
+    tracks = {(e.get("audio"), e.get("role")): e for e in previous.get("extra_audio") or []}
+    tracks.update(((e.get("audio"), e.get("role")), e) for e in result.get("extra_audio") or [])
+    if tracks:
+        merged["extra_audio"] = list(tracks.values())
+
+    def items(record: dict) -> list[str]:
+        return [item.strip() for item in (record.get("parameters") or "").split(",")
+                if item.strip()]
+
+    def audio(item: str) -> bool:   # (the parameters are kept in lower case: video_spec())
+        return item.startswith("audio:")
+
+    image = [item for item in items(result if image_new else previous) if not audio(item)]
+    seen, extra = set(), []
+    for item in filter(audio, items(previous) + items(result)):
+        if item not in seen:
+            seen.add(item)
+            extra.append(item)
+    merged["parameters"] = ",".join(image + extra)
+    return merged
+
+
 def video_added(result: dict, previous: dict) -> list[str]:
     """The files this run of --video downloaded, for UPDATES_KEY: dated today
     and not so in the saved data (`previous`, their VIDEO_KEY) already."""
@@ -6784,6 +6821,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                                    target.stem))
         size = target.stat().st_size
         log(f"Saved video: {target} ({human_size(size).lstrip('~')})")
+        result["_image_new"] = True   # told to take_video(), not saved
         result["video"] = {"file": target.name, "size": size, "date": today,
                            "quality": variant["quality"], "codec": variant["codec"],
                            "video_format": variant["format"]["format_id"],
@@ -7781,6 +7819,7 @@ def main(argv=None) -> int:
         videos["failed" if result.pop("_failures", 0) else "downloaded" if new
                else "skipped"] += 1
         changes = result.pop("_gaps", {})
+        image_new = result.pop("_image_new", False)
         if outcome.get("deferred") is not None:   # --json write, nothing missing in the data
             known = outcome["deferred"].get(NOT_SAVED_KEY) or {}
             if not new and video_gaps(known, changes, args.video["ovr"]) == known:
@@ -7796,7 +7835,7 @@ def main(argv=None) -> int:
             info = outcome["info"]
             if formats:
                 info["formats"] = formats   # the list the video was chosen from
-            info[VIDEO_KEY] = result
+            info[VIDEO_KEY] = merge_video_record(outcome.get("previous") or {}, result, image_new)
             set_gaps(info, video_gaps(info.get(NOT_SAVED_KEY) or {}, changes, args.video["ovr"]))
             if outcome.get("updating"):
                 note_update(info, outcome["record"],

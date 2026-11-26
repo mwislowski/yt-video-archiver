@@ -1186,3 +1186,84 @@ def test_a_track_in_the_video_takes_its_note_away(tmp_path, youtube, capsys):
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:en,audio:de",
                          "--json", "write"]) == 0
     assert yt2html.NOT_SAVED_KEY not in saved_data(tmp_path)   # en is the video's own
+
+
+# --------------------------------------------------------------------------
+# The record of the files, merged file by file (review A3)
+# --------------------------------------------------------------------------
+
+def tracks_of(folder):
+    return [(e["audio"], e.get("role")) for e in
+            saved_data(folder)[yt2html.VIDEO_KEY].get("extra_audio") or []]
+
+
+def test_another_track_keeps_the_ones_recorded_before(tmp_path, youtube, capsys):
+    """Review A3: the record of --video was replaced by the run's, so
+    audio:de after audio:pl lost pl from the data, and the page its switch."""
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "1080p,audio:pl",
+                         "--json", "write"]) == 0
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de", "--json", "write"]) == 0
+    assert tracks_of(tmp_path) == [("pl", "dubbed"), ("de-DE", "auto-dubbed")]
+    html = page(tmp_path).read_text("utf-8")
+    for ending in (".pl.dubbed.m4a", ".de-DE.auto-dubbed.m4a"):
+        assert 'data-audio="' + page(tmp_path).stem + ending + '"' in html
+    record = saved_data(tmp_path)[yt2html.VIDEO_KEY]
+    assert record["parameters"] == "1080p,audio:pl,audio:de"   # the image's, both tracks'
+    assert record["video"]["date"] == dt.date.today().isoformat()
+    # the image downloaded again: its parameters are this run's
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "ovr,audio:es-us",
+                         "--json", "write"]) == 0
+    assert saved_data(tmp_path)[yt2html.VIDEO_KEY]["parameters"] == (
+        "ovr,audio:pl,audio:de,audio:es-us")
+
+
+def test_a_refresh_with_video_keeps_the_tracks(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
+    assert yt2html.main(["TESTVIDEO01", "-o", str(tmp_path), "--json", "refresh",
+                         "--video"]) == 0
+    assert tracks_of(tmp_path) == [("pl", "dubbed")]
+    assert 'data-audio="' in page(tmp_path).read_text("utf-8")
+
+
+def test_the_record_of_a_file_gone_stays(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:de",
+                         "--json", "write"]) == 0
+    (tmp_path / (page(tmp_path).stem + ".pl.dubbed.m4a")).unlink()
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de,audio:es-US",
+                         "--json", "write"]) == 0
+    assert tracks_of(tmp_path) == [("pl", "dubbed"), ("de-DE", "auto-dubbed"),
+                                   ("es-US", "dubbed")]
+    html = page(tmp_path).read_text("utf-8")
+    stem = page(tmp_path).stem
+    # its switch stays, greyed out until the file is back (data-found empty)
+    assert f'data-audio="{stem}.pl.dubbed.m4a" data-found=""' in html
+    assert f'data-found="{stem}.de-DE.auto-dubbed.m4a"' in html
+
+
+def test_merging_the_record():
+    old = {"date": "2026-11-01", "parameters": "720p,audio:pl",
+           "video": {"file": "a.mp4", "quality": "720p"},
+           "extra_audio": [{"audio": "pl", "role": "dubbed", "file": "a.pl.m4a", "size": 1},
+                           {"audio": "en", "role": None, "file": "a.en.m4a"}],
+           "subtitles": [{"code": "en", "kind": "auto-generated"}]}
+    new = {"date": "2026-11-26", "parameters": "ovr,1080p,audio:pl,audio:de",
+           "video": {"file": "a.mp4", "quality": "1080p"},
+           "extra_audio": [{"audio": "pl", "role": "dubbed", "file": "a.pl.m4a", "size": 2},
+                           {"audio": "de", "role": None, "file": "a.de.m4a"}]}
+    merged = yt2html.merge_video_record(old, new, image_new=True)
+    assert merged["date"] == "2026-11-26" and merged["video"]["quality"] == "1080p"
+    assert [(e["audio"], e.get("size")) for e in merged["extra_audio"]] == [
+        ("pl", 2), ("en", None), ("de", None)]               # the run's over the saved, in order
+    assert merged["subtitles"] == old["subtitles"]
+    assert merged["parameters"] == "ovr,1080p,audio:pl,audio:de"
+    # the image not downloaded now: its parameters stay
+    assert yt2html.merge_video_record(old, {**new, "parameters": "audio:pl,audio:de"},
+                                      image_new=False)["parameters"] == "720p,audio:pl,audio:de"
+    # without a video file in the run: the saved one
+    without = {k: v for k, v in new.items() if k != "video"}
+    assert yt2html.merge_video_record(old, without, image_new=False)["video"] == old["video"]
+    assert yt2html.merge_video_record({}, new, image_new=True) is new
+    assert "extra_audio" not in yt2html.merge_video_record({"date": "x"}, {"date": "y"}, False)
