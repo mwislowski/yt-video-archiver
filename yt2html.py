@@ -47,7 +47,7 @@ from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
 from yt_dlp.utils import ISO639Utils
 
 # The program version; pyproject.toml reads it from here (single source).
-__version__ = "0.12.3"
+__version__ = "0.13.0"
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -6715,7 +6715,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     """--video for one video whose page is `page`: a fresh list of formats
     (the addresses in older data expire), the variant within the limit
     (FormatChoice), checks, then yt-dlp downloads and merges it into an mp4
-    named like the page; then the extra tracks and subtitles. Files already
+    named like the page; then the extra audio tracks. Files already
     next to the page (by the video's id and their ending, whatever the rest
     of the name) are kept, unless `again`, and described too, with the
     details `previous` (the saved data's VIDEO_KEY) gives for the same file.
