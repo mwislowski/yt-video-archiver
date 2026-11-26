@@ -158,8 +158,9 @@ def test_bilingual_missing_at_download_is_a_note(capsys, info, tmp_path):
 def test_bilingual_for_a_video_without_captions(capsys, info, tmp_path, monkeypatch):
     # downloaded now: no captions at all is a note, the page is made
     def fetch(source, args):
-        return {**info, yt2html.TRANSCRIPT_KEY: None, yt2html.NOT_SAVED_KEY: {
-            "transcript": {"reason": "the video has no captions", "again": False}}}
+        return {**{k: v for k, v in info.items() if k != yt2html.TRANSCRIPT_KEY},
+                yt2html.NOT_SAVED_KEY: {"transcript": {"reason": "the video has no captions",
+                                                       "again": False}}}
     monkeypatch.setattr(yt2html, "fetch_info", fetch)
     monkeypatch.setattr(yt2html, "fetch_images", lambda *a, **k: {})
     monkeypatch.setattr(yt2html, "fetch_thumbnail", lambda info: None)

@@ -123,8 +123,7 @@ def test_a_plain_block_and_what_is_not_there(capsys, tmp_path, saved, info):
     # a video file the data do not describe; files the data name that are gone
     data = json.loads(saved.read_text(encoding="utf-8"))
     data[yt2html.VIDEO_KEY] = {"parameters": "", "video": {"file": f"Title [{ID}].mp4", "size": 4}}
-    del data[yt2html.TRANSCRIPT_KEY]
-    data[yt2html.TRANSCRIPT_KEY] = None
+    del data[yt2html.TRANSCRIPT_KEY]   # none came: only its note says so
     data[yt2html.NOT_SAVED_KEY] = {"transcript": {"reason": "the video has no subtitles",
                                                   "date": "2026-11-22", "again": False}}
     data["comments"] = None
@@ -381,9 +380,11 @@ def test_a_note_no_part_reads_is_shown_too(info):
 
 
 def test_a_transcript_noted_as_missing_without_a_reason(info):
-    info[yt2html.TRANSCRIPT_KEY] = None
-    assert ("transcript", "not saved", ["none"]) in yt2html.show_contents(info)
     del info[yt2html.TRANSCRIPT_KEY]
+    info[yt2html.NOT_SAVED_KEY] = {"transcript": {"again": False}}
+    assert ("transcript", "not saved", ["reason unknown (not asked for again)"]) in \
+        yt2html.show_contents(info)
+    del info[yt2html.NOT_SAVED_KEY]
     rows = yt2html.show_contents(info)
     assert ("transcript", "not asked for", []) in rows
     assert not [label for label, _, _ in rows if label.startswith("transcript ")]

@@ -299,7 +299,7 @@ def test_ovr_with_another_olang_without_captions_drops_it_and_names_all(capsys, 
             "translation into fr; own translation de (Title [TESTVIDEO01].de.own.srt); own "
             "corrections (Title [TESTVIDEO01].en.fixed.srt); subtitles pl.author).") in out
     data = json.loads(saved.read_text("utf-8"))
-    assert data[yt2html.TRANSCRIPT_KEY] is None
+    assert yt2html.TRANSCRIPT_KEY not in data   # none: only its note says so
     assert data[yt2html.NOT_SAVED_KEY] == {"transcript": {   # the old transcript's notes went too
         "reason": "no captions in 'de', the original language set with --olang",
         "date": dt.date.today().isoformat(), "again": False}}
@@ -510,7 +510,7 @@ def test_srt_tracks(info):
     transcript["kind"] = "manual"
     assert yt2html.srt_tracks(info, [("plain", "pl")])[0][:2] == ("pl", "translated")
     assert yt2html.srt_tracks(info, [("plain", None)])[0][:2] == ("en", "author")
-    info[yt2html.TRANSCRIPT_KEY] = None
+    del info[yt2html.TRANSCRIPT_KEY]
     assert yt2html.srt_tracks(info, [("plain", None)]) == []
 
 

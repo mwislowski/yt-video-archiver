@@ -202,7 +202,9 @@ def test_command_left_out_comments_and_transcript(info):
     del info["comments"]
     del info[yt2html.TRANSCRIPT_KEY]  # no --transcript at download
     assert command(render(info)) == "yt2html TESTVIDEO01 --page comments:no"
-    info[yt2html.TRANSCRIPT_KEY] = None  # asked for, but the video has none
+    # asked for, but none came: only its note says so
+    info[yt2html.NOT_SAVED_KEY] = {"transcript": {"reason": "the video has no captions",
+                                                  "again": False}}
     assert command(render(info)) == "yt2html TESTVIDEO01 --page comments:no --transcript"
     # asked for at download, not shown now
     assert command(render(info, transcript_spec=[])) == "yt2html TESTVIDEO01 --page comments:no"
@@ -401,10 +403,11 @@ def test_transcript_left_out_or_missing(info):
     assert row(render(info, transcript_spec=[]), "Transcript") == "left out"
     del info[yt2html.TRANSCRIPT_KEY]
     assert row(render(info), "Transcript") == "left out"
-    info[yt2html.TRANSCRIPT_KEY] = None
     info[yt2html.NOT_SAVED_KEY] = {"transcript": {"reason": "could not be downloaded (HTTP Error 429)",
                                                   "date": "2026-11-05", "again": False}}
     assert row(render(info), "Transcript") == "none: could not be downloaded (HTTP Error 429)"
+    info[yt2html.NOT_SAVED_KEY] = {"transcript": {"again": False}}   # no reason kept
+    assert row(render(info), "Transcript") == "none"
 
 
 def test_transcript_language_features_and_versions(info):

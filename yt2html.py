@@ -138,8 +138,9 @@ OLANG_KEY = "yt2html_original_language_set"
 # The transcript: {language, name, kind, cues: [{start, text}], translations:
 # {lang: {language, name, cues, own?}}} (own: {file, date} for a translation of
 # one's own that --json merge took from an SRT file, the others are YouTube's);
-# None if the video has none (the reason in NOT_SAVED_KEY), absent without
-# --transcript. All versions on the page are built from the same cues.
+# absent without --transcript, and when none came (then NOT_SAVED_KEY notes
+# why: transcript_gap(); data saved before keep None, read by
+# upgrade_saved()). All versions on the page are built from the same cues.
 TRANSCRIPT_KEY = "yt2html_transcript"
 
 # The author's info cards: [{type, title, url, image, details, message, start}];
@@ -295,9 +296,11 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
             add_watch_page_data(ydl, info, cards=not args.no_cards)
             if args.transcript:
                 gaps = {}
-                info[TRANSCRIPT_KEY] = fetch_transcript(
+                transcript = fetch_transcript(
                     ydl, info, gaps, source_keys(args.transcript, info, None),
                     not_before=started + translation_wait())
+                if transcript:   # none: only its note says so (transcript_gap())
+                    info[TRANSCRIPT_KEY] = transcript
                 set_gaps(info, gaps)
         return info
 
@@ -1642,6 +1645,17 @@ def gap_key(source: str | None = None) -> str:
     return f"transcript {source}" if source else "transcript"
 
 
+def transcript_gap(info: dict) -> dict | None:
+    """The note of a transcript asked for that did not come (NOT_SAVED_KEY,
+    "transcript"); the data then have no transcript."""
+    return (info.get(NOT_SAVED_KEY) or {}).get(gap_key())
+
+
+def transcript_asked(info: dict) -> bool:
+    """Whether a command asked for the transcript: it is there, or its note."""
+    return TRANSCRIPT_KEY in info or transcript_gap(info) is not None
+
+
 def note_gap(gaps: dict, key: str, reason: str, again: bool) -> None:
     """What did not come, into `gaps` (a NOT_SAVED_KEY map): why, the day,
     and whether the same command asks for it again."""
@@ -1668,10 +1682,12 @@ def set_gaps(info: dict, gaps: dict) -> None:
 
 
 def upgrade_saved(info: dict) -> dict:
-    """Saved data of 0.12.3 and before in today's form: the transcript's
-    "missing" ({KEY: {reason, refused, date}}) and TRANSCRIPT_MISSING_KEY go
-    into NOT_SAVED_KEY (refused: asked for again). Transitional code (notes
-    5.4): removed once no saved data have them. Returns `info`."""
+    """Saved data of earlier versions in today's form: the transcript's
+    "missing" ({KEY: {reason, refused, date}}) and TRANSCRIPT_MISSING_KEY of
+    0.12.3 and before go into NOT_SAVED_KEY (refused: asked for again); a
+    transcript saved as None (none came) goes, its note stays or is made.
+    Transitional code (notes 5.4): removed once no saved data have them.
+    Returns `info`."""
     transcript = info.get(TRANSCRIPT_KEY)
     old = transcript.pop("missing", None) if isinstance(transcript, dict) else None
     gaps = {}
@@ -1680,8 +1696,10 @@ def upgrade_saved(info: dict) -> dict:
                               **({"date": entry["date"]} if entry.get("date") else {}),
                               "again": bool(entry.get("refused"))}
     reason = info.pop(TRANSCRIPT_MISSING_KEY, None)
-    if reason and TRANSCRIPT_KEY in info and transcript is None:
-        gaps[gap_key()] = {"reason": reason, "again": False}
+    if TRANSCRIPT_KEY in info and transcript is None:
+        del info[TRANSCRIPT_KEY]
+        gaps[gap_key()] = {"reason": reason or "none came when it was downloaded",
+                           "again": False}
     if gaps:
         info[NOT_SAVED_KEY] = {**gaps, **(info.get(NOT_SAVED_KEY) or {})}
     return info
@@ -3905,7 +3923,7 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
     spec = [(version, language) for version, language in spec
             if not (language and split_code(version_source(transcript, version, language))[1]
                     == "own")]
-    if TRANSCRIPT_KEY in info and spec:   # the option alone means plain
+    if transcript_asked(info) and spec:   # the option alone means plain
         versions = format_transcript_spec(spec)
         parts += ["--transcript"] + ([versions] if versions != "plain" else [])
     if info.get(OLANG_KEY):
@@ -3989,11 +4007,11 @@ def about_transcript(info: dict, spec: list) -> str:
     """Language (features); N versions: the versions shown, each bilingual one
     with its translation. Like every row, it describes the page, not what a
     saved data file holds besides."""
-    if TRANSCRIPT_KEY not in info or not spec:
+    if not transcript_asked(info) or not spec:
         return "left out"
-    transcript = info[TRANSCRIPT_KEY]
-    if transcript is None:
-        reason = ((info.get(NOT_SAVED_KEY) or {}).get(gap_key()) or {}).get("reason")
+    transcript = info.get(TRANSCRIPT_KEY)
+    if not transcript:
+        reason = (transcript_gap(info) or {}).get("reason")
         return f"none: {esc(reason)}" if reason else "none"
     kind = "auto-generated" if transcript.get("kind") == "auto" else "by the author"
     # (data saved before the check of original_uncertain() may say original)
@@ -5031,11 +5049,10 @@ def contents_cards(info: dict, gaps: dict) -> list[tuple]:
 def contents_transcript(info: dict, gaps: dict) -> list[tuple]:
     """The transcript, then each of its sources (a translation, YouTube's or
     one's own, subtitles of their own) with what is noted of it."""
-    if TRANSCRIPT_KEY not in info:
-        rows = [("transcript", NOT_ASKED, [])]
-    elif not info[TRANSCRIPT_KEY]:
-        note = gaps.get(gap_key())
-        rows = [("transcript", NOT_SAVED, [gap_state_text(note) if note else "none"])]
+    note = transcript_gap(info)
+    if not info.get(TRANSCRIPT_KEY):
+        rows = [("transcript", NOT_SAVED, [gap_state_text(note)]) if note else
+                ("transcript", NOT_ASKED, [])]
     else:
         transcript = info[TRANSCRIPT_KEY]
         kind = "auto-generated" if transcript.get("kind") == "auto" else "by the author"
@@ -5944,13 +5961,14 @@ def missing_for_update(info: dict, args: argparse.Namespace) -> tuple[bool, list
         # original's language is left out once the transcript is known)
         return True, source_keys(args.transcript, info, None, own)
     if TRANSCRIPT_KEY not in info:
+        note = transcript_gap(info)
+        if note and not note.get("again"):
+            log(f"No transcript in the saved data ({note.get('reason') or 'none'}); not asked "
+                f"for again.")
+            return False, []
         return True, source_keys(args.transcript, info, None)
     wanted = source_keys(args.transcript, info, saved.get("language"), own)
     transcript = info[TRANSCRIPT_KEY]
-    if transcript is None:
-        reason = ((info.get(NOT_SAVED_KEY) or {}).get(gap_key()) or {}).get("reason")
-        log(f"No transcript in the saved data ({reason or 'none'}); not asked for again.")
-        return False, []
     missing = transcript_gaps(info)
 
     def wanted_now(key):   # not in the data, and not noted as not on YouTube
@@ -6013,10 +6031,11 @@ def update_transcript(info: dict, args: argparse.Namespace, whole: bool,
                 # --olang chose another language, and it has no captions: as asked, but named
                 lost = "; ".join(transcript_parts(saved))
                 log(f"  The saved transcript is dropped (lost: {lost}).")
-            info[TRANSCRIPT_KEY] = transcript
-            if transcript is None:
+            if transcript is None:   # none came: only its note says so
+                info.pop(TRANSCRIPT_KEY, None)
                 set_gaps(info, gaps)
                 return []
+            info[TRANSCRIPT_KEY] = transcript
             keep_own_translations(transcript, own)
             keep_fixed(transcript, fixed)
             kept = keep_youtube_translations(transcript, saved or {}, split_keys(targets)[0], gaps)

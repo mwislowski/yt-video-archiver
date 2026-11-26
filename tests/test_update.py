@@ -107,15 +107,26 @@ def test_the_whole_transcript_when_the_data_have_none(capsys, saved, youtube):
     data = json.loads(saved.read_text("utf-8"))
     assert code == 0 and data[yt2html.TRANSCRIPT_KEY]["cues"]
     assert data[yt2html.UPDATES_KEY][0]["added"] == ["transcript", "translation pl"]
-    # no captions then: noted, and not asked for again
-    data[yt2html.TRANSCRIPT_KEY] = None
-    data[yt2html.NOT_SAVED_KEY] = {"transcript": {"reason": "the video has no captions",
-                                                  "again": False}}
-    saved.write_text(json.dumps(data), encoding="utf-8")
-    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
-                    "--transcript")
-    assert code == 0 and youtube["extracted"] == 1
-    assert "No transcript in the saved data (the video has no captions); not asked for again." in out
+    # no captions then: noted, and not asked for again (also as data before 0.14 kept it,
+    # the transcript as None)
+    for old in (False, True):
+        data.pop(yt2html.TRANSCRIPT_KEY, None)
+        if old:
+            data[yt2html.TRANSCRIPT_KEY] = None
+        data[yt2html.NOT_SAVED_KEY] = {"transcript": {"reason": "the video has no captions",
+                                                      "again": False}}
+        saved.write_text(json.dumps(data), encoding="utf-8")
+        before = saved.read_bytes()
+        code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                        "--transcript")
+        assert code == 0 and youtube["extracted"] == 1 and saved.read_bytes() == before
+        assert ("No transcript in the saved data (the video has no captions); not asked for "
+                "again.") in out
+    # a note to ask again: asked again
+    data.pop(yt2html.TRANSCRIPT_KEY)
+    data[yt2html.NOT_SAVED_KEY]["transcript"]["again"] = True
+    args = yt2html.parse_args(["TESTVIDEO01", "--json", "write", "--transcript"])
+    assert yt2html.missing_for_update(data, args) == (True, [])
 
 
 def test_a_video_without_captions_now(capsys, saved, youtube, monkeypatch):
@@ -126,7 +137,7 @@ def test_a_video_without_captions_now(capsys, saved, youtube, monkeypatch):
     assert run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
                "--transcript")[0] == 0
     data = json.loads(saved.read_text("utf-8"))
-    assert data[yt2html.TRANSCRIPT_KEY] is None and yt2html.UPDATES_KEY not in data
+    assert yt2html.TRANSCRIPT_KEY not in data and yt2html.UPDATES_KEY not in data   # its note says
     assert data[yt2html.NOT_SAVED_KEY]["transcript"]["reason"] == "the video has no captions"
     assert "transcript pl" not in data[yt2html.NOT_SAVED_KEY]   # the old transcript's notes went
 
@@ -620,6 +631,15 @@ def test_upgrade_of_data_saved_by_0_12_3():
         "transcript": {"reason": "no captions", "again": False},
         "audio de": {"reason": "no connection", "again": True}}
     assert yt2html.TRANSCRIPT_MISSING_KEY not in info
+    assert yt2html.TRANSCRIPT_KEY not in info   # none came: only its note says so (0.14)
+    # a transcript saved as None (0.13.0): the key goes, its note stays; without one, made
+    info = {yt2html.TRANSCRIPT_KEY: None,
+            yt2html.NOT_SAVED_KEY: {"transcript": {"reason": "the video has no captions",
+                                                   "date": "2026-11-20", "again": False}}}
+    assert yt2html.upgrade_saved(info) == {yt2html.NOT_SAVED_KEY: {"transcript": {
+        "reason": "the video has no captions", "date": "2026-11-20", "again": False}}}
+    assert yt2html.upgrade_saved({yt2html.TRANSCRIPT_KEY: None}) == {yt2html.NOT_SAVED_KEY: {
+        "transcript": {"reason": "none came when it was downloaded", "again": False}}}
     # the same note in both forms: today's wins
     info = {yt2html.TRANSCRIPT_KEY: {"missing": {"pl": {"reason": "old", "refused": True}}},
             yt2html.NOT_SAVED_KEY: {"transcript pl": {"reason": "new", "again": False}}}
@@ -794,3 +814,34 @@ def test_a_page_without_saved_data_has_no_mark(capsys, saved, youtube, monkeypat
     folder = saved.parent / "other"
     assert run(capsys, URL, "-o", str(folder))[0] == 0
     assert mark_of(page(folder)) is None
+
+
+def test_a_download_without_captions_keeps_only_the_note(monkeypatch):
+    """Since the series on the state of a copy (notes 5.4): no transcript key
+    when none came, only the note; none either without --transcript."""
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download):
+            return {"id": "TESTVIDEO01"}
+
+        def sanitize_info(self, info):
+            return info
+
+    monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(yt2html, "add_watch_page_data", lambda ydl, info, cards=True: None)
+    url = "https://www.youtube.com/watch?v=TESTVIDEO01"
+    info = yt2html.fetch_info(url, yt2html.parse_args([url, "--transcript"]))
+    assert yt2html.TRANSCRIPT_KEY not in info
+    assert info[yt2html.NOT_SAVED_KEY]["transcript"]["reason"] == "the video has no captions"
+    assert yt2html.transcript_asked(info)
+    info = yt2html.fetch_info(url, yt2html.parse_args([url]))
+    assert yt2html.TRANSCRIPT_KEY not in info and yt2html.NOT_SAVED_KEY not in info
+    assert not yt2html.transcript_asked(info)
