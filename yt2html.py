@@ -144,7 +144,8 @@ OLANG_KEY = "yt2html_original_language_set"
 TRANSCRIPT_KEY = "yt2html_transcript"
 
 # The author's info cards: [{type, title, url, image, details, message, start}];
-# absent with --page cards:no, None when the watch page cannot be read.
+# absent with --page cards:no, and when the watch page cannot be read (then
+# NOT_SAVED_KEY notes it: CARDS_GAP; data saved before keep None).
 CARDS_KEY = "yt2html_cards"
 
 # The channel's avatar (image URL) from the watch page's owner row; yt-dlp
@@ -217,8 +218,12 @@ PREVIOUS_KEY = "yt2html_previous"
 # What --json refresh takes anew besides the comments: the counts.
 REFRESHED_KEYS = ("view_count", "like_count", "channel_follower_count", YT_COUNT_KEY)
 
-# The watch page: "read", "partial" (without the player data) or "failed".
+# The watch page as saved data before 0.14 kept it: "read", "partial"
+# (without the player data) or "failed"; now NOT_SAVED_KEY notes it
+# (WATCH_PAGE_GAP, CARDS_GAP), and upgrade_saved() moves the old key there.
 WATCH_PAGE_KEY = "yt2html_watch_page"
+WATCH_PAGE_GAP = "watch page"   # the video page not read, or read without the player data
+CARDS_GAP = "cards"             # the cards asked for, the video page not read
 
 # Keys filled from the watch page; all None when the page cannot be read.
 PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, COMMENTS_MESSAGE_KEY, LICENSE_KEY, CAPTION_KEY,
@@ -295,7 +300,7 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info, cards=not args.no_cards)
             if args.transcript:
-                gaps = {}
+                gaps = dict(info.get(NOT_SAVED_KEY) or {})   # the watch page's notes stay
                 transcript = fetch_transcript(
                     ydl, info, gaps, source_keys(args.transcript, info, None),
                     not_before=started + translation_wait())
@@ -355,11 +360,16 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
     default caption track. The page is fetched with yt-dlp's cookies and
     consent; ytInitialData and ytInitialPlayerResponse are read from it.
     If it cannot be read, all PAGE_KEYS are None and the page falls back to
-    yt-dlp's data where it can. Info cards are read only if `cards` is true
+    yt-dlp's data where it can; NOT_SAVED_KEY notes it (WATCH_PAGE_GAP, and
+    CARDS_GAP for the cards), as it notes a page read without its player
+    data (watch_page_status()). Info cards are read only if `cards` is true
     (--page cards:no leaves CARDS_KEY out and does nothing for them). Raises
     VideoUnavailable when YouTube refuses the video (playability_refusal()).
     """
     url = f"{YOUTUBE}/watch?v={info.get('id')}&hl=en"
+    gaps = info.get(NOT_SAVED_KEY) or {}
+    set_gaps(info, {key: entry for key, entry in gaps.items()   # this reading decides them
+                    if key not in (WATCH_PAGE_GAP, CARDS_GAP)})
     try:
         log("Downloading chapters, timestamp lists and description extras...")
         with ydl.urlopen(url) as response:
@@ -368,9 +378,12 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
     except Exception as error:
         log(f"  Could not read them ({error}); using yt-dlp chapters instead.")
         info.update(dict.fromkeys(PAGE_KEYS))
-        info[WATCH_PAGE_KEY] = "failed"
+        gaps = dict(info.get(NOT_SAVED_KEY) or {})
+        note_gap(gaps, WATCH_PAGE_GAP, f"could not be read ({error_line(error)})", again=False)
         if cards:
-            info[CARDS_KEY] = None
+            info.pop(CARDS_KEY, None)
+            note_gap(gaps, CARDS_GAP, "the video page was not read", again=False)
+        set_gaps(info, gaps)
         return
     refusal = None
     try:
@@ -381,10 +394,12 @@ def add_watch_page_data(ydl: yt_dlp.YoutubeDL, info: dict, cards: bool = True) -
         info[TRANSLATIONS_KEY] = translation_languages(player_response)
         if info.get("like_count") is None:
             info["like_count"] = like_count(player_response)
-        info[WATCH_PAGE_KEY] = "read"
-    except Exception:
+    except Exception as error:
         info[CAPTION_KEY] = info[TRANSLATIONS_KEY] = info[ORIGINAL_AUDIO_KEY] = None
-        info[WATCH_PAGE_KEY] = "partial"
+        gaps = dict(info.get(NOT_SAVED_KEY) or {})
+        note_gap(gaps, WATCH_PAGE_GAP, f"read without the player data ({error_line(error)})",
+                 again=False)
+        set_gaps(info, gaps)
     if refusal:
         raise refusal
     info[MARKERS_KEY] = parse_marker_lists(data, info.get("description") or "",
@@ -1656,6 +1671,12 @@ def transcript_asked(info: dict) -> bool:
     return TRANSCRIPT_KEY in info or transcript_gap(info) is not None
 
 
+def error_line(error: Exception) -> str:
+    """An error for a note: its first line, at most 200 characters."""
+    text = (str(error) or type(error).__name__).strip().splitlines()[0]
+    return text if len(text) <= 200 else text[:199] + "…"
+
+
 def note_gap(gaps: dict, key: str, reason: str, again: bool) -> None:
     """What did not come, into `gaps` (a NOT_SAVED_KEY map): why, the day,
     and whether the same command asks for it again."""
@@ -1685,7 +1706,9 @@ def upgrade_saved(info: dict) -> dict:
     """Saved data of earlier versions in today's form: the transcript's
     "missing" ({KEY: {reason, refused, date}}) and TRANSCRIPT_MISSING_KEY of
     0.12.3 and before go into NOT_SAVED_KEY (refused: asked for again); a
-    transcript saved as None (none came) goes, its note stays or is made.
+    transcript saved as None (none came) goes, its note stays or is made;
+    the watch page's status (WATCH_PAGE_KEY) and cards saved as None become
+    notes (WATCH_PAGE_GAP, CARDS_GAP).
     Transitional code (notes 5.4): removed once no saved data have them.
     Returns `info`."""
     transcript = info.get(TRANSCRIPT_KEY)
@@ -1700,6 +1723,17 @@ def upgrade_saved(info: dict) -> dict:
         del info[TRANSCRIPT_KEY]
         gaps[gap_key()] = {"reason": reason or "none came when it was downloaded",
                            "again": False}
+    # the watch page's status and cards saved as None (0.13.0 and before) as notes
+    status = info.pop(WATCH_PAGE_KEY, None)
+    if status in ("partial", "failed") or (not status and EXTRAS_KEY in info
+                                           and info[EXTRAS_KEY] is None):
+        gaps[WATCH_PAGE_GAP] = {"reason": {"partial": "read without the player data",
+                                           "failed": "could not be read"}.get(
+                                               status, "not read (data of an older version)"),
+                                "again": False}
+    if CARDS_KEY in info and info[CARDS_KEY] is None:
+        del info[CARDS_KEY]
+        gaps[CARDS_GAP] = {"reason": "the video page was not read", "again": False}
     if gaps:
         info[NOT_SAVED_KEY] = {**gaps, **(info.get(NOT_SAVED_KEY) or {})}
     return info
@@ -3820,9 +3854,17 @@ def image_size(data_uri: str | None) -> tuple[int, int] | None:
 
 
 def watch_page_status(info: dict) -> str:
-    """"read", "partial" or "failed" (pages made before the status was kept:
-    read if the description extras are there)."""
-    return info.get(WATCH_PAGE_KEY) or ("read" if info.get(EXTRAS_KEY) is not None else "failed")
+    """"read", "partial" (read without the player data) or "failed", by the
+    note of the watch page (WATCH_PAGE_GAP): with it, "partial" when the
+    description extras came, else "failed"."""
+    if WATCH_PAGE_GAP not in (info.get(NOT_SAVED_KEY) or {}):
+        return "read"
+    return "partial" if info.get(EXTRAS_KEY) is not None else "failed"
+
+
+def cards_asked(info: dict) -> bool:
+    """Whether a command asked for the info cards: they are there, or their note."""
+    return CARDS_KEY in info or CARDS_GAP in (info.get(NOT_SAVED_KEY) or {})
 
 
 def date_time(moment: dt.datetime) -> str:
@@ -3909,7 +3951,7 @@ def about_command(info: dict, spec: list, theme: str, show_snapshot: bool,
         page.append(f"comments:{info[LIMIT_KEY]}")
     if not show_snapshot:
         page.append("snap:no")
-    if CARDS_KEY not in info:
+    if not cards_asked(info):
         page.append("cards:no")
     if no_avatars:
         page.append("avatars:no")
@@ -3977,9 +4019,9 @@ def about_markers(info: dict) -> str:
 
 
 def about_cards(info: dict) -> str:
-    if CARDS_KEY not in info:
+    if not cards_asked(info):
         return "left out"
-    cards = info[CARDS_KEY]
+    cards = info.get(CARDS_KEY)
     if cards is None:
         return f"unknown ({UNREAD_PAGE})"
     if not cards:
@@ -5014,11 +5056,13 @@ def contents_video_page(info: dict, gaps: dict) -> list[tuple]:
     status = watch_page_status(info)
     if status == "read":
         return [("video page", SAVED, [])]
+    note = gaps.get(WATCH_PAGE_GAP) or {}
+    day = f", {format_date(note['date'])}" if note.get("date") else ""
     if status == "partial":
         return [("video page", PARTLY_SAVED,
-                 ["without the player data (transcript language guessed)"])]
-    return [("video page", NOT_SAVED, ["could not be read",
-                                       "(--json refresh or --page ovr reads it anew)"])]
+                 [f"{note.get('reason')}{day}", "(transcript language guessed)"])]
+    return [("video page", NOT_SAVED, [f"{note.get('reason')}{day}",
+                                       "(--page ovr downloads it anew)"])]
 
 
 def contents_markers(info: dict, gaps: dict) -> list[tuple]:
@@ -5038,12 +5082,12 @@ def contents_markers(info: dict, gaps: dict) -> list[tuple]:
 
 
 def contents_cards(info: dict, gaps: dict) -> list[tuple]:
-    if CARDS_KEY not in info:
-        return [("info cards", NOT_ASKED, [])]
-    cards = info[CARDS_KEY]
-    if cards is None:
-        return [("info cards", NOT_SAVED, ["the video page was not read"])]
-    return [("info cards", SAVED, [str(len(cards)) if cards else "none"])]
+    if CARDS_KEY in info:
+        cards = info[CARDS_KEY]
+        return [("info cards", SAVED, [str(len(cards)) if cards else "none"])]
+    if CARDS_GAP in gaps:
+        return [("info cards", NOT_SAVED, [gap_state_text(gaps[CARDS_GAP])])]
+    return [("info cards", NOT_ASKED, [])]
 
 
 def contents_transcript(info: dict, gaps: dict) -> list[tuple]:
@@ -5148,9 +5192,9 @@ def contents_extra_audio(info: dict, gaps: dict) -> list[tuple]:
 # of a copy*, names the same ones; a test keeps the two together).
 ELEMENTS = (
     ("playlist", "", contents_playlist),
-    ("video page", "", contents_video_page),
+    ("video page", "watch", contents_video_page),
     ("markers", "", contents_markers),
-    ("info cards", "", contents_cards),
+    ("info cards", "cards", contents_cards),
     ("transcript", "transcript", contents_transcript),
     ("comments", "", contents_comments),
     ("video file", "video", contents_video_file),

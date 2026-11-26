@@ -296,6 +296,13 @@ def test_not_saved_audio_with_its_own_hint(capsys, tmp_path, saved):
 
 # The three levels and Contents (notes 5.4, the user's decisions 26.11.2026)
 
+PARTIAL = {yt2html.NOT_SAVED_KEY: {"watch page": {
+    "reason": "read without the player data (KeyError)", "date": "2026-11-23", "again": False}}}
+FAILED = {yt2html.EXTRAS_KEY: None, yt2html.NOT_SAVED_KEY: {
+    "watch page": {"reason": "could not be read (Expecting value: line 43)", "date": "2026-11-23",
+                   "again": False},
+    "cards": {"reason": "the video page was not read", "date": "2026-11-23", "again": False}}}
+
 def test_the_levels_of_show():
     for value, level in (("show", "standard"), ("show:brief", "brief"), ("SHOW:Full", "full"),
                          ("show:standard", "standard"), ("show: full ", "full")):
@@ -339,12 +346,13 @@ def test_the_full_map_names_what_no_command_asked_for(capsys, tmp_path, saved):
 
 
 @pytest.mark.parametrize("change, row", [
-    ({yt2html.WATCH_PAGE_KEY: "partial"},
-     ("video page", "partly saved", ["without the player data (transcript language guessed)"])),
-    ({yt2html.WATCH_PAGE_KEY: "failed"},
-     ("video page", "not saved", ["could not be read",
-                                  "(--json refresh or --page ovr reads it anew)"])),
-    ({yt2html.CARDS_KEY: None}, ("info cards", "not saved", ["the video page was not read"])),
+    (PARTIAL, ("video page", "partly saved",
+               ["read without the player data (KeyError), 23.11.2026",
+                "(transcript language guessed)"])),
+    (FAILED, ("video page", "not saved", ["could not be read (Expecting value: line 43), "
+                                          "23.11.2026", "(--page ovr downloads it anew)"])),
+    (FAILED, ("info cards", "not saved",
+              ["the video page was not read, 23.11.2026 (not asked for again)"])),
     ({yt2html.CARDS_KEY: []}, ("info cards", "saved", ["none"])),
     ({"comments": None}, ("comments", "not saved", ["none came, reason unknown"])),
     ({"comment_count": None}, ("comments", "partly saved", ["7 of 9, interrupted (Ctrl+C)"])),
@@ -361,12 +369,12 @@ def test_the_state_of_each_part(info, change, row):
 
 
 def test_chapters_without_the_video_page_and_a_translation_partly_saved(info):
-    info[yt2html.WATCH_PAGE_KEY] = "failed"
+    info.update(FAILED)
     transcript = info[yt2html.TRANSCRIPT_KEY]
     transcript["own"] = {"fr": {"language": "fr", "cues": transcript["cues"],
                                 "own": {"file": "x.fr.own.srt"}}}
-    info[yt2html.NOT_SAVED_KEY] = {"transcript fr": {"reason": "YouTube refused to send it",
-                                                     "date": "2026-11-14", "again": True}}
+    info[yt2html.NOT_SAVED_KEY] = {**FAILED[yt2html.NOT_SAVED_KEY], "transcript fr": {
+        "reason": "YouTube refused to send it", "date": "2026-11-14", "again": True}}
     rows = yt2html.show_contents(info)
     assert ("markers", "saved", ["chapters (3), origin unknown; walkthroughs (1)"]) in rows
     assert ("transcript fr", "partly saved",
@@ -394,9 +402,10 @@ def test_brief(capsys, tmp_path, saved, info):
     (tmp_path / f"Title [{ID}].html").write_text("page", encoding="utf-8")
     other = json.loads(saved.read_text(encoding="utf-8"))
     other.update(id=OTHER, title="Other", comment_count=None)
-    other[yt2html.WATCH_PAGE_KEY] = "failed"
-    other[yt2html.CARDS_KEY] = None
-    other[yt2html.NOT_SAVED_KEY] = {"audio de": {"reason": "r", "again": True},
+    other.update(FAILED)
+    other.pop(yt2html.CARDS_KEY, None)
+    other[yt2html.NOT_SAVED_KEY] = {**FAILED[yt2html.NOT_SAVED_KEY],
+                                    "audio de": {"reason": "r", "again": True},
                                     "transcript fr": {"reason": "r", "again": True}}
     (tmp_path / f"Other [{OTHER}].info.json").write_text(json.dumps(other), encoding="utf-8")
     code, out = run(capsys, "*.info.json", "-o", str(tmp_path), "--json", "show:brief")
@@ -435,8 +444,12 @@ def test_a_long_line_puts_its_remark_below_and_nothing_else():
 def test_the_texts_of_show_fit_the_width(info):
     """Every fixed text of Contents (labels, states, the program's own words)
     within SHOW_WIDTH: rows of each state, the longest labels."""
-    states = [{yt2html.WATCH_PAGE_KEY: "partial"}, {yt2html.WATCH_PAGE_KEY: "failed"},
-              {yt2html.CARDS_KEY: None}, {"comments": None}, {"comment_count": None},
+    # (the error in a note of the video page is Python's or YouTube's text: left out here)
+    failed = json.loads(json.dumps(FAILED))
+    failed[yt2html.NOT_SAVED_KEY]["watch page"]["reason"] = "could not be read (X)"
+    partial = json.loads(json.dumps(PARTIAL))
+    partial[yt2html.NOT_SAVED_KEY]["watch page"]["reason"] = "read without the player data (X)"
+    states = [partial, failed, {"comments": None}, {"comment_count": None},
               {yt2html.COMMENTS_MESSAGE_KEY: "Comments are turned off.", "comments": None},
               {yt2html.LIMIT_KEY: 7, yt2html.COMMENTS_CLOSED_KEY: [{"from": "2026-11-26"}]},
               {yt2html.NOT_SAVED_KEY: {"transcript": {"reason": "the video has no captions",

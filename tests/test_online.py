@@ -28,7 +28,7 @@ def archive(tmp_path, video_id, *options):
     import json
     info = json.loads(data.read_text(encoding="utf-8"))
     # Everything below depends on it; a clear message instead of a TypeError later.
-    assert info.get(yt2html.WATCH_PAGE_KEY) == "read", (
+    assert yt2html.watch_page_status(info) == "read", (
         "the video page could not be read (see 'Could not read them' above); "
         "usually temporary: run the test again")
     return page.read_text(encoding="utf-8"), info
@@ -53,7 +53,7 @@ def test_description_chapters_summary_podcast_and_dubbed_transcript(tmp_path):
     # data behind "About this copy": written by yt-dlp and by the program
     assert isinstance(info["epoch"], int) and info["_version"]["version"]
     assert info[yt2html.DOWNLOAD_KEY]["yt2html"] == yt2html.__version__
-    assert info[yt2html.WATCH_PAGE_KEY] == "read"
+    assert yt2html.watch_page_status(info) == "read" and yt2html.NOT_SAVED_KEY not in info
     assert info[yt2html.TRANSCRIPT_KEY]["original"] is True
     # the watch page names the original audio too (23.11.2026: not known whether
     # the page yt2html reads always carries the audio tracks; this tells)

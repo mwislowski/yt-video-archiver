@@ -160,9 +160,10 @@ def test_license_falls_back_to_yt_dlp_text():
 
 def test_license_falls_back_when_the_video_page_could_not_be_read():
     info = {"license": "CC", **dict.fromkeys(yt2html.PAGE_KEYS),
-            yt2html.WATCH_PAGE_KEY: "failed"}
+            yt2html.NOT_SAVED_KEY: {"watch page": {"reason": "could not be read", "again": False}}}
     assert yt2html.license_of(info)["runs"] == [{"text": "CC", "url": None}]
-    info.update({yt2html.WATCH_PAGE_KEY: "read", yt2html.EXTRAS_KEY: []})  # read: no license row
+    del info[yt2html.NOT_SAVED_KEY]
+    info[yt2html.EXTRAS_KEY] = []  # read: no license row
     assert yt2html.license_of(info) is None
     page_read = {yt2html.LICENSE_KEY: None, yt2html.EXTRAS_KEY: [], "license": "CC"}
     assert yt2html.license_of(page_read) is None

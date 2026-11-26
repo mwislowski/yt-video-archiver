@@ -75,7 +75,7 @@ def test_an_age_restricted_video_without_cookies_is_no_refusal():
     assert yt2html.playability_refusal(AGEGATE) is None
     shell = {"id": "6Ib4MxtHFFM", "description": ""}
     yt2html.add_watch_page_data(FakeYDL(webpage=watch_page({}, AGEGATE)), shell)
-    assert shell[yt2html.WATCH_PAGE_KEY] == "read" and shell[yt2html.CAPTION_KEY] is None
+    assert yt2html.watch_page_status(shell) == "read" and shell[yt2html.CAPTION_KEY] is None
     # without videoDetails the same status would be a refusal, one that may not last
     alone = yt2html.playability_refusal({"playabilityStatus": status})
     assert alone.status == "LOGIN_REQUIRED" and not alone.gone

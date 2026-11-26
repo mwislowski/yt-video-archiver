@@ -845,3 +845,68 @@ def test_a_download_without_captions_keeps_only_the_note(monkeypatch):
     info = yt2html.fetch_info(url, yt2html.parse_args([url]))
     assert yt2html.TRANSCRIPT_KEY not in info and yt2html.NOT_SAVED_KEY not in info
     assert not yt2html.transcript_asked(info)
+
+
+def test_upgrade_of_the_watch_page_status_and_cards_saved_as_none():
+    """0.13.0 and before kept the watch page's status and cards as None; now notes."""
+    for status, reason in (("failed", "could not be read"),
+                           ("partial", "read without the player data")):
+        info = {yt2html.WATCH_PAGE_KEY: status, yt2html.EXTRAS_KEY: None, yt2html.CARDS_KEY: None}
+        assert yt2html.upgrade_saved(info) == {yt2html.EXTRAS_KEY: None, yt2html.NOT_SAVED_KEY: {
+            "watch page": {"reason": reason, "again": False},
+            "cards": {"reason": "the video page was not read", "again": False}}}
+    info = {yt2html.WATCH_PAGE_KEY: "read", yt2html.EXTRAS_KEY: [], yt2html.CARDS_KEY: []}
+    assert yt2html.upgrade_saved(info) == {yt2html.EXTRAS_KEY: [], yt2html.CARDS_KEY: []}
+    # before the status was kept: unread when the extras are None; no extras key: no note
+    assert yt2html.upgrade_saved({yt2html.EXTRAS_KEY: None})[yt2html.NOT_SAVED_KEY] == {
+        "watch page": {"reason": "not read (data of an older version)", "again": False}}
+    assert yt2html.upgrade_saved({"id": "x"}) == {"id": "x"}
+    # a note there already wins
+    note = {"reason": "could not be read (Expecting value)", "date": "2026-11-23", "again": False}
+    info = {yt2html.WATCH_PAGE_KEY: "failed", yt2html.NOT_SAVED_KEY: {"watch page": note}}
+    assert yt2html.upgrade_saved(info)[yt2html.NOT_SAVED_KEY] == {"watch page": note}
+
+
+def test_the_watch_page_notes_stay_beside_the_transcript_and_video(monkeypatch):
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download):
+            return {"id": "TESTVIDEO01"}
+
+        def sanitize_info(self, info):
+            return info
+
+    def unread(ydl, info, cards=True):
+        gaps = {}
+        yt2html.note_gap(gaps, "watch page", "could not be read (x)", again=False)
+        info[yt2html.NOT_SAVED_KEY] = gaps
+
+    monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(yt2html, "add_watch_page_data", unread)
+    url = "https://www.youtube.com/watch?v=TESTVIDEO01"
+    info = yt2html.fetch_info(url, yt2html.parse_args([url, "--transcript"]))
+    assert set(info[yt2html.NOT_SAVED_KEY]) == {"watch page", "transcript"}
+    # --video ovr drops only the notes of --video
+    gaps = yt2html.video_gaps(info[yt2html.NOT_SAVED_KEY], {}, ovr=True)
+    assert set(gaps) == {"watch page", "transcript"}
+    # --json refresh takes only the markers of a page read now: the note stays
+    saved = {**info, yt2html.MARKERS_KEY: None}
+    yt2html.refresh_saved(saved, {"id": "TESTVIDEO01", yt2html.MARKERS_KEY: []})
+    assert "watch page" in saved[yt2html.NOT_SAVED_KEY]
+
+
+def test_an_error_for_a_note_is_one_short_line():
+    assert yt2html.error_line(OSError("offline")) == "offline"
+    assert yt2html.error_line(ValueError("first\nsecond")) == "first"
+    assert yt2html.error_line(KeyError()) == "KeyError"
+    long = yt2html.error_line(ValueError("x" * 300))
+    assert len(long) == 200 and long.endswith("…")
+    assert yt2html.error_line(ValueError("y" * 200)) == "y" * 200

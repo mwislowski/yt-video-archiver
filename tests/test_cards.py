@@ -128,7 +128,9 @@ def test_unreadable_watch_page_gives_no_cards(info):
             raise OSError("offline")
 
     yt2html.add_watch_page_data(Broken(), info)
-    assert info[yt2html.CARDS_KEY] is None
+    assert yt2html.CARDS_KEY not in info   # only their note says so
+    assert info[yt2html.NOT_SAVED_KEY]["cards"]["reason"] == "the video page was not read"
+    assert yt2html.cards_asked(info)
 
 
 def test_no_cards_option_hides_saved_cards(capsys, tmp_path, info, monkeypatch):
