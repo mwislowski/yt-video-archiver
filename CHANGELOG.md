@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- **`--json show` lists each part of a copy with its state, at three levels.** A part *Contents* replaces *Page*, *Video* and *Not saved*: the playlist, the video page, the markers, the info cards, the transcript and each of its translations and subtitles, the comments, the video file and each extra audio track, in the order of *About this copy*, each `saved`, `partly saved` (comments interrupted, a video page read without the player data) or `not saved` with the reason and the day. *Transcript* keeps the corrections and the versions `--json load` can show. `--json show:brief` gives one line per video with only what is missing (`all saved` when nothing is), for a look over a folder; `--json show:full` also names what no command asked for (`not asked for`); `--json show:standard` is the same as `--json show`. Lines stay within 100 characters where the program's own words make them; names, commands and YouTube's texts are never broken.
+
 ## [0.13.0] - 2026-11-26
 
 ### Changed

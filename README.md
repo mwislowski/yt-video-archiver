@@ -125,7 +125,7 @@ Two more options belong to the transcript and to signing in: `--olang CODE` (the
 | Make a page again from saved data only, offline | `yt2html VIDEO_ID --json load --transcript` |
 | Merge a translation of your own into the saved data | `yt2html --json merge "Title [id].pl.own.srt"` |
 | Merge your corrections of the transcript's text into the saved data | `yt2html --json merge "Title [id].en.fixed.srt"` |
-| See what the saved data hold (translations, video files, …), offline | `yt2html "*.info.json" --json show` |
+| See what the saved data hold and what they lack, offline; one line per video | `yt2html "*.info.json" --json show`; `--json show:brief` |
 | When YouTube asks to sign in or to confirm you are not a bot | `yt2html "URL" --cookies firefox` |
 | Versions of the program and yt-dlp; all options | `yt2html --version`; `yt2html --help` |
 
@@ -201,7 +201,7 @@ The page shows YouTube's change of speaker (`>>` in automatic captions) as a gre
 | (none) | the best quality up to 1080p in AV1, else H.264, with the original audio |
 | `720p`, `480p`, … | a quality as an upper limit: the best one not above it, at any frame rate (`720p` takes 720p at 60 frames per second when there is one) |
 | `720p30`, `1080p60`, … | the same with the frame rate as a limit too (the parameters in brackets in *Video formats*) |
-| `audio:pl`, `audio:de`, … | an extra audio track in that language, as a separate m4a (`Title [id].pl.dubbed.m4a`): a dub by the author first, else YouTube's automatic dub, else another kind; never an audio description by itself. The language finds its regional code (`de` → `de-DE`); a code with a region must match exactly (`de-AT` is not `de-DE`). Repeat for more tracks. With `--json`, a track YouTube does not offer, or that could not be downloaded, is noted in the saved data (`--json show`, *Not saved*). Tracks added in an earlier run stay in the data and on the page (`audio:de` after `audio:pl` keeps both) |
+| `audio:pl`, `audio:de`, … | an extra audio track in that language, as a separate m4a (`Title [id].pl.dubbed.m4a`): a dub by the author first, else YouTube's automatic dub, else another kind; never an audio description by itself. The language finds its regional code (`de` → `de-DE`); a code with a region must match exactly (`de-AT` is not `de-DE`). Repeat for more tracks. With `--json`, a track YouTube does not offer, or that could not be downloaded, is noted in the saved data (`--json show`: `extra audio de  not saved: …`). Tracks added in an earlier run stay in the data and on the page (`audio:de` after `audio:pl` keeps both) |
 | `audio:pl.auto-dubbed`, `audio:ru.descriptive`, … | exactly that version: `original`, `dubbed`, `auto-dubbed`, `descriptive`, or another kind the video has |
 | `ovr` | download again every file this command makes that is already next to the page, into that file (also when renamed): the video and each track asked for, not other files |
 
@@ -278,28 +278,34 @@ What stays: the comments, the counts (views, likes), the description and the cop
 - **What it saves:** the corrected text beside YouTube's, which stays in the data; corrections already there are replaced (with a message). `--transcript ovr` keeps them when they still fit the transcript downloaded again, else drops them with a message; `--page ovr --json write` downloads new data without them (named among what was lost).
 - **On the page:** the corrected text everywhere the original is shown (plain, timed, the left column of `dual`, the player's subtitles), headed `English, auto-generated, with own corrections`; *About this copy* adds to the *Transcript* row `the original with own corrections (Title [id].en.fixed.srt, 25.11.2026)`. The page cannot show YouTube's text instead, and the original's SRT file of `--transcript srt` stays YouTube's text (the source to correct).
 
-**`--json show`** lists what saved data hold, by the options that put it there, and which files lie next to them; it asks YouTube for nothing and changes nothing:
+**`--json show`** lists each part of a copy in its saved data, with what it holds or why it is missing, and which files lie next to them; it asks YouTube for nothing and changes nothing:
 
 ```
 Kurs [Un9FT291lsU]  (Kurs [Un9FT291lsU].info.json, 4.2 MB)
   Data:       downloaded 22.11.2026 23:01 (yt2html 0.10.7)
               updated 25.11.2026 (translation en)
-  Page:       412 comments of 430, 2 not on YouTube, 12 chapters
-  Transcript: pl (Polish, auto-generated), 812 lines
-              translations: de (own, 23.11.2026), en (YouTube)
-              corrections: Kurs [Un9FT291lsU].pl.fixed.srt (25.11.2026)
-              other subtitles: en (auto-generated)
+  Contents:   playlist            saved: video 3 of 12 in Kurs Pythona
+              video page          saved
+              markers             saved: chapters (12), from the description
+              info cards          saved: none
+              transcript          saved: pl (Polish, auto-generated), 812 lines
+              transcript de       saved: own translation, 23.11.2026
+              transcript en       saved: YouTube's translation
+              transcript en.auto-generated  saved: subtitles of their own
+              transcript fr       not saved: YouTube refused to send it (HTTP 429), 14.11.2026
+              comments            saved: 412 of 430, 2 not on YouTube
+              video file          saved: 1080p av1 + pl aac, 22.11.2026 (--video audio:en)
+              extra audio en      saved: auto-dubbed
+  Transcript: corrections: Kurs [Un9FT291lsU].pl.fixed.srt (25.11.2026)
               possible: plain, timed, dual:de, dual:en, plain:en.auto-generated
-  Video:      1080p av1 + pl aac, 22.11.2026 (--video audio:en)
-              extra audio: en (auto-dubbed)
-  Not saved:  transcript fr: YouTube refused to send it (HTTP 429), 14.11.2026
   Next to it: page, mp4 (described), en.auto-dubbed.m4a, 2 SRTs: pl (auto-generated), en (translated)
   (to try again: yt2html Un9FT291lsU --json write --transcript plain,dual:fr)
 ```
 
+- **Levels:** `--json show:brief` gives one line per video with only what is missing (`Kurs [Un9FT291lsU]  not saved: transcript fr`, or `all saved`), for a look over a whole folder; `--json show:standard`, the same as `--json show`, the block above; `--json show:full` also names the parts no command asked for (`comments  not asked for: --page comments:no`, `video file  not asked for`), a full map of the copy.
+- **`Contents`:** the parts in the order of *About this copy* on the page. Each is `saved`, `partly saved` (e.g. comments interrupted with `Ctrl+C`, a video page read without the player data), `not saved` (a command asked for it and it did not come: the reason and the day, `(not asked for again)` when YouTube does not have it, so the same command does not ask again) or, with `show:full`, `not asked for`. A translation, subtitles of their own and an extra audio track get a line of their own only when the data have them or note them as missing. Saved data of older versions noted less of what did not come: there `not asked for` can also mean it did not come.
 - **What it takes:** the sources of `--json load` (video ids, names, `.info.json` files, patterns such as `"*.info.json"`), or `--index FILE`: the videos of the list, its playlists as its index page keeps them (a playlist the index does not keep is left out, with a note). For several videos a last line sums them up: `12 videos: translation en in 9, own translations in 2; video in 12 (720p 8, 1080p 2, 480p 2; 1 not described); no page for 1` (with `--index`, also the videos of the list without saved data).
 - **`possible`:** the `--transcript` versions `--json load` can show from the data, one for each source: `dual:CODE` for a translation (`dual:CODE.translated` for YouTube's when your own is there too; `plain:` and `timed:` take the same), `plain:CODE.KIND` for subtitles of their own.
-- **`Not saved`** (only when there is something): what a command asked for and the copy lacks, with the reason and the day: a translation or subtitles YouTube refused (asked for again by the same command) or does not have (`(not asked for again)`), no captions at all (`transcript: the video has no captions`).
 - **`Next to it`:** found by the id in square brackets and the ending, as the page finds them. A video file is `described` when the data describe it (the same size): the *Video file* row and the yellow marks in *Video formats* show its quality; `not described` when they do not (downloaded without saved data, or replaced). `missing` names files the data describe that are gone. `page (not made from these data)`: the data changed after the page was made (`--json merge`, an interrupted run, an edit), with a hint to make it again.
 - **Hints** in brackets: the command that asks again for what YouTube refused, and the one that makes a missing page.
 - **Options:** `-o` and `--index` only; `--page`, `--transcript`, `--video`, `--video-formats`, `--olang` and `--take` are errors. A source without readable data is `FAILED` (exit code 1); the others are shown.
@@ -483,8 +489,8 @@ At the bottom of every page, *About this copy* is folded to a single grey line w
 - **`Sign in to confirm you're not a bot`, age-restricted video:** use `--cookies firefox` (see *Signing in*).
 - **`Warning: the original language is uncertain` (videos with YouTube's automatic dubbing):** YouTube sent no audio tracks to tell the original from the dubs, and the video's YouTube page did not name it either, so the transcript and the page's language follow the captions YouTube opens with, which may be a dub's. The page says so above the transcript. If you know the original language, give it: `--olang CODE` (with saved data, `--json write --olang CODE --transcript ovr`); or make the page again later (`--page ovr`), with `--cookies firefox` if YouTube asked to confirm you're not a bot.
 - **A translation fails with `HTTP 429`:** YouTube refuses auto-translated captions to downloads at times (in November 2026 for days, also to yt-dlp alone, with cookies and from other networks). The page is made without it; try again later with `--json write` and the same `--transcript` (keeps the comments; needs the saved data) or `--page ovr`. Or translate the subtitles yourself and merge the translation with `--json merge` (see *Saved data*).
-- **`FAILED: no connection to YouTube (…)`:** the computer lost its connection (the name `www.youtube.com` did not resolve, or there was no network). The run stops at that video: it and the ones after it are as they were, pages and data alike, so no page is left with placeholders for its images. With `--video`, files downloaded for the video before the connection went are kept and described (`Video: the connection was lost; saved what was downloaded: …; not downloaded: …`, then `this video is saved as far as it got`); what was not downloaded is listed under *Not saved* in `--json show`. Run the same command again when the connection is back; what was done is not asked for again.
-- **`Audio FAILED: de-DE (auto-dubbed): …`:** one extra track could not be downloaded; the video and the other tracks are downloaded and described all the same, and the track is listed under *Not saved* in `--json show`. The same command tries it again.
+- **`FAILED: no connection to YouTube (…)`:** the computer lost its connection (the name `www.youtube.com` did not resolve, or there was no network). The run stops at that video: it and the ones after it are as they were, pages and data alike, so no page is left with placeholders for its images. With `--video`, files downloaded for the video before the connection went are kept and described (`Video: the connection was lost; saved what was downloaded: …; not downloaded: …`, then `this video is saved as far as it got`); what was not downloaded is shown as `not saved` in `--json show`. Run the same command again when the connection is back; what was done is not asked for again.
+- **`Audio FAILED: de-DE (auto-dubbed): …`:** one extra track could not be downloaded; the video and the other tracks are downloaded and described all the same, and the track is shown as `not saved` in `--json show`. The same command tries it again.
 - **`No transcript: ...` although YouTube shows *Show transcript*:** look for a yt-dlp warning about subtitles and a missing PO token; updating yt-dlp usually helps.
 - **`Could not read them ...; using yt-dlp chapters instead`:** the page is made, but without the AI summary, People mentioned and similar sections, and with chapters under a plain `Chapters` heading (*About this copy* says so in its *Video page* row). Usually temporary; run again with `--page ovr`.
 - **`Chapter source unclear: ...`:** the chapters are on the page, only without the grey origin note. Please report the video: YouTube has probably changed something.

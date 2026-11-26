@@ -77,19 +77,28 @@ def test_the_block(capsys, tmp_path, info):
         "  Data:       downloaded 22.11.2026 (yt2html 0.10.7)",
         "              updated 24.11.2026 (translation pl)",
         "              refreshed 25.11.2026 (2 new comments, 1 comment gone, 3 comments back)",
-        "              playlist: video 3 of 12 in Series",
-        "  Page:       7 comments of 9, 1 not on YouTube, 3 chapters, 2 info cards",
-        "  Transcript: en (English, auto-generated), 3 lines",
-        "              translations: de (own, 23.11.2026), pl (YouTube), pl (own, 24.11.2026)",
-        f"              corrections: Title [{ID}].en.fixed.srt (25.11.2026)",
-        "              other subtitles: es (auto-generated)",
+        "  Contents:   playlist            saved: video 3 of 12 in Series",
+        "              video page          saved",
+        "              markers             saved: chapters (3), from the description; "
+        "walkthroughs (1)",
+        "              info cards          saved: 2",
+        "              transcript          saved: en (English, auto-generated), 3 lines",
+        "              transcript de       saved: own translation, 23.11.2026",
+        "              transcript es.auto-generated  saved: subtitles of their own",
+        "              transcript fr       not saved: YouTube refused to send it (HTTP 429), "
+        "14.11.2026",
+        "              transcript it       not saved: YouTube offers no translation into it",
+        "                                  (not asked for again)",
+        "              transcript pl       saved: YouTube's translation; own translation, "
+        "24.11.2026",
+        "              comments            saved: 7 of 9, 1 not on YouTube",
+        "              video file          saved: 720p av1 + en aac, 22.11.2026 "
+        "(--video 720p,audio:es)",
+        "              subtitle files      saved: en (auto-generated) (--video sub:, before 0.11.0)",
+        "              extra audio es      saved: dubbed",
+        f"  Transcript: corrections: Title [{ID}].en.fixed.srt (25.11.2026)",
         "              possible: plain, timed, dual:de, dual:pl, dual:pl.translated, "
         "plain:es.auto-generated",
-        "  Video:      720p av1 + en aac, 22.11.2026 (--video 720p,audio:es)",
-        "              extra audio: es (dubbed)",
-        "              subtitles (--video sub:, before 0.11.0): en (auto-generated)",
-        "  Not saved:  transcript fr: YouTube refused to send it (HTTP 429), 14.11.2026",
-        "              transcript it: YouTube offers no translation into it (not asked for again)",
         f"  Next to it: page, mp4 (described), 3 SRTs: Title [{ID}] old.srt, "
         "en (auto-generated), pl (own)",
         f"              missing: Title [{ID}].es.dubbed.m4a",
@@ -102,11 +111,13 @@ def test_a_plain_block_and_what_is_not_there(capsys, tmp_path, saved, info):
     lines = out.splitlines()
     assert lines[1].startswith("  Data:       downloaded ")
     assert lines[2:] == [
-        "  Page:       7 comments of 9, 3 chapters",
-        "  Transcript: en (English, auto-generated), 3 lines",
-        "              translations: pl (YouTube)",
-        "              possible: plain, timed, dual:pl",
-        "  Video:      none",
+        "  Contents:   video page          saved",
+        "              markers             saved: chapters (3), from the description; "
+        "walkthroughs (1)",
+        "              transcript          saved: en (English, auto-generated), 3 lines",
+        "              transcript pl       saved: YouTube's translation",
+        "              comments            saved: 7 of 9",
+        "  Transcript: possible: plain, timed, dual:pl",
         "  Next to it: no page",
         f'  (to make the page: yt2html "{saved.name}" --json load --transcript)']
     # a video file the data do not describe; files the data name that are gone
@@ -121,11 +132,12 @@ def test_a_plain_block_and_what_is_not_there(capsys, tmp_path, saved, info):
     saved.write_text(json.dumps(data), encoding="utf-8")
     (tmp_path / f"Other name [{ID}].mp4").write_bytes(b"1234")
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
-    assert "  Page:       comments turned off" in out
-    assert "  Transcript: none\n" in out
-    assert ("  Not saved:  transcript: the video has no subtitles, 22.11.2026 (not asked for "
-            "again)\n") in out
-    assert f"  Video:      Title [{ID}].mp4, found next to the page" in out
+    assert "              comments            not saved: Comments are turned off.\n" in out
+    assert "  Transcript:" not in out
+    assert ("              transcript          not saved: the video has no subtitles, 22.11.2026\n"
+            "                                  (not asked for again)\n") in out
+    assert (f"              video file          saved: Title [{ID}].mp4, found next to the "
+            "page\n") in out
     assert "  Next to it: no page, mp4 (not described)" in out
     (tmp_path / f"Other name [{ID}].mp4").unlink()
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
@@ -207,8 +219,10 @@ def test_other_states(capsys, tmp_path, saved):
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
     assert "              no longer on YouTube 26.11.2026\n" in out
     assert "              no longer on YouTube: Private video\n" in out
-    assert ("  Page:       7 comments of 9, limited to 7, turned off on YouTube since "
-            "26.11.2026, 3 chapters\n") in out
+    assert ("              comments            saved: 7 of 9, limited to 7\n"
+            "                                  turned off on YouTube since 26.11.2026\n") in out
+    assert ("              transcript pt.author  not saved: YouTube refused (HTTP 429), "
+            "26.11.2026\n") in out
     assert f"(to try again: yt2html {ID} --json write --transcript plain,plain:pt.author)" in out
     # comments turned on again; a video file of another size than the data say
     data[yt2html.COMMENTS_CLOSED_KEY] = [{"from": "2026-11-26", "until": "2026-11-27"}]
@@ -217,19 +231,21 @@ def test_other_states(capsys, tmp_path, saved):
     saved.write_text(json.dumps(data), encoding="utf-8")
     (tmp_path / f"Title [{ID}].mp4").write_bytes(b"12")
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
-    assert "  Page:       7 comments of 9, limited to 7, 3 chapters\n" in out
+    assert "              comments            saved: 7 of 9, limited to 7\n" in out
     assert "  Next to it: no page, mp4 (not described)\n" in out
     del data["comments"]
     data[yt2html.TRANSCRIPT_KEY]["cues"] = []
     saved.write_text(json.dumps(data), encoding="utf-8")
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
-    assert "  Page:       comments left out, 3 chapters" in out
-    assert "              possible: none" in out
+    assert "comments" not in out.split("  Transcript:")[0]   # not asked for: only show:full
+    assert "  Transcript: possible: none" in out
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show:full")
+    assert "              comments            not asked for: --page comments:no\n" in out
 
 
 def test_data_of_0_12_3_are_shown_in_today_s_form(capsys, tmp_path, saved):
     """The transcript's own "missing" and the reason for no transcript, as
-    0.12.3 saved them: shown in Not saved; the file is not changed."""
+    0.12.3 saved them: shown as not saved; the file is not changed."""
     data = json.loads(saved.read_text(encoding="utf-8"))
     data[yt2html.TRANSCRIPT_KEY]["missing"] = {
         "fr": {"reason": "YouTube refused to send it (HTTP 429)", "refused": True,
@@ -238,7 +254,8 @@ def test_data_of_0_12_3_are_shown_in_today_s_form(capsys, tmp_path, saved):
     before = saved.read_bytes()
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
     assert code == 0 and saved.read_bytes() == before
-    assert "  Not saved:  transcript fr: YouTube refused to send it (HTTP 429), 14.11.2026\n" in out
+    assert ("              transcript fr       not saved: YouTube refused to send it (HTTP 429), "
+            "14.11.2026\n") in out
     assert f"(to try again: yt2html {ID} --json write --transcript plain,dual:fr)" in out
 
 
@@ -271,7 +288,195 @@ def test_not_saved_audio_with_its_own_hint(capsys, tmp_path, saved):
         "audio fr": {"reason": "YouTube offers no such audio track", "again": False}}
     saved.write_text(json.dumps(data), encoding="utf-8")
     code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
-    assert "  Not saved:  audio de: no connection, 26.11.2026\n" in out
-    assert "              audio fr: YouTube offers no such audio track (not asked for again)\n" in out
+    assert "              extra audio de      not saved: no connection, 26.11.2026\n" in out
+    assert ("              extra audio fr      not saved: YouTube offers no such audio track\n"
+            "                                  (not asked for again)\n") in out
     assert f"(to try again: yt2html {ID} --json write --video audio:de)" in out
     assert "--transcript plain,dual:de" not in out and "audio:fr" not in out
+
+
+# The three levels and Contents (notes 5.4, the user's decisions 26.11.2026)
+
+def test_the_levels_of_show():
+    for value, level in (("show", "standard"), ("show:brief", "brief"), ("SHOW:Full", "full"),
+                         ("show:standard", "standard"), ("show: full ", "full")):
+        args = yt2html.parse_args([ID, "--json", value])
+        assert (args.json, args.show_json, args.show_level) == ("show", True, level)
+    assert yt2html.parse_args([ID, "--json", "write"]).show_level == "standard"
+
+
+@pytest.mark.parametrize("value, message", [
+    ("show:short", "'show:short': show takes brief, standard (the default) or full after the colon"),
+    ("show:", "'show:': show takes brief"),
+    ("write:full", "'write:full' is not a parameter"),
+])
+def test_a_level_it_does_not_know(capsys, value, message):
+    with pytest.raises(SystemExit):
+        yt2html.parse_args([ID, "--json", value])
+    assert message in capsys.readouterr().err
+
+
+def test_the_full_map_names_what_no_command_asked_for(capsys, tmp_path, saved):
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    data.pop(yt2html.CARDS_KEY, None)
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show:full")
+    assert code == 0
+    contents = out.split("  Contents:   ")[1].split("  Transcript:")[0].splitlines()
+    assert contents == [
+        "playlist            not asked for: downloaded on its own",
+        "              video page          saved",
+        "              markers             saved: chapters (3), from the description; "
+        "walkthroughs (1)",
+        "              info cards          not asked for",
+        "              transcript          saved: en (English, auto-generated), 3 lines",
+        "              transcript pl       saved: YouTube's translation",
+        "              comments            saved: 7 of 9",
+        "              video file          not asked for",
+        "              extra audio         not asked for"]
+    code, standard = run(capsys, ID, "-o", str(tmp_path), "--json", "show:standard")
+    assert "not asked for" not in standard
+    assert standard == run(capsys, ID, "-o", str(tmp_path), "--json", "show")[1]
+
+
+@pytest.mark.parametrize("change, row", [
+    ({yt2html.WATCH_PAGE_KEY: "partial"},
+     ("video page", "partly saved", ["without the player data (transcript language guessed)"])),
+    ({yt2html.WATCH_PAGE_KEY: "failed"},
+     ("video page", "not saved", ["could not be read",
+                                  "(--json refresh or --page ovr reads it anew)"])),
+    ({yt2html.CARDS_KEY: None}, ("info cards", "not saved", ["the video page was not read"])),
+    ({yt2html.CARDS_KEY: []}, ("info cards", "saved", ["none"])),
+    ({"comments": None}, ("comments", "not saved", ["none came, reason unknown"])),
+    ({"comment_count": None}, ("comments", "partly saved", ["7 of 9, interrupted (Ctrl+C)"])),
+    ({yt2html.PLAYLIST_KEY: None}, ("playlist", "not asked for", ["downloaded on its own"])),
+    ({yt2html.MARKERS_KEY: [], "chapters": None}, ("markers", "saved", ["none"])),
+    ({yt2html.NOT_SAVED_KEY: {"video": {"reason": "HTTP Error 403: Forbidden", "date": "2026-11-23",
+                                        "again": True}}},
+     ("video file", "not saved", ["HTTP Error 403: Forbidden, 23.11.2026"])),
+])
+def test_the_state_of_each_part(info, change, row):
+    rows = yt2html.show_contents({**info, **change})
+    assert row in rows
+    assert [label for label, _, _ in rows if label == row[0]] == [row[0]]   # once
+
+
+def test_chapters_without_the_video_page_and_a_translation_partly_saved(info):
+    info[yt2html.WATCH_PAGE_KEY] = "failed"
+    transcript = info[yt2html.TRANSCRIPT_KEY]
+    transcript["own"] = {"fr": {"language": "fr", "cues": transcript["cues"],
+                                "own": {"file": "x.fr.own.srt"}}}
+    info[yt2html.NOT_SAVED_KEY] = {"transcript fr": {"reason": "YouTube refused to send it",
+                                                     "date": "2026-11-14", "again": True}}
+    rows = yt2html.show_contents(info)
+    assert ("markers", "saved", ["chapters (3), origin unknown; walkthroughs (1)"]) in rows
+    assert ("transcript fr", "partly saved",
+            ["own translation; not saved: YouTube refused to send it, 14.11.2026"]) in rows
+
+
+def test_a_note_no_part_reads_is_shown_too(info):
+    info[yt2html.NOT_SAVED_KEY] = {"thumbnail": {"reason": "HTTP 404", "again": False}}
+    assert yt2html.show_contents(info)[-1] == ("thumbnail", "not saved",
+                                               ["HTTP 404 (not asked for again)"])
+
+
+def test_a_transcript_noted_as_missing_without_a_reason(info):
+    info[yt2html.TRANSCRIPT_KEY] = None
+    assert ("transcript", "not saved", ["none"]) in yt2html.show_contents(info)
+    del info[yt2html.TRANSCRIPT_KEY]
+    rows = yt2html.show_contents(info)
+    assert ("transcript", "not asked for", []) in rows
+    assert not [label for label, _, _ in rows if label.startswith("transcript ")]
+
+
+def test_brief(capsys, tmp_path, saved, info):
+    (tmp_path / f"Title [{ID}].html").write_text("page", encoding="utf-8")
+    other = json.loads(saved.read_text(encoding="utf-8"))
+    other.update(id=OTHER, title="Other", comment_count=None)
+    other[yt2html.WATCH_PAGE_KEY] = "failed"
+    other[yt2html.CARDS_KEY] = None
+    other[yt2html.NOT_SAVED_KEY] = {"audio de": {"reason": "r", "again": True},
+                                    "transcript fr": {"reason": "r", "again": True}}
+    (tmp_path / f"Other [{OTHER}].info.json").write_text(json.dumps(other), encoding="utf-8")
+    code, out = run(capsys, "*.info.json", "-o", str(tmp_path), "--json", "show:brief")
+    assert code == 0
+    assert out.splitlines() == [
+        f"Other [{OTHER}]  not saved: video page, info cards, transcript fr, extra audio de; "
+        "partly saved: comments; no page",
+        f'Test: "video" | part 1 / <2>? [{ID}]  all saved',
+        "",
+        "2 videos: translation pl in 2; no video files; something not saved in 1; no page for 1"]
+    (tmp_path / f"Title [{ID}].html").write_text(
+        '<meta name="yt2html:data" content="000000000000"><title>x</title>', encoding="utf-8")
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    data[yt2html.VIDEO_KEY] = {"video": {"file": f"Title [{ID}].mp4", "size": 3}}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show:brief")
+    assert out == (f'Test: "video" | part 1 / <2>? [{ID}]  page not made from these data; '
+                   "files missing\n")
+
+
+def test_a_long_line_puts_its_remark_below_and_nothing_else():
+    width = yt2html.SHOW_WIDTH - yt2html.SHOW_INDENT
+    short = ("transcript it", "not saved", ["YouTube has none (not asked for again)"])
+    long_reason = "x" * (width - 40)
+    long_row = ("transcript it", "not saved", [f"{long_reason} (not asked for again)"])
+    assert yt2html.contents_lines([short]) == [
+        "transcript it       not saved: YouTube has none (not asked for again)"]
+    assert yt2html.contents_lines([long_row]) == [
+        f"transcript it       not saved: {long_reason}",
+        "                    (not asked for again)"]
+    # a long name has no remark to move: it stays whole
+    name = ("video file", "saved", ["y" * width])
+    assert yt2html.contents_lines([name]) == [f"video file          saved: {'y' * width}"]
+
+
+def test_the_texts_of_show_fit_the_width(info):
+    """Every fixed text of Contents (labels, states, the program's own words)
+    within SHOW_WIDTH: rows of each state, the longest labels."""
+    states = [{yt2html.WATCH_PAGE_KEY: "partial"}, {yt2html.WATCH_PAGE_KEY: "failed"},
+              {yt2html.CARDS_KEY: None}, {"comments": None}, {"comment_count": None},
+              {yt2html.COMMENTS_MESSAGE_KEY: "Comments are turned off.", "comments": None},
+              {yt2html.LIMIT_KEY: 7, yt2html.COMMENTS_CLOSED_KEY: [{"from": "2026-11-26"}]},
+              {yt2html.NOT_SAVED_KEY: {"transcript": {"reason": "the video has no captions",
+                                                      "date": "2026-11-22", "again": False},
+                                       "audio de.auto-dubbed": {
+                                           "reason": "YouTube offers no such audio track",
+                                           "date": "2026-11-22", "again": False}}}]
+    for change in states:
+        for line in yt2html.contents_lines(yt2html.show_contents({**info, **change})):
+            assert yt2html.SHOW_INDENT + len(line) <= yt2html.SHOW_WIDTH, line
+
+
+def test_the_parts_of_a_copy_as_development_names_them():
+    """docs/DEVELOPMENT.md (*The parts of a copy*) lists ELEMENTS in their order."""
+    from pathlib import Path
+    text = (Path(__file__).parent.parent / "docs" / "DEVELOPMENT.md").read_text(encoding="utf-8")
+    part = text.split("### The parts of a copy")[1].split("\n#")[0]
+    named = [line.split("`")[1] for line in part.splitlines() if line.startswith("| `")]
+    assert named == [name for name, _, _ in yt2html.ELEMENTS]
+
+
+def test_a_line_of_exactly_the_width_stays_whole():
+    width = yt2html.SHOW_WIDTH - yt2html.SHOW_INDENT
+    head = "transcript it       not saved: "
+    remark = " (not asked for again)"
+    reason = "x" * (width - len(head) - len(remark))
+    line = head + reason + remark
+    assert len(line) == width
+    assert yt2html.contents_lines([("transcript it", "not saved", [reason + remark])]) == [line]
+
+
+def test_a_part_only_partly_saved_counts_in_the_summary(capsys, tmp_path, saved):
+    other = json.loads(saved.read_text(encoding="utf-8"))
+    other.update(id=OTHER, title="Other", comment_count=None)   # interrupted, nothing else
+    (tmp_path / f"Other [{OTHER}].info.json").write_text(json.dumps(other), encoding="utf-8")
+    code, out = run(capsys, "*.info.json", "-o", str(tmp_path), "--json", "show:brief")
+    assert f"Other [{OTHER}]  partly saved: comments; no page" in out
+    assert "; something not saved in 1;" in out
+
+
+def test_a_transcript_by_the_author(info):
+    info[yt2html.TRANSCRIPT_KEY]["kind"] = "manual"
+    assert ("transcript", "saved", ["en (English, by the author), 3 lines"]) in \
+        yt2html.show_contents(info)
