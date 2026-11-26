@@ -1882,6 +1882,24 @@ def fetch_thumbnail(info: dict) -> str | None:
 
 
 PAGE_THUMBNAIL_RE = re.compile(r'<img class="thumbnail" src="(data:image/[^"]+)"')
+# an avatar's CSS class with its key (AvatarStyles), another image with its key
+PAGE_AVATAR_RE = re.compile(r'\{background-image:url\("(data:image/[^"]+)"\)\}/\*([0-9a-f]+)\*/')
+PAGE_IMAGE_RE = re.compile(r'<img class="[^"]*" src="(data:image/[^"]+)" data-key="([0-9a-f]+)"')
+
+
+def image_key(url: str) -> str:
+    """The key of an image in the page (the first 12 hex digits of the
+    SHA-256 of its address): the page made again takes the image with the
+    same address from it (images_of_page())."""
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
+
+
+def on_youtube(url: str) -> bool:
+    """Whether an image comes from YouTube's own image servers (i.ytimg.com,
+    yt3.ggpht.com, …googleusercontent.com): taken from the old page first;
+    others are asked for first (the user, 25.11.2026)."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return host.endswith((".ytimg.com", ".ggpht.com", ".googleusercontent.com"))
 
 
 def cover_url(info: dict) -> str:
@@ -1889,10 +1907,12 @@ def cover_url(info: dict) -> str:
     return f"https://i.ytimg.com/vi/{info.get('id')}/mqdefault.jpg"
 
 
-def images_of_page(path: Path | None) -> dict[str, str]:
-    """The images of an existing page that YouTube may no longer give when the
-    page is made again (a video gone from YouTube: its thumbnails go with it):
-    {"thumbnail": data URI, "cover": data URI}, only what the page has."""
+def images_of_page(path: Path | None) -> dict:
+    """The images of an existing page, for the page made again (review A5:
+    not downloaded again, nor lost when they cannot be): {"thumbnail": data
+    URI, "cover": data URI, "keyed": {image_key(): data URI}} (the avatars
+    and the other images, by the key the page keeps beside each; a page made
+    by 0.12.3 or before has none), only what the page has."""
     try:
         text = path.read_text(encoding="utf-8", errors="ignore") if path else ""
     except OSError:
@@ -1901,24 +1921,42 @@ def images_of_page(path: Path | None) -> dict[str, str]:
     images = {"cover": read_page_metadata(path).get("yt2html:cover")} if text else {}
     if found:
         images["thumbnail"] = found.group(1)
+    images["keyed"] = {key: uri for regex in (PAGE_AVATAR_RE, PAGE_IMAGE_RE)
+                       for uri, key in regex.findall(text)}
     return {kind: uri for kind, uri in images.items() if uri}
 
 
-def fetch_images(urls: set, what: str, resize=None) -> dict[str, str]:
-    """Download images in parallel; returns {original url: data URI}.
+def fetch_images(urls: set, what: str, resize=None, kept: dict | None = None,
+                 reuse: bool = True) -> dict[str, str]:
+    """The images at `urls`: {original url: data URI}.
 
-    `resize` may turn a URL into one for a smaller image (avatars). Images
-    that cannot be downloaded are left out; the page shows a placeholder.
+    `kept` holds those of the existing page ({image_key(): data URI},
+    images_of_page()): with `reuse` an image of YouTube's servers (on_youtube())
+    is taken from it without a request; the others are downloaded in parallel,
+    and one that cannot be is taken from it too. `resize` may turn a URL into
+    one for a smaller image (avatars). Images neither downloaded nor kept are
+    left out; the page shows a placeholder.
     """
+    kept = kept or {}
     urls = sorted(u for u in urls if u)
-    if not urls:
-        return {}
-    log(f"Downloading {len(urls)} {what}...")
+    images = {u: kept[image_key(u)] for u in urls
+              if reuse and on_youtube(u) and image_key(u) in kept}
+    wanted = [u for u in urls if u not in images]
+    if images:
+        log(f"{len(images)} {what} from the existing page.")
+    if not wanted:
+        return images
+    log(f"Downloading {len(wanted)} {what}...")
     with ThreadPoolExecutor(max_workers=IMAGE_WORKERS) as pool:
-        results = pool.map(lambda u: fetch_image(resize(u) if resize else u), urls)
-        images = {u: d for u, d in zip(urls, results) if d}
-    if len(images) < len(urls):
-        log(f"  {len(urls) - len(images)} could not be downloaded (placeholders used).")
+        results = pool.map(lambda u: fetch_image(resize(u) if resize else u), wanted)
+        got = {u: d for u, d in zip(wanted, results) if d}
+    spare = {u: kept[image_key(u)] for u in wanted if u not in got and image_key(u) in kept}
+    images.update(got)
+    images.update(spare)
+    if spare:
+        log(f"  {len(spare)} could not be downloaded; kept from the existing page.")
+    if len(got) + len(spare) < len(wanted):
+        log(f"  {len(wanted) - len(got) - len(spare)} could not be downloaded (placeholders used).")
     return images
 
 
@@ -2442,7 +2480,7 @@ class AvatarStyles:
 
     def css(self) -> str:
         return "\n".join(
-            f'.{cls}{{background-image:url("{self.data_uris[url]}")}}'
+            f'.{cls}{{background-image:url("{self.data_uris[url]}")}}/*{image_key(url)}*/'
             for url, cls in self.classes.items()
         )
 
@@ -2538,7 +2576,7 @@ def image_or_placeholder(url: str | None, images: dict[str, str], label: str, cl
     """An embedded image, or a grey box with the first letter of `label`."""
     data_uri = images.get(url or "")
     if data_uri:
-        return f'<img class="{cls}" src="{data_uri}" alt="">'
+        return f'<img class="{cls}" src="{data_uri}" data-key="{image_key(url)}" alt="">'
     return f'<div class="{cls} img-placeholder" aria-hidden="true">{esc(initial_of(label))}</div>'
 
 
@@ -6385,26 +6423,41 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     images = {}
 
     def fetch_page_images() -> None:
-        """The images the page embeds, once (not at all for a page left as it is)."""
+        """The images the page embeds, once (not at all for a page left as it
+        is). What the existing page has comes from it, without asking (review
+        A5; the user, 25.11.2026: no needless requests, no placeholders for
+        images once downloaded): the thumbnail and the cover unless --page
+        ovr or --json refresh asks for them anew (their address stays when
+        the channel changes the picture), the other images by their address
+        unless --page ovr (fetch_images()). What does not come is taken from
+        it too."""
         if images:
             return
-        log("Downloading thumbnail and cover...")
-        thumbnail = fetch_thumbnail(info)
-        cover = fetch_image(cover_url(info))
-        kept = images_of_page(found)   # if YouTube no longer gives them
-        if not thumbnail:
-            thumbnail = kept.get("thumbnail")
-            log("  Thumbnail could not be downloaded" +
-                ("; kept from the existing page." if thumbnail else "."))
-        if not cover:
-            cover = kept.get("cover")
-            log("  Cover could not be downloaded" +
-                ("; kept from the existing page." if cover else "."))
+        kept = images_of_page(found)
+        anew = args.overwrite or args.refresh_json
+        thumbnail = None if anew else kept.get("thumbnail")
+        cover = None if anew else kept.get("cover")
+        if thumbnail and cover:
+            log("Thumbnail and cover from the existing page.")
+        else:
+            log("Downloading thumbnail and cover...")
+            thumbnail = thumbnail or fetch_thumbnail(info)
+            cover = cover or fetch_image(cover_url(info))
+            if not thumbnail:
+                thumbnail = kept.get("thumbnail")
+                log("  Thumbnail could not be downloaded" +
+                    ("; kept from the existing page." if thumbnail else "."))
+            if not cover:
+                cover = kept.get("cover")
+                log("  Cover could not be downloaded" +
+                    ("; kept from the existing page." if cover else "."))
+        keyed, reuse = kept.get("keyed"), not args.overwrite
         images.update(
             thumbnail=thumbnail, cover=cover,
             avatars=fetch_images(avatar_urls(shown(note=True), comments=not args.no_avatars),
-                                 "avatars", resize=resize_avatar_url),
-            extra=fetch_images(extra_image_urls(shown()), "images (people, podcast, cards)"))
+                                 "avatars", resize=resize_avatar_url, kept=keyed, reuse=reuse),
+            extra=fetch_images(extra_image_urls(shown()), "images (people, podcast, cards)",
+                               kept=keyed, reuse=reuse))
 
     try:
         archived = dt.date.fromisoformat(info.get(ARCHIVED_KEY) or "")

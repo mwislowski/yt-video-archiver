@@ -97,7 +97,8 @@ def test_card_images_are_embedded(info):
     assert "https://img.test/0KMYAEIXVzA-224" in yt2html.extra_image_urls(info)
     html = yt2html.render_page(info, None, {}, dt.date(2026, 11, 7), extra_images={
         "https://img.test/0KMYAEIXVzA-224": "data:image/jpeg;base64,AAAA"})
-    assert '<img class="card-image" src="data:image/jpeg;base64,AAAA" alt="">' in html
+    key = yt2html.image_key("https://img.test/0KMYAEIXVzA-224")
+    assert f'<img class="card-image" src="data:image/jpeg;base64,AAAA" data-key="{key}" alt="">' in html
 
 
 def test_no_section_without_cards(info):
@@ -138,7 +139,7 @@ def test_no_cards_option_hides_saved_cards(capsys, tmp_path, info, monkeypatch):
         (tmp_path / folder / "x.info.json").write_text(json.dumps(info), encoding="utf-8")
     images = []
     monkeypatch.setattr(yt2html, "fetch_images",
-                        lambda urls, what, resize=None: images.append(set(urls)) or {})
+                        lambda urls, what, **kwargs: images.append(set(urls)) or {})
     yt2html.main(["--json", "load", "x.info.json", "-o", str(tmp_path / "a")])
     assert any(info[yt2html.CARDS_KEY][0]["image"] in urls for urls in images)
     images.clear()

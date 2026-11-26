@@ -22,7 +22,7 @@ A **list file** of videos, playlists and video files of your own gets an **index
 - **Video formats**, folded near the bottom: the qualities, codecs and approximate sizes YouTube offers for the video, its audio tracks (original, dubbed, auto-dubbed, audio description) and subtitles.
 - **About this copy**, folded at the bottom: how this copy was made and what it lacks.
 
-Images are embedded in the file. The page works without JavaScript; a small built-in script only adds the player. It shows in light or dark colours according to the device it is opened on. Not included: YouTube's own video player, recommendations, YouTube's *Video details* (it repeats the facts).
+Images are embedded in the file; when a page is made again, it takes them from the old page instead of downloading them again (new ones are downloaded; `--page ovr` downloads all, `--json refresh` the thumbnail). The page works without JavaScript; a small built-in script only adds the player. It shows in light or dark colours according to the device it is opened on. Not included: YouTube's own video player, recommendations, YouTube's *Video details* (it repeats the facts).
 
 ## Installation
 

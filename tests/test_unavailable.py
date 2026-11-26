@@ -223,10 +223,12 @@ def test_a_refresh_keeps_the_thumbnail_youtube_no_longer_gives(capsys, saved, yo
     assert code == 0, out
     assert "Thumbnail could not be downloaded; kept from the existing page." in out
     assert f'<img class="thumbnail" src="{THUMB}" alt="">' in old.read_text("utf-8")
-    # what YouTube gives now comes first
+    # --json load takes it from the page, without asking; a refresh asks YouTube first
     monkeypatch.setattr(yt2html, "fetch_image", lambda url: "data:image/jpeg;base64,TkVX")
     run(capsys, "--json", "load", "TESTVIDEO01", "-o", str(saved.parent))
-    assert 'src="data:image/jpeg;base64,TkVX"' in old.read_text("utf-8")
+    assert f'<img class="thumbnail" src="{THUMB}" alt="">' in old.read_text("utf-8")
+    run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "refresh")
+    assert '<img class="thumbnail" src="data:image/jpeg;base64,TkVX" alt="">' in old.read_text("utf-8")
 
 
 def test_without_a_thumbnail_anywhere_the_placeholder(capsys, saved, youtube, monkeypatch,

@@ -225,3 +225,151 @@ def test_overwrite_a_page_given_by_its_name(capsys, tmp_path, fake_fetch):
     assert yt2html.main([page.name, "-o", str(tmp_path), "--page", "ovr"]) == 0
     assert fake_fetch == ["https://www.youtube.com/watch?v=TESTVIDEO01"]
     assert page.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
+
+
+# --------------------------------------------------------------------------
+# The images of the existing page, for the page made again (review A5)
+# --------------------------------------------------------------------------
+
+AVATAR = "https://yt3.ggpht.com/ytc/author=s88-c-k-c0x00ffffff-no-rj"
+PHOTO = "https://yt3.ggpht.com/person=s88"
+ELSEWHERE = "https://img.example.org/b.jpg"
+
+
+@pytest.fixture
+def pictured(saved):
+    """Saved data whose images are on YouTube's servers, one person's photo
+    elsewhere."""
+    import json
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    for comment in data["comments"]:
+        if comment.get("author_thumbnail"):
+            comment["author_thumbnail"] = AVATAR
+    data[yt2html.EXTRAS_KEY] = [{"type": "people", "title": "People", "people": [
+        {"name": "Person A", "image": PHOTO}, {"name": "Person B", "image": ELSEWHERE}]}]
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    return saved
+
+
+def images_served(monkeypatch, online=True):
+    """fetch_image faked: each address gives its own image; the addresses asked."""
+    import base64
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        return f"data:image/jpeg;base64,{base64.b64encode(url.encode()).decode()}" if online else None
+
+    monkeypatch.setattr(yt2html, "fetch_image", fetch)
+    return asked
+
+
+def picture(url):
+    import base64
+    return f"data:image/jpeg;base64,{base64.b64encode(url.encode()).decode()}"
+
+
+def load(capsys, saved, *more):
+    from test_update import run
+    return run(capsys, str(saved), "-o", str(saved.parent), "--json", "load", *more)
+
+
+def ovr(capsys, saved, monkeypatch):
+    """--page ovr, YouTube faked by the saved data."""
+    import json
+    from test_update import run
+    monkeypatch.setattr(yt2html, "fetch_info",
+                        lambda url, args: json.loads(saved.read_text(encoding="utf-8")))
+    return run(capsys, URL, "-o", str(saved.parent), "--page", "ovr")
+
+
+def the_page(folder):
+    return next(folder.glob("*.html")).read_text(encoding="utf-8")
+
+
+def test_the_page_made_again_takes_its_images_from_the_old_page(capsys, pictured, monkeypatch):
+    asked = images_served(monkeypatch)
+    assert load(capsys, pictured)[0] == 0
+    assert {yt2html.resize_avatar_url(AVATAR), PHOTO, ELSEWHERE} <= set(asked)
+    first = the_page(pictured.parent)
+    assert picture(yt2html.resize_avatar_url(AVATAR)) in first and picture(PHOTO) in first
+    kept = yt2html.images_of_page(next(pictured.parent.glob("*.html")))["keyed"]
+    assert kept[yt2html.image_key(AVATAR)] == picture(yt2html.resize_avatar_url(AVATAR))
+    assert kept[yt2html.image_key(PHOTO)] == picture(PHOTO)
+    # made again: only the image of another server is asked for
+    asked.clear()
+    code, out = load(capsys, pictured)
+    assert code == 0 and asked == [ELSEWHERE]
+    assert "Thumbnail and cover from the existing page." in out
+    assert "1 avatars from the existing page." in out
+    assert "Downloading 0" not in out
+    assert yt2html.image_key(AVATAR) == "be8d546d09be"   # 12 hex digits of SHA-256 of the address
+    assert the_page(pictured.parent).count(picture(PHOTO)) == 1
+
+
+def test_offline_the_images_stay_instead_of_placeholders(capsys, pictured, monkeypatch):
+    """Review A5: a page made again without a connection (--json load, or
+    after a long --video) lost the avatars and the other images to
+    placeholders; only the thumbnail and the cover came from the old page."""
+    images_served(monkeypatch)
+    assert load(capsys, pictured)[0] == 0
+    images_served(monkeypatch, online=False)
+    code, out = ovr(capsys, pictured, monkeypatch)       # everything asked for: nothing comes
+    assert code == 0
+    html = the_page(pictured.parent)
+    for url in (yt2html.resize_avatar_url(AVATAR), PHOTO, ELSEWHERE):
+        assert picture(url) in html
+    assert "could not be downloaded; kept from the existing page." in out
+    assert "placeholders used" not in out
+
+
+def test_page_ovr_asks_for_every_image_again(capsys, pictured, monkeypatch):
+    asked = images_served(monkeypatch)
+    assert load(capsys, pictured)[0] == 0
+    asked.clear()
+    assert ovr(capsys, pictured, monkeypatch)[0] == 0
+    assert {yt2html.resize_avatar_url(AVATAR), PHOTO, ELSEWHERE} <= set(asked)
+    assert any("maxresdefault" in url for url in asked)     # the thumbnail too
+
+
+def test_without_the_old_page_s_image_a_placeholder(capsys, pictured, monkeypatch):
+    images_served(monkeypatch, online=False)
+    code, out = load(capsys, pictured)
+    assert code == 0 and "could not be downloaded (placeholders used)." in out
+    assert "kept from the existing page" not in out
+    assert yt2html.images_of_page(next(pictured.parent.glob("*.html"))).get("keyed") is None
+
+
+def test_offline_an_image_of_another_server_stays(capsys, pictured, monkeypatch):
+    images_served(monkeypatch)
+    assert load(capsys, pictured)[0] == 0
+    asked = images_served(monkeypatch, online=False)
+    code, out = load(capsys, pictured)
+    assert code == 0 and asked == [ELSEWHERE]          # asked for first, then the page's
+    assert "1 could not be downloaded; kept from the existing page." in out
+    assert picture(ELSEWHERE) in the_page(pictured.parent)
+
+
+def test_a_refresh_asks_for_the_thumbnail_and_the_cover_again(capsys, pictured, monkeypatch):
+    """Their address stays when the channel changes the picture; the
+    avatars and the other images keep theirs (taken from the page)."""
+    import json
+    from test_update import run
+    images_served(monkeypatch)
+    assert load(capsys, pictured)[0] == 0
+    asked = images_served(monkeypatch)
+    monkeypatch.setattr(yt2html, "fetch_info",
+                        lambda url, args: json.loads(pictured.read_text(encoding="utf-8")))
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(pictured.parent), "--json", "refresh")
+    assert code == 0, out
+    assert any("maxresdefault" in url for url in asked) and ELSEWHERE in asked
+    assert yt2html.resize_avatar_url(AVATAR) not in asked and PHOTO not in asked
+
+
+def test_only_images_of_youtube_s_servers_are_taken_first():
+    for url in ("https://i.ytimg.com/vi/X/mqdefault.jpg", AVATAR, PHOTO,
+                "https://yt3.googleusercontent.com/abc=s176"):
+        assert yt2html.on_youtube(url), url
+    for url in (ELSEWHERE, "https://ytimg.com.example.org/x.jpg", "https://notytimg.com/x.jpg",
+                "not a url"):
+        assert not yt2html.on_youtube(url), url
