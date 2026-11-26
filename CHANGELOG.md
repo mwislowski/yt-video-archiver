@@ -11,6 +11,10 @@ All notable changes to this project. Versions: the second number for new feature
 - **A video page that could not be read, and the info cards it would have given, are noted with the reason.** The saved data kept `"yt2html_watch_page": "failed"` (or `"partial"`) and `"yt2html_cards": null` without saying why; now the note `watch page` holds the error (e.g. `could not be read (Expecting value: …)`) and the day, and `cards` that they could not come. `--json show` shows both, and says that `--page ovr` reads the page anew (`--json refresh` takes from it only the chapters, as before). Saved data of 0.13.0 and before are read as they are and written in the new form by the next run that saves them. The page does not change.
 - **Comments that did not all come are noted with the reason and the day:** YouTube's message when it turned them off, none at all, or `Ctrl+C`. yt-dlp's own fields stay as yt-dlp gave them; the note is beside them and goes when the comments come, e.g. when `--json refresh` gets the rest. `--json show` shows the day and what helps (`--json refresh gets the rest`). Saved data of 0.13.0 and before get the note, without a day, when they are read.
 
+### Fixed
+
+- **A video file that fails no longer stops the extra audio tracks, and it is noted.** With `--video audio:pl`, an error in the video file ended `--video` for the video, so `pl` was not downloaded, and nothing said in the saved data that the video file was missing. Now the tracks go on, and with `--json` the video file is noted (`video`, the reason, the day); so is what `Video skipped` did not take (no ffmpeg, no formats, nothing within the quality asked for). `--json show` shows it with the command to try again; the note goes when the file is there.
+
 ## [0.13.0] - 2026-11-26
 
 ### Changed

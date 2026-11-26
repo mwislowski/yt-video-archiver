@@ -225,6 +225,7 @@ WATCH_PAGE_KEY = "yt2html_watch_page"
 WATCH_PAGE_GAP = "watch page"   # the video page not read, or read without the player data
 CARDS_GAP = "cards"             # the cards asked for, the video page not read
 COMMENTS_GAP = "comments"       # comments asked for: none came, or interrupted (note_comments())
+VIDEO_GAP = "video"             # the video file asked for with --video did not come
 
 # Keys filled from the watch page; all None when the page cannot be read.
 PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, COMMENTS_MESSAGE_KEY, LICENSE_KEY, CAPTION_KEY,
@@ -5232,7 +5233,7 @@ ELEMENTS = (
     ("info cards", "cards", contents_cards),
     ("transcript", "transcript", contents_transcript),
     ("comments", "comments", contents_comments),
-    ("video file", "video", contents_video_file),
+    ("video file", VIDEO_GAP, contents_video_file),
     ("extra audio", "audio", contents_extra_audio),
 )
 
@@ -5313,6 +5314,10 @@ def show_hints(info: dict) -> list[str]:
         elif entry.get("again") and kind == "audio":
             hints.append(f"to try again: yt2html {info.get('id')} --json write --video "
                          f"audio:{source}")
+        elif entry.get("again") and key == VIDEO_GAP:
+            parameters = video_parameters(info)
+            hints.append(f"to try again: yt2html {info.get('id')} --json write --video"
+                         + (f" {parameters}" if parameters else ""))
     return hints
 
 
@@ -6827,7 +6832,14 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
 
 class VideoSkipped(Exception):
     """The video cannot be taken (no ffmpeg, no formats, nothing in the
-    limit): the page stays, the reason is told, the run goes on."""
+    limit): the page stays, the reason is told, the run goes on. `keys`:
+    what --video asked for and does not get ("video", "audio de"), noted in
+    NOT_SAVED_KEY when the data are saved; `again`: whether the same command
+    may get it later."""
+
+    def __init__(self, message: str, keys: tuple = (), again: bool = True):
+        super().__init__(message)
+        self.keys, self.again = tuple(keys), again
 
 
 class PartlyDownloaded(Exception):
@@ -6991,6 +7003,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                                      "size": (folder / existing[0]).stat().st_size},
                                     [old] if old else [])
         if not spec["audio"]:
+            result["_gaps"] = {VIDEO_GAP: None}   # the file is there: its note goes
             return result, None, False
         # a page left as it is (page_info None: not made now) with every track
         # asked for already here too: nothing to ask YouTube, so the next video
@@ -7001,17 +7014,21 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             for (code, role), path in audio_files:
                 log(f'Audio skipped (file exists): {path}. Add "ovr" to --video to download '
                     'it again.')
-            result["_gaps"] = {audio_gap_key(code, role): None for code, role, _ in spec["audio"]}
+            result["_gaps"] = {VIDEO_GAP: None, **{audio_gap_key(code, role): None
+                                                   for code, role, _ in spec["audio"]}}
             result["extra_audio"] = [
                 described({"audio": code, "role": role, "file": path.name,
                            "size": path.stat().st_size},
                           previous.get("extra_audio") or [], "audio", "role")
                 for (code, role), path in audio_files]
             return result, None, False
+    # what this run asks for, noted when it cannot be taken (VideoSkipped)
+    asked_keys = (((VIDEO_GAP,) if take_image else ())
+                  + tuple(audio_gap_key(code, role) for code, role, _ in spec["audio"]))
     # ffmpeg joins image and sound and fixes m4a
     if (take_image or spec["audio"]) and not shutil.which("ffmpeg"):
         raise VideoSkipped(f"ffmpeg not found (it joins image and sound). "
-                           f"Install it: {install_hint('ffmpeg')}.")
+                           f"Install it: {install_hint('ffmpeg')}.", asked_keys)
     if "deno" not in notes and not shutil.which("deno"):
         notes.add("deno")
         log("Note: no JavaScript runtime (Deno) found, so YouTube may offer fewer formats. "
@@ -7037,13 +7054,13 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             f"is taken.")
     if choice is None:
         raise VideoSkipped("no video or audio formats in the list (YouTube sometimes sends "
-                           "none for a while; try again later).")
+                           "none for a while; try again later).", asked_keys)
     variant = choose_variant(choice, spec)
     audio = choice.main_audio
     if take_image and (not variant or not audio):
         raise VideoSkipped(f"no AV1 or H.264 image up to {limit_text(spec)} "
                            "(see Video formats on the page)." if not variant else
-                           "no audio track in the list.")
+                           "no audio track in the list.", asked_keys, again=variant is not None)
 
     def options(fmt: str, name: str) -> dict:
         opts = {"format": fmt, "merge_output_format": "mp4",
@@ -7055,6 +7072,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         return opts
 
     failures = 0
+    image_failure = None
     if take_image:
         audio_codec = codec_name(audio.get("acodec"), AUDIO_CODECS)
         audio_code = choice.track(audio)[0]
@@ -7063,23 +7081,39 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
         # ovr: into the mp4 that is there, whatever its name (the parameter "ovr")
         target = next((folder / name for name in existing if name.lower().endswith(".mp4")),
                       folder / f"{page.stem}.mp4")
-        yt_download(fresh, options(f"{variant['format']['format_id']}+{audio['format_id']}",
-                                   target.stem))
-        size = target.stat().st_size
-        log(f"Saved video: {target} ({human_size(size).lstrip('~')})")
-        result["_image_new"] = True   # told to take_video(), not saved
-        result["video"] = {"file": target.name, "size": size, "date": today,
-                           "quality": variant["quality"], "codec": variant["codec"],
-                           "video_format": variant["format"]["format_id"],
-                           "audio": None if audio_code == UNKNOWN_LANGUAGE else audio_code,
-                           "audio_codec": audio_codec, "audio_format": audio["format_id"]}
-        new = True
+        try:
+            yt_download(fresh, options(f"{variant['format']['format_id']}+{audio['format_id']}",
+                                       target.stem))
+        except Exception as error:
+            if no_connection(error):
+                raise   # nothing new yet: the video and the files after it as they were
+            # the video file did not come: noted, the extra tracks go on
+            image_failure = failure_reason(error) if isinstance(
+                error, yt_dlp.utils.DownloadError) else error_line(error)
+            log(f"Video FAILED: {image_failure}. "
+                + ("The extra audio tracks go on; run" if spec["audio"] else
+                   "The page is saved; run") + " the same command again to retry.")
+            failures += 1
+        else:
+            size = target.stat().st_size
+            log(f"Saved video: {target} ({human_size(size).lstrip('~')})")
+            result["_image_new"] = True   # told to take_video(), not saved
+            result["video"] = {"file": target.name, "size": size, "date": today,
+                               "quality": variant["quality"], "codec": variant["codec"],
+                               "video_format": variant["format"]["format_id"],
+                               "audio": None if audio_code == UNKNOWN_LANGUAGE else audio_code,
+                               "audio_codec": audio_codec, "audio_format": audio["format_id"]}
+            image_failure = None
+            new = True
     # The extra audio tracks: separate m4a files, each on its own.
     wanted, messages, asked, absent = resolve_audio(choice, spec["audio"])
     if messages:
         log("Audio: " + "; ".join(messages) + ".")
         log("  Tracks to add: " + ("; ".join(extra_track_lines(choice.extra)) or "none"))
     gaps = result["_gaps"] = {key: None for key in asked.values()}   # there unless told
+    gaps[VIDEO_GAP] = None   # the video file there (downloaded now, or before)
+    if image_failure:
+        note_gap(gaps, VIDEO_GAP, image_failure, again=True)
     for key in absent:
         note_gap(gaps, key, "YouTube offers no such audio track", again=False)
     extra = []
@@ -8064,6 +8098,10 @@ def main(argv=None) -> int:
         except VideoSkipped as reason:
             log(f"Video skipped: {reason}")
             videos["skipped"] += 1
+            changes = {}
+            for key in reason.keys:   # what it asked for, noted (the first sentence)
+                note_gap(changes, key, str(reason).split(". ")[0].rstrip("."), reason.again)
+            note_skipped(outcome, changes)
             return
         except Exception as error:
             videos["failed"] += 1
@@ -8100,6 +8138,23 @@ def main(argv=None) -> int:
             outcome["rebuild"]()
         if lost is not None:
             raise NoConnection(failure_reason(lost), partly=bool(outcome.get("rebuild")))
+
+    def note_skipped(outcome: dict, changes: dict):
+        """--video took nothing (VideoSkipped): with saved data, what it asked
+        for noted, and the page and the data made again when the notes change
+        (no requests: the images from the page)."""
+        info = (outcome["deferred"] if outcome.get("deferred") is not None
+                else outcome.get("info"))
+        if not changes or info is None or not outcome.get("rebuild") or not (
+                args.write_json or args.refresh_json):
+            return
+        known = info.get(NOT_SAVED_KEY) or {}
+        gaps = video_gaps(known, changes, args.video["ovr"])
+        if gaps == known:
+            return
+        set_gaps(info, gaps)
+        outcome["info"] = info
+        outcome["rebuild"]()
 
     def archive_list(videos: list[tuple[str, str | None]]):
         """--index: each video of the list (with its playlist, if from one)."""

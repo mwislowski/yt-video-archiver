@@ -1267,3 +1267,116 @@ def test_merging_the_record():
     assert yt2html.merge_video_record(old, without, image_new=False)["video"] == old["video"]
     assert yt2html.merge_video_record({}, new, image_new=True) is new
     assert "extra_audio" not in yt2html.merge_video_record({"date": "x"}, {"date": "y"}, False)
+
+
+# The video file noted when it does not come (notes 5.4, commit 5 of the series)
+
+def test_a_video_file_that_fails_is_noted_and_the_tracks_go_on(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    youtube["fail"] = {"399+140": FORBIDDEN}
+    assert yt2html.main([URL, "-o", str(tmp_path), *TRACKS]) == 1
+    out = capsys.readouterr().out
+    assert ("Video FAILED: HTTP Error 403: Forbidden. The extra audio tracks go on; run the same "
+            "command again to retry.") in out
+    assert [o["format"] for o in youtube["downloads"]] == ["399+140", "140-1", "140-3"]
+    data = saved_data(tmp_path)
+    assert data[yt2html.NOT_SAVED_KEY] == {"video": {
+        "reason": "HTTP Error 403: Forbidden", "date": dt.date.today().isoformat(), "again": True}}
+    assert "video" not in data[yt2html.VIDEO_KEY]
+    assert [e["audio"] for e in data[yt2html.VIDEO_KEY]["extra_audio"]] == ["pl", "de-DE"]
+    lines, _ = yt2html.show_block(yt2html.upgrade_saved(data), page(tmp_path).with_suffix(
+        ".info.json"))
+    assert ("              video file          not saved: HTTP Error 403: Forbidden, "
+            f"{dt.date.today().strftime('%d.%m.%Y')}") in lines
+    assert ("  (to try again: yt2html TESTVIDEO01 --json write --video audio:pl,audio:de)"
+            in lines)
+    # the same command again: the video comes, its note goes, the tracks are not asked again
+    youtube["fail"], youtube["downloads"] = {}, []
+    assert yt2html.main([URL, "-o", str(tmp_path), *TRACKS]) == 0
+    assert [o["format"] for o in youtube["downloads"]] == ["399+140"]
+    data = saved_data(tmp_path)
+    assert yt2html.NOT_SAVED_KEY not in data and data[yt2html.VIDEO_KEY]["video"]["quality"]
+
+
+def test_a_video_file_that_fails_alone_and_a_connection_lost_in_it(tmp_path, youtube, capsys):
+    youtube["error"] = True
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "--json", "write"]) == 1
+    assert ("Video FAILED: HTTP Error 403: Forbidden. The page is saved; run the same command "
+            "again to retry.") in capsys.readouterr().out
+    assert saved_data(tmp_path)[yt2html.NOT_SAVED_KEY]["video"]["again"] is True
+    # an error that is no Download error: its first line
+    youtube["error"] = False
+    youtube["fail"] = {"399+140": OSError("disk full\nmore")}
+    youtube["fresh"] = DUBS
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "--json", "write"])
+    assert saved_data(tmp_path)[yt2html.NOT_SAVED_KEY]["video"]["reason"] == "disk full"
+    # the connection lost in the video file: nothing new, as before (no note of it)
+    youtube["fail"] = {"399+140": OFFLINE}
+    before = page(tmp_path).with_suffix(".info.json").read_bytes()
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "--json", "write"]) == 1
+    assert page(tmp_path).with_suffix(".info.json").read_bytes() == before
+
+
+def test_video_skipped_notes_what_it_asked_for(tmp_path, youtube, monkeypatch, capsys):
+    assert yt2html.main([URL, "-o", str(tmp_path), "--json", "write"]) == 0
+    before = page(tmp_path).with_suffix(".info.json").read_bytes()
+    monkeypatch.setattr(yt2html.shutil, "which", lambda name: None)
+    assert yt2html.main([URL, "-o", str(tmp_path), *TRACKS]) == 0
+    assert "Video skipped: ffmpeg not found" in capsys.readouterr().out
+    reason = "ffmpeg not found (it joins image and sound)"
+    today = dt.date.today().isoformat()
+    assert saved_data(tmp_path)[yt2html.NOT_SAVED_KEY] == {
+        key: {"reason": reason, "date": today, "again": True}
+        for key in ("video", "audio pl", "audio de")}
+    assert page(tmp_path).with_suffix(".info.json").read_bytes() != before
+    # the same again: the notes do not change, so neither do the page and the data
+    data_time = page(tmp_path).with_suffix(".info.json").stat().st_mtime_ns
+    page_time = page(tmp_path).stat().st_mtime_ns
+    assert yt2html.main([URL, "-o", str(tmp_path), *TRACKS]) == 0
+    assert (page(tmp_path).with_suffix(".info.json").stat().st_mtime_ns,
+            page(tmp_path).stat().st_mtime_ns) == (data_time, page_time)
+    # nothing within the limit: YouTube does not have it
+    monkeypatch.setattr(yt2html.shutil, "which", lambda name: f"/usr/bin/{name}")
+    youtube["fresh"] = [vfmt("244", 480, "vp9", 50 * MB), afmt("140", "mp4a.40.2", 9 * MB)]
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "480p,ovr", "--json", "write"])
+    assert saved_data(tmp_path)[yt2html.NOT_SAVED_KEY] == {"video": {
+        "reason": "no AV1 or H.264 image up to 480p (see Video formats on the page)",
+        "date": today, "again": False}}
+    lines, _ = yt2html.show_block(saved_data(tmp_path), page(tmp_path).with_suffix(".info.json"))
+    assert not [line for line in lines if "to try again" in line]   # YouTube does not have it
+    # no formats at all: noted too, to try again
+    youtube["fresh"] = [{"format_id": "sb0", "ext": "mhtml", "vcodec": "none", "acodec": "none"}]
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "ovr", "--json", "write"])
+    assert saved_data(tmp_path)[yt2html.NOT_SAVED_KEY]["video"] == {
+        "reason": "no video or audio formats in the list (YouTube sometimes sends none for a "
+                  "while; try again later)", "date": today, "again": True}
+
+
+def test_video_skipped_without_saved_data_notes_nothing(tmp_path, youtube, monkeypatch, capsys):
+    monkeypatch.setattr(yt2html.shutil, "which", lambda name: None)
+    written = []
+    real = yt2html.write_atomically
+    monkeypatch.setattr(yt2html, "write_atomically",
+                        lambda path, content: (written.append(Path(path).suffix),
+                                               real(path, content)))
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video"]) == 0
+    assert not list(tmp_path.glob("*.info.json"))
+    assert written == [".html"]   # the page once: nothing to note, so not made again
+
+
+def test_a_video_file_found_there_clears_its_note(tmp_path, youtube, capsys):
+    youtube["error"] = True
+    yt2html.main([URL, "-o", str(tmp_path), "--video", "--json", "write"])
+    assert "video" in saved_data(tmp_path)[yt2html.NOT_SAVED_KEY]
+    page(tmp_path).with_suffix(".mp4").write_bytes(b"x" * 10)   # put there by hand
+    youtube["error"] = False
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "--json", "write"]) == 0
+    assert yt2html.NOT_SAVED_KEY not in saved_data(tmp_path)
+    # with tracks, all there: the same
+    data = saved_data(tmp_path)
+    data[yt2html.NOT_SAVED_KEY] = {"video": {"reason": "r", "again": True}}
+    page(tmp_path).with_suffix(".info.json").write_text(json.dumps(data), encoding="utf-8")
+    for code in ("pl.dubbed", "de-DE.auto-dubbed"):
+        (tmp_path / f"{page(tmp_path).stem}.{code}.m4a").write_bytes(b"x")
+    assert yt2html.main([URL, "-o", str(tmp_path), *TRACKS]) == 0
+    assert "video" not in (saved_data(tmp_path).get(yt2html.NOT_SAVED_KEY) or {})
