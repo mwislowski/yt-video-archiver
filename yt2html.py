@@ -224,6 +224,7 @@ REFRESHED_KEYS = ("view_count", "like_count", "channel_follower_count", YT_COUNT
 WATCH_PAGE_KEY = "yt2html_watch_page"
 WATCH_PAGE_GAP = "watch page"   # the video page not read, or read without the player data
 CARDS_GAP = "cards"             # the cards asked for, the video page not read
+COMMENTS_GAP = "comments"       # comments asked for: none came, or interrupted (note_comments())
 
 # Keys filled from the watch page; all None when the page cannot be read.
 PAGE_KEYS = (MARKERS_KEY, EXTRAS_KEY, YT_COUNT_KEY, COMMENTS_MESSAGE_KEY, LICENSE_KEY, CAPTION_KEY,
@@ -299,6 +300,8 @@ def fetch_info(url: str, args: argparse.Namespace) -> dict:
             info[LIMIT_KEY] = args.comment_limit
         if info.get("_type") not in ("playlist", "multi_video"):
             add_watch_page_data(ydl, info, cards=not args.no_cards)
+            if not args.no_comments:
+                note_comments(info)   # (after the watch page: YouTube's message)
             if args.transcript:
                 gaps = dict(info.get(NOT_SAVED_KEY) or {})   # the watch page's notes stay
                 transcript = fetch_transcript(
@@ -1671,6 +1674,30 @@ def transcript_asked(info: dict) -> bool:
     return TRANSCRIPT_KEY in info or transcript_gap(info) is not None
 
 
+def comments_gap_reason(info: dict) -> str | None:
+    """Why the comments asked for are not all there, by yt-dlp's fields as it
+    gave them (comment_status(); they stay as they are, the user, 26.11.2026):
+    YouTube's message when it turned them off, none came, or Ctrl+C; None
+    when they came (or were not asked for)."""
+    status = comment_status(info)
+    if status == "turned-off":
+        return info.get(COMMENTS_MESSAGE_KEY)
+    return {"unavailable": "none came, reason unknown",
+            "interrupted": "interrupted (Ctrl+C)"}.get(status)
+
+
+def note_comments(info: dict) -> None:
+    """COMMENTS_GAP as the comments are now: made when they did not all
+    come (with the first day of the same reason), gone when they came."""
+    gaps = dict(info.get(NOT_SAVED_KEY) or {})
+    reason = comments_gap_reason(info)
+    if reason is None:
+        gaps.pop(COMMENTS_GAP, None)
+    elif (gaps.get(COMMENTS_GAP) or {}).get("reason") != reason:
+        note_gap(gaps, COMMENTS_GAP, reason, again=comment_status(info) == "interrupted")
+    set_gaps(info, gaps)
+
+
 def error_line(error: Exception) -> str:
     """An error for a note: its first line, at most 200 characters."""
     text = (str(error) or type(error).__name__).strip().splitlines()[0]
@@ -1708,7 +1735,8 @@ def upgrade_saved(info: dict) -> dict:
     0.12.3 and before go into NOT_SAVED_KEY (refused: asked for again); a
     transcript saved as None (none came) goes, its note stays or is made;
     the watch page's status (WATCH_PAGE_KEY) and cards saved as None become
-    notes (WATCH_PAGE_GAP, CARDS_GAP).
+    notes (WATCH_PAGE_GAP, CARDS_GAP); comments asked for that did not all
+    come get their note (COMMENTS_GAP), without a day.
     Transitional code (notes 5.4): removed once no saved data have them.
     Returns `info`."""
     transcript = info.get(TRANSCRIPT_KEY)
@@ -1734,6 +1762,9 @@ def upgrade_saved(info: dict) -> dict:
     if CARDS_KEY in info and info[CARDS_KEY] is None:
         del info[CARDS_KEY]
         gaps[CARDS_GAP] = {"reason": "the video page was not read", "again": False}
+    reason = comments_gap_reason(info)   # no note before 0.14: the day is not known
+    if reason:
+        gaps[COMMENTS_GAP] = {"reason": reason, "again": comment_status(info) == "interrupted"}
     if gaps:
         info[NOT_SAVED_KEY] = {**gaps, **(info.get(NOT_SAVED_KEY) or {})}
     return info
@@ -5132,10 +5163,12 @@ def contents_comments(info: dict, gaps: dict) -> list[tuple]:
     status = comment_status(info)
     if status == "not-downloaded":
         return [("comments", NOT_ASKED, ["--page comments:no"])]
-    if status == "turned-off":
-        return [("comments", NOT_SAVED, [info.get(COMMENTS_MESSAGE_KEY)])]
-    if status == "unavailable":
-        return [("comments", NOT_SAVED, ["none came, reason unknown"])]
+    note = gaps.get(COMMENTS_GAP) or {}
+    day = f", {format_date(note['date'])}" if note.get("date") else ""
+    if status in ("turned-off", "unavailable"):
+        reason = comments_gap_reason(info) or ""
+        return [("comments", NOT_SAVED, [f"{reason.rstrip('.') if day else reason}{day}",
+                                         "(--json refresh asks again)"])]
     saved = info["comments"]
     count_text, _ = youtube_comment_count(info)
     text = f"{len(saved)}" + (f" of {count_text}" if count_text else "")
@@ -5144,7 +5177,9 @@ def contents_comments(info: dict, gaps: dict) -> list[tuple]:
     gone = sum(1 for c in saved if c.get(MISSING_SINCE_KEY))
     if gone:
         text += f", {gone} not on YouTube"
-    texts = [text]
+    texts = [text + (day if status == "interrupted" else "")]
+    if status == "interrupted":
+        texts.append("(--json refresh gets the rest)")
     closed = info.get(COMMENTS_CLOSED_KEY) or []
     if closed and not closed[-1].get("until"):
         texts.append(f"turned off on YouTube since {format_date(closed[-1]['from'])}")
@@ -5196,7 +5231,7 @@ ELEMENTS = (
     ("markers", "", contents_markers),
     ("info cards", "cards", contents_cards),
     ("transcript", "transcript", contents_transcript),
-    ("comments", "", contents_comments),
+    ("comments", "comments", contents_comments),
     ("video file", "video", contents_video_file),
     ("extra audio", "audio", contents_extra_audio),
 )
@@ -6288,6 +6323,7 @@ def refresh_saved(info: dict, fresh: dict) -> dict | None:
     # None (Ctrl+C) as yt-dlp leaves it; else the number kept, as for a download
     info["comment_count"] = None if fresh.get("comment_count") is None else len(merged)
     info[LIMIT_KEY] = fresh.get(LIMIT_KEY)
+    note_comments(info)   # the rest came, or Ctrl+C again
     return stats
 
 

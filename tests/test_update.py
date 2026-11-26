@@ -910,3 +910,97 @@ def test_an_error_for_a_note_is_one_short_line():
     long = yt2html.error_line(ValueError("x" * 300))
     assert len(long) == 200 and long.endswith("…")
     assert yt2html.error_line(ValueError("y" * 200)) == "y" * 200
+
+
+def comments_of(n):
+    return [{"id": f"c{i}", "text": "x", "author": "a", "timestamp": i} for i in range(n)]
+
+
+def test_the_comments_note_follows_them():
+    """yt-dlp's fields stay as yt-dlp gave them; the note says why they are
+    not all there (the user, 26.11.2026: variant A), and goes when they come."""
+    today = dt.date.today().isoformat()
+    info = {"comments": None, yt2html.COMMENTS_MESSAGE_KEY: "Comments are turned off."}
+    yt2html.note_comments(info)
+    assert info["comments"] is None   # as yt-dlp gave it
+    assert info[yt2html.NOT_SAVED_KEY] == {"comments": {
+        "reason": "Comments are turned off.", "date": today, "again": False}}
+    info[yt2html.NOT_SAVED_KEY]["comments"]["date"] = "2026-11-01"   # the same reason: first day
+    yt2html.note_comments(info)
+    assert info[yt2html.NOT_SAVED_KEY]["comments"]["date"] == "2026-11-01"
+    info = {"comments": None}
+    yt2html.note_comments(info)
+    assert info[yt2html.NOT_SAVED_KEY]["comments"]["reason"] == "none came, reason unknown"
+    info.update(comments=comments_of(3), comment_count=None)   # Ctrl+C
+    yt2html.note_comments(info)
+    assert info[yt2html.NOT_SAVED_KEY]["comments"] == {
+        "reason": "interrupted (Ctrl+C)", "date": today, "again": True}
+    info["comment_count"] = 3   # all came
+    info[yt2html.NOT_SAVED_KEY]["audio de"] = {"reason": "r", "again": True}
+    yt2html.note_comments(info)
+    assert info[yt2html.NOT_SAVED_KEY] == {"audio de": {"reason": "r", "again": True}}
+    del info["comments"]   # not asked for: no note
+    yt2html.note_comments(info)
+    assert "comments" not in info[yt2html.NOT_SAVED_KEY]
+
+
+def test_a_download_notes_comments_turned_off(monkeypatch):
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download):
+            return ({"id": "TESTVIDEO01", "comments": None, "comment_count": None}
+                    if self.opts.get("getcomments") else {"id": "TESTVIDEO01"})
+
+        def sanitize_info(self, info):
+            return info
+
+    def page(ydl, info, cards=True):
+        info[yt2html.COMMENTS_MESSAGE_KEY] = "Comments are turned off."
+
+    monkeypatch.setattr(yt2html.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(yt2html, "add_watch_page_data", page)
+    url = "https://www.youtube.com/watch?v=TESTVIDEO01"
+    info = yt2html.fetch_info(url, yt2html.parse_args([url, "--transcript"]))
+    assert info["comments"] is None
+    assert info[yt2html.NOT_SAVED_KEY]["comments"]["reason"] == "Comments are turned off."
+    assert "transcript" in info[yt2html.NOT_SAVED_KEY]   # beside it
+    info = yt2html.fetch_info(url, yt2html.parse_args([url, "--page", "comments:no"]))
+    assert yt2html.NOT_SAVED_KEY not in info
+
+
+def test_a_refresh_brings_the_rest_of_the_comments_and_the_note_goes():
+    saved = {"comments": comments_of(2), "comment_count": None, yt2html.LIMIT_KEY: None,
+             yt2html.NOT_SAVED_KEY: {"comments": {"reason": "interrupted (Ctrl+C)",
+                                                  "date": "2026-11-20", "again": True}}}
+    fresh = {"comments": comments_of(5), "comment_count": 5, yt2html.LIMIT_KEY: None}
+    yt2html.refresh_saved(saved, fresh)
+    assert len(saved["comments"]) == 5 and yt2html.NOT_SAVED_KEY not in saved
+    # interrupted again: noted again
+    yt2html.refresh_saved(saved, {"comments": comments_of(1), "comment_count": None,
+                                  yt2html.LIMIT_KEY: None})
+    assert saved[yt2html.NOT_SAVED_KEY]["comments"]["reason"] == "interrupted (Ctrl+C)"
+    # turned off since: the saved comments stay, so does the state; no new note
+    saved = {"comments": comments_of(2), "comment_count": 2, yt2html.LIMIT_KEY: None}
+    yt2html.refresh_saved(saved, {"comments": None,
+                                  yt2html.COMMENTS_MESSAGE_KEY: "Comments are turned off."})
+    assert yt2html.NOT_SAVED_KEY not in saved and saved[yt2html.COMMENTS_CLOSED_KEY]
+
+
+def test_upgrade_notes_comments_that_did_not_all_come():
+    assert yt2html.upgrade_saved({"comments": None, yt2html.COMMENTS_MESSAGE_KEY: "Off."}) == {
+        "comments": None, yt2html.COMMENTS_MESSAGE_KEY: "Off.",
+        yt2html.NOT_SAVED_KEY: {"comments": {"reason": "Off.", "again": False}}}
+    info = yt2html.upgrade_saved({"comments": comments_of(2), "comment_count": None})
+    assert info[yt2html.NOT_SAVED_KEY] == {"comments": {"reason": "interrupted (Ctrl+C)",
+                                                        "again": True}}
+    assert yt2html.upgrade_saved({"comments": comments_of(2), "comment_count": 2}) == {
+        "comments": comments_of(2), "comment_count": 2}
+    assert yt2html.upgrade_saved({"id": "x"}) == {"id": "x"}   # not asked for

@@ -354,8 +354,10 @@ def test_the_full_map_names_what_no_command_asked_for(capsys, tmp_path, saved):
     (FAILED, ("info cards", "not saved",
               ["the video page was not read, 23.11.2026 (not asked for again)"])),
     ({yt2html.CARDS_KEY: []}, ("info cards", "saved", ["none"])),
-    ({"comments": None}, ("comments", "not saved", ["none came, reason unknown"])),
-    ({"comment_count": None}, ("comments", "partly saved", ["7 of 9, interrupted (Ctrl+C)"])),
+    ({"comments": None}, ("comments", "not saved", ["none came, reason unknown",
+                                                     "(--json refresh asks again)"])),
+    ({"comment_count": None}, ("comments", "partly saved", ["7 of 9, interrupted (Ctrl+C)",
+                                                            "(--json refresh gets the rest)"])),
     ({yt2html.PLAYLIST_KEY: None}, ("playlist", "not asked for", ["downloaded on its own"])),
     ({yt2html.MARKERS_KEY: [], "chapters": None}, ("markers", "saved", ["none"])),
     ({yt2html.NOT_SAVED_KEY: {"video": {"reason": "HTTP Error 403: Forbidden", "date": "2026-11-23",
@@ -494,3 +496,21 @@ def test_a_transcript_by_the_author(info):
     info[yt2html.TRANSCRIPT_KEY]["kind"] = "manual"
     assert ("transcript", "saved", ["en (English, by the author), 3 lines"]) in \
         yt2html.show_contents(info)
+
+
+def test_comments_not_all_there_with_the_day(info):
+    info.update(comments=None)
+    info[yt2html.COMMENTS_MESSAGE_KEY] = "Comments are turned off."
+    info[yt2html.NOT_SAVED_KEY] = {"comments": {"reason": "Comments are turned off.",
+                                                "date": "2026-11-20", "again": False}}
+    assert ("comments", "not saved", ["Comments are turned off, 20.11.2026",
+                                      "(--json refresh asks again)"]) in yt2html.show_contents(info)
+    del info[yt2html.NOT_SAVED_KEY]   # no day (data saved before): YouTube's text as it is
+    assert ("comments", "not saved", ["Comments are turned off.",
+                                      "(--json refresh asks again)"]) in yt2html.show_contents(info)
+    info.update(comments=info["comments"] or [{"id": "a", "text": "x"}], comment_count=None)
+    info[yt2html.NOT_SAVED_KEY] = {"comments": {"reason": "interrupted (Ctrl+C)",
+                                                "date": "2026-11-21", "again": True}}
+    rows = yt2html.show_contents(info)
+    assert ("comments", "partly saved", ["1 of 9, interrupted (Ctrl+C), 21.11.2026",
+                                         "(--json refresh gets the rest)"]) in rows
