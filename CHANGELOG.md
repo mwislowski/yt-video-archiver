@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Ctrl+C` or a lost connection while a page's images download no longer leaves the saved data ahead of the page.** `--json write` saved the data first and downloaded the images for the page after; stopped in between, the data had the new translation and the page did not, and every later `--json write` said `Nothing missing`, so the page never got it. Now the page is made first, and the data and the page are written one right after the other. The page keeps an invisible mark of its data: when they differ (after `--json merge`, an interrupted run of an earlier version, an edit of the file), `--json write` says so and `--json show` lists `page (not made from these data)`; `--json load` makes it again. Pages made before have no mark and count as made from their data.
+
 ### Changed
 
 - **What the copy lacks although a command asked for it is kept in one place in the saved data** (`yt2html_not_saved`): for now the transcript and its versions, such as a translation YouTube refused, subtitles it does not have or no captions at all, each with the reason, the day and whether the same command asks for it again. `--json show` lists it in a part of its own, *Not saved*, instead of `not available` under *Transcript*. Saved data of 0.12.3 and before are read as they are and written in the new form by the next run that saves them (`--json write` that adds something, `--json refresh`, `--json merge`). The pages do not change.

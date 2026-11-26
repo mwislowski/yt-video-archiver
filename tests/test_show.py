@@ -240,3 +240,25 @@ def test_data_of_0_12_3_are_shown_in_today_s_form(capsys, tmp_path, saved):
     assert code == 0 and saved.read_bytes() == before
     assert "  Not saved:  transcript fr: YouTube refused to send it (HTTP 429), 14.11.2026\n" in out
     assert f"(to try again: yt2html {ID} --json write --transcript plain,dual:fr)" in out
+
+
+def test_a_page_not_made_from_its_data(capsys, tmp_path, saved):
+    (tmp_path / f"Title [{ID}].html").write_text(
+        '<meta name="yt2html:data" content="000000000000"><title>x</title>', encoding="utf-8")
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
+    assert "  Next to it: page (not made from these data)\n" in out
+    assert (f'(to make the page from these data: yt2html "{saved.name}" --json load '
+            f'--transcript)') in out
+    mark = yt2html.data_mark(saved.read_bytes())
+    (tmp_path / f"Title [{ID}].html").write_text(
+        f'<meta name="yt2html:data" content="{mark}"><title>x</title>', encoding="utf-8")
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
+    assert "  Next to it: page\n" in out and "to make the page" not in out
+    # in the summary
+    (tmp_path / f"Title [{ID}].html").write_text(
+        '<meta name="yt2html:data" content="000000000000"><title>x</title>', encoding="utf-8")
+    other = json.loads(saved.read_text(encoding="utf-8"))
+    other.update(id=OTHER, title="Other")
+    (tmp_path / f"Other [{OTHER}].info.json").write_text(json.dumps(other), encoding="utf-8")
+    code, out = run(capsys, "*.info.json", "-o", str(tmp_path), "--json", "show")
+    assert out.rstrip().endswith("; no page for 1; a page not made from its data for 1")

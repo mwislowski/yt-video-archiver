@@ -721,3 +721,76 @@ def test_json_merge_saves_old_data_in_today_s_form(capsys, saved, tmp_path):
     data = json.loads(saved.read_text("utf-8"))
     assert "missing" not in data[yt2html.TRANSCRIPT_KEY] and "de" in data[yt2html.TRANSCRIPT_KEY]["own"]
     assert data[yt2html.NOT_SAVED_KEY] == {"transcript de": {"reason": "r", "again": True}}
+
+
+# --------------------------------------------------------------------------
+# The page and its saved data as one (review B1): the page is made with its
+# images before anything is written, and keeps the mark of its data
+# --------------------------------------------------------------------------
+
+def mark_of(page_path):
+    return yt2html.read_page_metadata(page_path).get("yt2html:data")
+
+
+def test_an_interrupted_run_leaves_the_data_and_the_page_as_they_were(capsys, saved, youtube,
+                                                                    monkeypatch):
+    """Ctrl+C while the page's images were downloaded, after a translation
+    came: the data were saved without the page, and every later --json write
+    found nothing missing, so the page never showed it (review B1)."""
+    assert run(capsys, str(saved), "-o", str(saved.parent), "--json", "load",
+               "--transcript", "plain")[0] == 0
+    data, html = saved.read_bytes(), page(saved.parent).read_bytes()
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    fetch_images = yt2html.fetch_images
+    monkeypatch.setattr(yt2html, "fetch_images", interrupted)
+    code, _ = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                  "--transcript", "dual:pl")
+    assert code == 130
+    assert saved.read_bytes() == data and page(saved.parent).read_bytes() == html
+    monkeypatch.setattr(yt2html, "fetch_images", fetch_images)
+    assert yt2html.main(["TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                         "--transcript", "dual:pl"]) == 0
+    assert 'class="transcript bilingual"' in page(saved.parent).read_text("utf-8")
+
+
+def test_the_page_keeps_the_mark_of_its_data(capsys, saved, youtube):
+    assert run(capsys, str(saved), "-o", str(saved.parent), "--json", "load",
+               "--transcript", "plain")[0] == 0
+    assert mark_of(page(saved.parent)) == yt2html.data_mark(saved.read_bytes())
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                    "--transcript", "dual:pl")
+    assert code == 0 and "translation pl" in saved.read_text("utf-8")
+    assert mark_of(page(saved.parent)) == yt2html.data_mark(saved.read_bytes())
+    # nothing missing, the page made from these data: nothing said
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                    "--transcript", "dual:pl")
+    assert "Nothing missing" in out and "not made from these saved data" not in out
+    # the data changed without the page (an edit, --json merge): said, the page left as it is
+    data = json.loads(saved.read_text("utf-8"))
+    data["title"] = "Edited by hand"
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    html = page(saved.parent).read_bytes()
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                    "--transcript", "dual:pl")
+    assert code == 0 and page(saved.parent).read_bytes() == html
+    assert ("The page was not made from these saved data (after --json merge, an interrupted "
+            "run or an edit of the file); --json load makes it again from them.") in out
+    # a page without the mark (made by 0.12.3 or before): counts as made from them
+    page(saved.parent).write_text(html.decode("utf-8").replace("yt2html:data", "yt2html:x"),
+                                  encoding="utf-8")
+    code, out = run(capsys, "TESTVIDEO01", "-o", str(saved.parent), "--json", "write",
+                    "--transcript", "dual:pl")
+    assert "not made from these saved data" not in out
+
+
+def test_a_page_without_saved_data_has_no_mark(capsys, saved, youtube, monkeypatch):
+    def fetch(source, args):
+        return json.loads(saved.read_text("utf-8"))
+
+    monkeypatch.setattr(yt2html, "fetch_info", fetch)
+    folder = saved.parent / "other"
+    assert run(capsys, URL, "-o", str(folder))[0] == 0
+    assert mark_of(page(folder)) is None

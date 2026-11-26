@@ -25,6 +25,7 @@ import argparse
 import base64
 import datetime as dt
 import glob
+import hashlib
 import html
 import json
 import os
@@ -2923,7 +2924,8 @@ def run_moment(update: dict) -> str:
     return f"{update['date']}T{update['time']}"
 
 
-def page_metadata(info: dict, archived: dt.date, cover: str | None = None) -> dict[str, str]:
+def page_metadata(info: dict, archived: dt.date, cover: str | None = None,
+                  data: str | None = None) -> dict[str, str]:
     """Data for the index, kept invisibly in the page's <head> as
     <meta name="yt2html:..."> (read back by read_page_metadata()). Only the
     values that are known: an empty one is left out, never written empty.
@@ -2955,6 +2957,7 @@ def page_metadata(info: dict, archived: dt.date, cover: str | None = None) -> di
         "yt2html:playlist-position": (str(playlist["position"])
                                       if playlist.get("id") and playlist.get("position")
                                       else None),
+        "yt2html:data": data,   # the saved data it is made from (data_mark())
         "yt2html:cover": cover,   # last: by far the longest
     }
     return {name: value for name, value in tags.items() if value}
@@ -2962,6 +2965,26 @@ def page_metadata(info: dict, archived: dt.date, cover: str | None = None) -> di
 
 META_RE = re.compile(r'<meta name="(yt2html:[a-z-]+)" content="([^"]*)">')
 META_READ_BYTES = 65536  # read in pieces until <title>: the metadata is above it
+
+
+def data_mark(content: bytes) -> str:
+    """The mark of saved data (the bytes of their file) that a page made from
+    them keeps as yt2html:data: the first 12 hex digits of their SHA-256."""
+    return hashlib.sha256(content).hexdigest()[:12]
+
+
+# --json write or --json show, when a page's yt2html:data is not that of its data
+PAGE_BEHIND_NOTE = ("  The page was not made from these saved data (after --json merge, an "
+                    "interrupted run or an edit of the file); --json load makes it again from "
+                    "them.")
+
+
+def made_from(page: Path | None, mark: str | None) -> bool:
+    """Whether the page was made from the saved data with `mark`; a page
+    without yt2html:data (made by 0.12.3 or before, or without saved data) counts
+    as made from them (the user, 25.11.2026: no surprise rebuilds)."""
+    kept = read_page_metadata(page).get("yt2html:data") if page else None
+    return not kept or kept == mark
 
 
 def read_page_metadata(path: Path) -> dict[str, str]:
@@ -5027,15 +5050,18 @@ def show_video(info: dict) -> list[str]:
     return lines or ["none"]
 
 
-def show_files(info: dict, folder: Path) -> tuple[list[str], dict]:
-    """The Next to it part: the page, the video files (whether the data
-    describe them: the Video file row and the yellow marks need it), the
-    extra audio and the SRT files; and what the summary counts."""
+def show_files(info: dict, folder: Path, mark: str | None = None) -> tuple[list[str], dict]:
+    """The Next to it part: the page (whether it was made from these data,
+    `mark`: made_from()), the video files (whether the data describe them:
+    the Video file row and the yellow marks need it), the extra audio and the
+    SRT files; and what the summary counts."""
     ident = info.get("id")
     record = info.get(VIDEO_KEY) or {}
     video = record.get("video") or {}
-    found = {"page": bool(files_with_id(folder, ident, (".html",)))}
-    parts = ["page" if found["page"] else "no page"]
+    pages = files_with_id(folder, ident, (".html",))
+    found = {"page": bool(pages), "behind": bool(pages) and not made_from(pages[0], mark)}
+    parts = ["no page" if not pages else
+             "page (not made from these data)" if found["behind"] else "page"]
     videos = video_files(folder, ident)
     found["described"] = False
     for path in videos:
@@ -5068,14 +5094,15 @@ def show_block(info: dict, data_path: Path) -> tuple[list[str], dict]:
     lines = [f"{info.get('title') or '(no title)'} [{info.get('id') or '?'}]  "
              f"({data_path.name}, {size_text})"]
     gaps, hints = show_not_saved(info)
-    files, found = show_files(info, data_path.parent)
+    files, found = show_files(info, data_path.parent, data_mark(data_path.read_bytes()))
     lines += (show_lines("Data", show_data(info)) + show_lines("Page", show_page(info))
               + show_lines("Transcript", show_transcript(info))
               + show_lines("Video", show_video(info))
               + (show_lines("Not saved", gaps) if gaps else [])
               + show_lines("Next to it", files))
-    if not found["page"]:
-        hints.append(f'to make the page: yt2html "{data_path.name}" --json load --transcript')
+    if not found["page"] or found["behind"]:
+        hints.append(f'to make the page{" from these data" if found["page"] else ""}: '
+                     f'yt2html "{data_path.name}" --json load --transcript')
     lines += [f"  ({hint})" for hint in hints]
     record = info.get(TRANSCRIPT_KEY) or {}
     video = (info.get(VIDEO_KEY) or {}).get("video") or {}
@@ -5119,6 +5146,9 @@ def show_summary(found: list[dict], without: list[str]) -> str:
     pages = sum(1 for f in found if not f["page"])
     if pages:
         parts.append(f"no page for {pages}")
+    behind = sum(1 for f in found if f["behind"])
+    if behind:
+        parts.append(f"a page not made from its data for {behind}")
     if without:
         parts.append(f"no saved data for {len(without)} ({', '.join(without)})")
     return f"{plural(len(found), 'video')}: " + "; ".join(parts)
@@ -5223,13 +5253,15 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
                 theme: str = "auto", no_avatars: bool = False,
                 from_json: bool = False, built: dt.datetime | None = None,
                 video_files: list[str] | None = None, video_size: int | None = None,
-                audio_files: dict | None = None, cover: str | None = None) -> str:
+                audio_files: dict | None = None, cover: str | None = None,
+                data: str | None = None) -> str:
     """The whole HTML page. Images come as data URIs: `thumbnail`,
     `avatar_uris`, `extra_images` ({image url: data URI}) and `cover` (only
     in the metadata, for the index). `no_avatars`,
     `from_json` and `built` (the build time, default now) are only described
     in "About this copy". `video_files` and `audio_files` ({(code, role):
-    file}) are what was found next to the page."""
+    file}) are what was found next to the page; `data` the mark of the saved
+    data it is made from (data_mark(), in the metadata)."""
     video_id = info.get("id") or ""
     title = info.get("title") or video_id
     duration = info.get("duration")
@@ -5370,7 +5402,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
         f'<meta name="generator" content="yt2html {__version__} (yt-video-archiver)">',
         f'<meta name="source-url" content="{esc(url)}">',
         *(f'<meta name="{name}" content="{esc(value)}">'
-          for name, value in page_metadata(info, archived, cover).items()),
+          for name, value in page_metadata(info, archived, cover, data).items()),
         f"<title>{esc(title)}</title>",
         f'<meta name="color-scheme" content="{COLOR_SCHEMES.get(theme, "dark")}">',
         # The body is already rendered here, so every avatar class is known.
@@ -6221,9 +6253,11 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     data_path = (saved_data_path(source, output_dir) if args.load_json else
                  update_data_path(source, output_dir) if adding else None)
     updating = adding and data_path is not None
+    read_mark = None   # the mark of the saved data read (data_mark())
     if data_path:
         log(f"Reading {data_path}")
         info = read_saved(data_path)
+        read_mark = data_mark(data_path.read_bytes())
     else:
         if adding:
             found = existing_page(output_dir, video_id_from_url(source))
@@ -6316,6 +6350,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     if deferred and args.video is None:
         log(f"Nothing missing in the saved data; the page stays as it is: {found} "
             "(--json load makes it again from the data)")
+        if not made_from(found, read_mark):
+            log(PAGE_BEHIND_NOTE)
         outcome["target"] = found
         return None
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -6329,19 +6365,10 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     replaced = (file_with_id(output_dir, info.get("id"), (".info.json",), "saved data files")
                 if write_json and args.overwrite else None)
 
-    def save_json(verb: str = "Saved") -> None:
-        if write_json or updating:
-            # adding to saved data: back into the file read, whatever its name
-            json_path = data_path if updating else replaced or target.with_suffix(".info.json")
-            write_atomically(json_path, json.dumps(info, ensure_ascii=False, indent=1))
-            log(f"{verb} metadata: {json_path}")
-
     if replaced:
         log(replaced_data_note(replaced, info))
-    if not deferred:
-        if found and not args.load_json and not connected():
-            raise NoConnection("the connection was lost before the page was made again")
-        save_json("Updated" if updating else "Saved")
+    if not deferred and found and not args.load_json and not connected():
+        raise NoConnection("the connection was lost before the page was made again")
 
     def shown(note: bool = False) -> dict:
         """What the page shows: from saved data, the comments narrowed by
@@ -6384,7 +6411,9 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
     except ValueError:
         archived = dt.date.today()  # older JSON files without the date
 
-    def write_page() -> None:
+    def page_html(mark: str | None) -> str:
+        """The page, with its images (downloaded here) and the mark of the
+        saved data it is made from."""
         fetch_page_images()
         video_files = video_files_for(info, output_dir)
         video_size = (output_dir / video_files[0]).stat().st_size if video_files else None
@@ -6397,23 +6426,41 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
                            extra_images=images["extra"],
                            no_avatars=args.no_avatars, from_json=bool(data_path),
                            video_files=video_files, video_size=video_size,
-                           audio_files=audio_files)
+                           audio_files=audio_files, data=mark)
+        return page
+
+    def save(verb: str) -> None:
+        """The page made first, with everything it downloads; only then the
+        data (with --json write or refresh) and at once the page, so an
+        interrupted run or a lost connection leaves both as they were (review
+        B1: the images were downloaded between the two)."""
+        content, mark = None, read_mark   # --json load: the data read; else none
+        if write_json or updating:
+            content = json.dumps(info, ensure_ascii=False, indent=1).encode("utf-8")
+            mark = data_mark(content)
+        page = page_html(mark)
+        if content is not None:
+            # adding to saved data: back into the file read, whatever its name
+            json_path = data_path if updating else replaced or target.with_suffix(".info.json")
+            write_atomically(json_path, content)
+            log(f"{verb} metadata: {json_path}")
         write_atomically(target, page)
         if getattr(args, "transcript_srt", False):
             write_srt_files(info, args.transcript, target)
 
     def rebuild() -> None:
-        save_json("Updated")
-        write_page()
+        save("Updated")
         log(f"Updated page: {target}")
 
     if deferred:
         # --video may add files; the page and the data follow only then
         log(f"Nothing missing in the saved data; the page stays as it is unless --video "
             f"adds files: {found}")
+        if not made_from(found, read_mark):
+            log(PAGE_BEHIND_NOTE)
         outcome.update(target=target, deferred=info, rebuild=rebuild, updating=True)
         return None
-    write_page()
+    save("Updated" if updating else "Saved")
     size_kb = target.stat().st_size / 1024
     log(f"{'Replaced' if found else 'Saved'} page: {target} ({size_kb:,.0f} KB, "
         f"{len(shown().get('comments') or [])} comments)")

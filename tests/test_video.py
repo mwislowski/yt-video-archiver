@@ -697,13 +697,21 @@ def test_json_write_with_nothing_missing_leaves_page_and_files(tmp_path, youtube
     out = capsys.readouterr().out
     assert "the page stays as it is unless --video adds files" in out
     assert "Updated page" not in out and "Saved page" not in out
+    assert "not made from these saved data" not in out
     assert (data_path.stat().st_mtime_ns, html_path.stat().st_mtime_ns) == before
     assert len(youtube["downloads"]) == 2
+    # the data changed without the page: said, both left as they are
+    edited = data_path.read_text("utf-8").replace('"title": "', '"title": "Edited ', 1)
+    data_path.write_text(edited, encoding="utf-8")
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
+    assert "The page was not made from these saved data" in capsys.readouterr().out
     # a track that is not there yet: downloaded, then the data and the page follow
     (tmp_path / (html_path.stem + ".pl.dubbed.m4a")).unlink()
     assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
     out = capsys.readouterr().out
     assert len(youtube["downloads"]) == 3 and "Updated page" in out
+    assert (yt2html.read_page_metadata(html_path)["yt2html:data"]
+            == yt2html.data_mark(data_path.read_bytes()))          # made again from them
     saved = json.loads(data_path.read_text("utf-8"))
     assert saved[yt2html.VIDEO_KEY]["video"]["date"] == dt.date.today().isoformat()  # kept
 

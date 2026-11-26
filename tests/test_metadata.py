@@ -83,6 +83,12 @@ def test_the_metadata_for_the_index(info):
         "yt2html:cover": "data:image/jpeg;base64,Q09W",
     }
     assert list(meta)[-1] == "yt2html:cover"                  # the long one after the rest
+    # the mark of the saved data the page is made from, when there are any
+    meta = yt2html.page_metadata(info, dt.date(2026, 11, 6), "data:image/jpeg;base64,Q09W",
+                                 data="3f9a1c0e7b2d")
+    assert meta["yt2html:data"] == "3f9a1c0e7b2d" and list(meta)[-1] == "yt2html:cover"
+    # the first 12 hex digits of the SHA-256 of the data file's bytes
+    assert yt2html.data_mark(b"{}") == "44136fa355b3"
 
 
 def test_unknown_values_are_left_out_never_written_empty(info):
