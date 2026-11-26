@@ -262,3 +262,16 @@ def test_a_page_not_made_from_its_data(capsys, tmp_path, saved):
     (tmp_path / f"Other [{OTHER}].info.json").write_text(json.dumps(other), encoding="utf-8")
     code, out = run(capsys, "*.info.json", "-o", str(tmp_path), "--json", "show")
     assert out.rstrip().endswith("; no page for 1; a page not made from its data for 1")
+
+
+def test_not_saved_audio_with_its_own_hint(capsys, tmp_path, saved):
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    data[yt2html.NOT_SAVED_KEY] = {
+        "audio de": {"reason": "no connection", "date": "2026-11-26", "again": True},
+        "audio fr": {"reason": "YouTube offers no such audio track", "again": False}}
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    code, out = run(capsys, ID, "-o", str(tmp_path), "--json", "show")
+    assert "  Not saved:  audio de: no connection, 26.11.2026\n" in out
+    assert "              audio fr: YouTube offers no such audio track (not asked for again)\n" in out
+    assert f"(to try again: yt2html {ID} --json write --video audio:de)" in out
+    assert "--transcript plain,dual:de" not in out and "audio:fr" not in out

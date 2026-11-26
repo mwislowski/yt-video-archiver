@@ -64,6 +64,8 @@ def youtube(monkeypatch, info):
         seen["downloads"].append(opts)
         if seen.get("error"):
             raise yt2html.yt_dlp.utils.DownloadError("ERROR: HTTP Error 403: Forbidden")
+        if opts["format"] in seen.get("fail", {}):   # one format fails: {format_id: error}
+            raise seen["fail"][opts["format"]]
         # the name is a yt-dlp template ("%" must come as "%%"); the extension
         # is the merged mp4, or the single format's own (m4a for audio)
         ext = "mp4" if "+" in opts["format"] else next(
@@ -372,7 +374,7 @@ def test_audio_parameters():
 def test_audio_resolution(info, text, expected):
     info["formats"] = json.loads(json.dumps(DUBS))
     choice = yt2html.video_choice(info)
-    found, messages = yt2html.resolve_audio(choice, yt2html.video_spec(text)["audio"])
+    found, messages, _, _ = yt2html.resolve_audio(choice, yt2html.video_spec(text)["audio"])
     assert (found, messages) == (([tuple(expected)], []) if isinstance(expected, list)
                                  else ([], [expected]))
 
@@ -381,11 +383,11 @@ def test_audio_one_track_twice(info):
     # two codes for one track (the language finds its region): taken once, with a message
     info["formats"] = json.loads(json.dumps(DUBS))
     choice = yt2html.video_choice(info)
-    found, messages = yt2html.resolve_audio(choice, yt2html.video_spec("audio:de,audio:de-DE")["audio"])
+    found, messages, _, _ = yt2html.resolve_audio(choice, yt2html.video_spec("audio:de,audio:de-DE")["audio"])
     assert found == [("de-DE", "auto-dubbed")]
     assert messages == ['"audio:de-DE" gives the same track as "audio:de"; taken once']
     # two roles of one language: two tracks
-    found, _ = yt2html.resolve_audio(choice, yt2html.video_spec("audio:pl.dubbed,audio:pl.auto-dubbed")["audio"])
+    found, *_ = yt2html.resolve_audio(choice, yt2html.video_spec("audio:pl.dubbed,audio:pl.auto-dubbed")["audio"])
     assert found == [("pl", "dubbed"), ("pl", "auto-dubbed")]
 
 
@@ -1007,3 +1009,180 @@ def test_the_command_row_leaves_out_old_parameters(info):
     info[yt2html.VIDEO_KEY] = {"parameters": "720p30, again, sub:pl, audio:pl"}
     html = render_page(info)
     assert "--video 720p30,audio:pl" in re.search(r'<code class="command">(.*?)</code>', html).group(1)
+
+
+# --------------------------------------------------------------------------
+# One track that fails does not lose the others (review A4); what --video
+# asked for and did not get is noted in the data (NOT_SAVED_KEY)
+# --------------------------------------------------------------------------
+
+FORBIDDEN = yt2html.yt_dlp.utils.DownloadError("ERROR: HTTP Error 403: Forbidden")
+OFFLINE = yt2html.yt_dlp.utils.DownloadError(
+    "ERROR: Unable to download: [Errno 11001] getaddrinfo failed")
+TRACKS = ["--video", "audio:pl,audio:de", "--json", "write"]
+
+
+def saved_data(folder):
+    return json.loads(page(folder).with_suffix(".info.json").read_text("utf-8"))
+
+
+def test_a_track_that_fails_does_not_lose_the_others(tmp_path, youtube, capsys):
+    """Review A4: the error of one extra track ended --video for the video,
+    and nothing of what was downloaded before it was recorded: the next run
+    found the mp4 but could not tell its formats."""
+    youtube["fresh"] = DUBS
+    youtube["fail"] = {"140-3": FORBIDDEN}                 # de-DE, auto-dubbed
+    code = yt2html.main([URL, "-o", str(tmp_path), *TRACKS])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert ("Audio FAILED: de-DE (auto-dubbed): HTTP Error 403: Forbidden. The other files go "
+            "on; run the same command again to retry.") in out
+    data = saved_data(tmp_path)
+    record = data[yt2html.VIDEO_KEY]
+    assert record["video"]["quality"].startswith("1080p")  # described, with its formats
+    assert [e["audio"] for e in record["extra_audio"]] == ["pl"]
+    assert data[yt2html.NOT_SAVED_KEY]["audio de"] == {
+        "reason": "HTTP Error 403: Forbidden", "date": dt.date.today().isoformat(), "again": True}
+    assert 'data-audio="' + page(tmp_path).stem + '.pl.dubbed.m4a"' in page(tmp_path).read_text(
+        "utf-8")
+    # the same command again: only the missing track, and its note goes
+    youtube["fail"] = {}
+    assert yt2html.main([URL, "-o", str(tmp_path), *TRACKS]) == 0
+    assert [o["format"] for o in youtube["downloads"]][-1] == "140-3"
+    data = saved_data(tmp_path)
+    assert yt2html.NOT_SAVED_KEY not in data
+    assert [e["audio"] for e in data[yt2html.VIDEO_KEY]["extra_audio"]] == ["pl", "de-DE"]
+
+
+def test_a_lost_connection_keeps_what_was_downloaded(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    youtube["fail"] = {"140-3": OFFLINE}
+    code = yt2html.main([URL, "-o", str(tmp_path), *TRACKS])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert ("Video: the connection was lost; saved what was downloaded: video, extra audio pl "
+            "(dubbed); not downloaded: audio de.") in out
+    assert ("The run stops here: this video is saved as far as it got, the ones after it are "
+            "as they were.") in out
+    assert "stopped: no connection" in out
+    data = saved_data(tmp_path)
+    assert [e["audio"] for e in data[yt2html.VIDEO_KEY]["extra_audio"]] == ["pl"]
+    assert data[yt2html.NOT_SAVED_KEY]["audio de"]["reason"] == "no connection"
+    assert yt2html.read_page_metadata(page(tmp_path))["yt2html:data"] == yt2html.data_mark(
+        page(tmp_path).with_suffix(".info.json").read_bytes())   # the page with its data
+
+
+def test_a_lost_connection_before_any_file_leaves_the_video_as_it_was(tmp_path, youtube,
+                                                                     capsys):
+    youtube["fresh"] = DUBS
+    youtube["fail"] = {"399+140": OFFLINE}
+    assert yt2html.main([URL, "-o", str(tmp_path), *TRACKS]) == 1
+    out = capsys.readouterr().out
+    assert "this video and the ones after it are as they were" in out
+    assert yt2html.VIDEO_KEY not in saved_data(tmp_path)
+
+
+def test_a_track_not_offered_is_noted_once(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
+    html = page(tmp_path).stat().st_mtime_ns
+    # files there, a track YouTube does not offer: the note is saved (page and data)
+    args = [URL, "-o", str(tmp_path), "--video", "audio:pl,audio:fr", "--json", "write"]
+    assert yt2html.main(args) == 0
+    data = saved_data(tmp_path)
+    assert data[yt2html.NOT_SAVED_KEY] == {"audio fr": {
+        "reason": "YouTube offers no such audio track", "date": dt.date.today().isoformat(),
+        "again": False}}
+    assert page(tmp_path).stat().st_mtime_ns != html
+    # the same again: nothing new, nothing written
+    before = page(tmp_path).with_suffix(".info.json").stat().st_mtime_ns
+    capsys.readouterr()
+    assert yt2html.main(args) == 0
+    assert "the page stays as it is unless --video adds files" in capsys.readouterr().out
+    assert page(tmp_path).with_suffix(".info.json").stat().st_mtime_ns == before
+
+
+def test_ovr_drops_the_old_notes_of_video_only(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
+    path = page(tmp_path).with_suffix(".info.json")
+    data = json.loads(path.read_text("utf-8"))
+    data[yt2html.NOT_SAVED_KEY] = {"audio it": {"reason": "old", "again": True},
+                                   "transcript pl": {"reason": "refused", "again": True}}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "ovr,audio:pl",
+                         "--json", "write"]) == 0
+    assert list(saved_data(tmp_path)[yt2html.NOT_SAVED_KEY]) == ["transcript pl"]
+    # without ovr a track there takes its own note away, the others stay
+    data = saved_data(tmp_path)
+    data[yt2html.NOT_SAVED_KEY]["audio pl"] = {"reason": "old", "again": True}
+    data[yt2html.NOT_SAVED_KEY]["audio it"] = {"reason": "old", "again": True}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
+    assert list(saved_data(tmp_path)[yt2html.NOT_SAVED_KEY]) == ["transcript pl", "audio it"]
+
+
+def test_the_same_reason_keeps_its_first_day():
+    old = {"audio de": {"reason": "r", "date": "2026-11-01", "again": True}}
+    new = {"audio de": {"reason": "r", "date": "2026-11-26", "again": True}}
+    assert yt2html.video_gaps(old, new, ovr=False) == old
+    other = {"audio de": {"reason": "s", "date": "2026-11-26", "again": True}}
+    assert yt2html.video_gaps(old, other, ovr=False) == other
+    assert yt2html.video_gaps(old, {"audio de": None}, ovr=False) == {}
+
+
+def test_the_key_of_an_audio_note():
+    assert yt2html.audio_gap_key("pl", None) == "audio pl"
+    assert yt2html.audio_gap_key("pl", "dubbed") == "audio pl.dubbed"
+
+
+def test_offline_names_only_what_this_run_downloaded(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
+    youtube["fail"] = {"140-4": OFFLINE}                   # es-US, after de-DE
+    capsys.readouterr()
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:de,audio:es-US",
+                         "--json", "write"]) == 1
+    out = capsys.readouterr().out
+    assert ("saved what was downloaded: extra audio de-DE (auto-dubbed); not downloaded: "
+            "audio es-US.") in out
+    assert [e["audio"] for e in saved_data(tmp_path)[yt2html.VIDEO_KEY]["extra_audio"]] == [
+        "pl", "de-DE"]
+
+
+def test_offline_before_anything_new_leaves_the_video_as_it_was(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
+    data = page(tmp_path).with_suffix(".info.json").read_bytes()
+    youtube["fail"] = {"140-3": OFFLINE}
+    capsys.readouterr()
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:de", "--json", "write"]) == 1
+    out = capsys.readouterr().out
+    assert "this video and the ones after it are as they were" in out
+    assert "saved what was downloaded" not in out
+    assert page(tmp_path).with_suffix(".info.json").read_bytes() == data
+
+
+def test_offline_with_a_page_left_as_it_is(tmp_path, youtube, capsys):
+    """Without --json the page that was there is not made again: the files
+    are there, the page and the data as they were."""
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path)]) == 0
+    youtube["fail"] = {"140-3": OFFLINE}
+    capsys.readouterr()
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:de"]) == 1
+    out = capsys.readouterr().out
+    assert "saved what was downloaded: video, extra audio pl (dubbed)" in out
+    assert "this video and the ones after it are as they were" in out
+
+
+def test_a_track_in_the_video_takes_its_note_away(tmp_path, youtube, capsys):
+    youtube["fresh"] = DUBS
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"]) == 0
+    path = page(tmp_path).with_suffix(".info.json")
+    data = json.loads(path.read_text("utf-8"))
+    data[yt2html.NOT_SAVED_KEY] = {"audio en": {"reason": "old", "again": True}}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl,audio:en,audio:de",
+                         "--json", "write"]) == 0
+    assert yt2html.NOT_SAVED_KEY not in saved_data(tmp_path)   # en is the video's own

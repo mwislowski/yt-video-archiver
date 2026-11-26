@@ -1275,7 +1275,12 @@ class NoConnection(Exception):
     """The computer cannot reach YouTube (the name does not resolve, the
     network is unreachable; the user's run of 25.11.2026): the run stops
     before anything of the video is written, so its page and data stay as
-    they were and the next run does the rest."""
+    they were and the next run does the rest; `partly`: files of --video
+    were downloaded first, and the page and data describe them (review A4)."""
+
+    def __init__(self, reason: str = "", partly: bool = False):
+        super().__init__(reason)
+        self.partly = partly
 
 
 # What a lost connection looks like in an error, unlike a refusal (HTTP 429)
@@ -5053,10 +5058,13 @@ def show_not_saved(info: dict) -> tuple[list[str], list[str]]:
         day = f", {format_date(entry['date'])}" if entry.get("date") else ""
         lines.append(f"{key}: {entry.get('reason') or 'reason unknown'}{day}"
                      + ("" if entry.get("again") else " (not asked for again)"))
-        source = key.partition(" ")[2]
-        if entry.get("again") and source:
+        kind, _, source = key.partition(" ")
+        if entry.get("again") and source and kind == "transcript":
             hints.append(f"to try again: yt2html {info.get('id')} --json write --transcript "
                          f"plain," + (f"plain:{source}" if "." in source else f"dual:{source}"))
+        elif entry.get("again") and kind == "audio":
+            hints.append(f"to try again: yt2html {info.get('id')} --json write --video "
+                         f"audio:{source}")
     return lines, hints
 
 
@@ -6539,6 +6547,37 @@ class VideoSkipped(Exception):
     limit): the page stays, the reason is told, the run goes on."""
 
 
+class PartlyDownloaded(Exception):
+    """The connection was lost after --video downloaded something for the
+    video: `result`, `formats` and `cause` for take_video(), which records
+    what is there before the run stops (review A4)."""
+
+    def __init__(self, result: dict, formats: list | None, cause: Exception):
+        super().__init__(str(cause))
+        self.result, self.formats, self.cause = result, formats, cause
+
+
+def audio_gap_key(code: str, role: str | None) -> str:
+    """The key in NOT_SAVED_KEY of an extra audio track asked for, in the
+    words of --video ("audio pl", "audio pl.dubbed")."""
+    return f"audio {code}" + (f".{role}" if role else "")
+
+
+def video_gaps(gaps: dict, changes: dict, ovr: bool) -> dict:
+    """NOT_SAVED_KEY after a run of --video: `changes` (download_video()'s
+    "_gaps") applied to `gaps`; with "ovr" (all downloaded anew) the old
+    notes of --video go first. A note given again with the same reason
+    keeps its first day."""
+    gaps = {key: entry for key, entry in gaps.items()
+            if not (ovr and key.partition(" ")[0] in ("video", "audio"))}
+    for key, entry in changes.items():
+        if entry is None:
+            gaps.pop(key, None)
+        elif (gaps.get(key) or {}).get("reason") != entry["reason"]:
+            gaps[key] = entry
+    return gaps
+
+
 # How to install what --video needs, per system.
 INSTALL_HINTS = {
     "ffmpeg": {"win32": "winget install --id Gyan.FFmpeg -e, then open a new terminal",
@@ -6644,9 +6683,14 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
     of the name) are kept, unless `again`, and described too, with the
     details `previous` (the saved data's VIDEO_KEY) gives for the same file.
     Returns the result (VIDEO_KEY), the fresh list of formats (None when none
-    was needed) and whether anything was downloaded. Raises VideoSkipped
-    when the video cannot be taken; yt-dlp's errors pass on. `notes` keeps
-    the notes told once per run."""
+    was needed) and whether anything was downloaded; the result's "_gaps"
+    (not saved as it is) are the changes to NOT_SAVED_KEY: a track not
+    offered or not downloaded noted ({reason, date, again}), one there now
+    None (its note goes). A track that fails is told and the others go on
+    (review A4: one failure lost the record of all). Raises VideoSkipped
+    when the video cannot be taken, PartlyDownloaded when the connection is
+    lost after something was downloaded; yt-dlp's other errors pass on.
+    `notes` keeps the notes told once per run."""
     spec = args.video
     folder = page.parent
     ident = video_id_from_url(source) or source_id(page)
@@ -6674,6 +6718,7 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             for (code, role), path in audio_files:
                 log(f'Audio skipped (file exists): {path}. Add "ovr" to --video to download '
                     'it again.')
+            result["_gaps"] = {audio_gap_key(code, role): None for code, role, _ in spec["audio"]}
             result["extra_audio"] = [
                 described({"audio": code, "role": role, "file": path.name,
                            "size": path.stat().st_size},
@@ -6746,12 +6791,15 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
                            "audio_codec": audio_codec, "audio_format": audio["format_id"]}
         new = True
     # The extra audio tracks: separate m4a files, each on its own.
-    wanted, messages = resolve_audio(choice, spec["audio"])
+    wanted, messages, asked, absent = resolve_audio(choice, spec["audio"])
     if messages:
         log("Audio: " + "; ".join(messages) + ".")
         log("  Tracks to add: " + ("; ".join(extra_track_lines(choice.extra)) or "none"))
+    gaps = result["_gaps"] = {key: None for key in asked.values()}   # there unless told
+    for key in absent:
+        note_gap(gaps, key, "YouTube offers no such audio track", again=False)
     extra = []
-    for key in wanted:
+    for number, key in enumerate(wanted):
         fmt = choice.audio_for(key, "aac")
         there = file_by_suffix(folder, ident, audio_suffix(key), "audio files")
         name = there or audio_name(page, key)
@@ -6764,7 +6812,23 @@ def download_video(source: str, args: argparse.Namespace, page: Path,
             continue
         log(f"Audio: {key[0]}" + (f" ({key[1]})" if key[1] else "")
             + f", m4a, {human_size(format_size(fresh, fmt))}")
-        yt_download(fresh, options(fmt["format_id"], name.stem))
+        try:
+            yt_download(fresh, options(fmt["format_id"], name.stem))
+        except Exception as error:
+            reason = failure_reason(error)
+            if no_connection(error):
+                for left in wanted[number:]:   # this one and those after it
+                    note_gap(gaps, asked[left], "no connection", again=True)
+                if extra:
+                    result["extra_audio"] = extra
+                if not new:
+                    raise
+                raise PartlyDownloaded(result, fresh.get("formats"), error) from error
+            log(f"Audio FAILED: {key[0]}" + (f" ({key[1]})" if key[1] else "")
+                + f": {reason}. The other files go on; run the same command again to retry.")
+            note_gap(gaps, asked[key], reason, again=True)
+            failures += 1
+            continue
         size = name.stat().st_size
         log(f"Saved audio: {name} ({human_size(size).lstrip('~')})")
         extra.append({**entry, "size": size, "date": today, "audio_format": fmt["format_id"]})
@@ -6788,16 +6852,17 @@ def recognised_code(code: str, known: set) -> bool:
             or ISO639Utils.short2long(base) is not None)
 
 
-def resolve_audio(choice: FormatChoice, requests: list) -> tuple[list, list[str]]:
-    """The extra tracks the audio: parameters ask for, and messages for the
-    rest. A code matches exactly, else by language when it has no region
+def resolve_audio(choice: FormatChoice, requests: list) -> tuple[list, list[str], dict, list]:
+    """The extra tracks the audio: parameters ask for, messages for the rest,
+    the key in NOT_SAVED_KEY of the request behind each track found or
+    already in the video ({track: key}), and those of the tracks not offered. A code matches exactly, else by language when it has no region
     ("de" finds "de-DE"; "de-AT" does not); without a role: dubbed, then
     auto-dubbed, then other kinds, never an audio description (a regional
     variant each time: the first by role, then code); with a role exactly
     that one (the four known ones, or a kind this video has). Only tracks
     with an ordinary aac format can be added; each once."""
     roles = set(AUDIO_ROLES) | {role for _, role in choice.tracks if role}
-    found, messages, asked = [], [], {}
+    found, messages, asked, keys, absent = [], [], {}, {}, []
     for code, role, text in requests:
         # the code is written the usual way (standard_code()), as in the data;
         # a code with a region never equals a bare language, so "de-AT" stays
@@ -6814,14 +6879,17 @@ def resolve_audio(choice: FormatChoice, requests: list) -> tuple[list, list[str]
                                            else len(AUDIO_PRIORITY), key[0]))
         if fits and fits[0] == choice.in_video:
             messages.append(f'"{text}" is already in the video')
+            keys.setdefault(fits[0], audio_gap_key(code, role))
         elif not fits or fits[0] not in choice.extra:
             messages.append(f'"{text}" not available')
+            absent.append(audio_gap_key(code, role))
         elif fits[0] in asked:   # "de" and "de-DE": one track
             messages.append(f'"{text}" gives the same track as "{asked[fits[0]]}"; taken once')
         else:
             found.append(fits[0])
             asked[fits[0]] = text
-    return found, messages
+            keys[fits[0]] = audio_gap_key(code, role)
+    return found, messages, keys, absent
 
 
 # The video's own subtitles as --video-formats lists them (what --transcript
@@ -7680,10 +7748,21 @@ def main(argv=None) -> int:
 
     def take_video(source: str, outcome: dict):
         """--video after the page: the video file, then the page again (when it
-        was made now) with the fresh list of formats and the result."""
+        was made now) with the fresh list of formats and the result. A lost
+        connection after files were downloaded: they are recorded too (the
+        page and the data), then the run stops (review A4)."""
+        lost = None
         try:
             result, formats, new = download_video(source, args, outcome["target"], notes,
                                                   outcome.get("info"), outcome.get("previous"))
+        except PartlyDownloaded as part:
+            result, formats, new, lost = part.result, part.formats, True, part.cause
+            left = [key for key, entry in result["_gaps"].items()
+                    if entry and entry["reason"] == "no connection"]
+            log("Video: the connection was lost; saved what was downloaded: "
+                + ", ".join(video_added(result, outcome.get("previous") or {}))
+                + "; not downloaded: " + ", ".join(left) + ".")
+            result["_failures"] = 1
         except TakeReached:
             left_for_next_run()
             return
@@ -7701,9 +7780,11 @@ def main(argv=None) -> int:
             return
         videos["failed" if result.pop("_failures", 0) else "downloaded" if new
                else "skipped"] += 1
+        changes = result.pop("_gaps", {})
         if outcome.get("deferred") is not None:   # --json write, nothing missing in the data
-            if not new:
-                return   # nothing added: the page and the data stay as they are
+            known = outcome["deferred"].get(NOT_SAVED_KEY) or {}
+            if not new and video_gaps(known, changes, args.video["ovr"]) == known:
+                return   # nothing added or noted: the page and the data stay as they are
             outcome["info"] = outcome["deferred"]
         if new and not outcome.get("rebuild"):   # a page that was there and is left as it is
             log("  Warning: the page was not made again, so its Video file row does not list "
@@ -7716,10 +7797,13 @@ def main(argv=None) -> int:
             if formats:
                 info["formats"] = formats   # the list the video was chosen from
             info[VIDEO_KEY] = result
+            set_gaps(info, video_gaps(info.get(NOT_SAVED_KEY) or {}, changes, args.video["ovr"]))
             if outcome.get("updating"):
                 note_update(info, outcome["record"],
                             video_added(result, outcome.get("previous") or {}))
             outcome["rebuild"]()
+        if lost is not None:
+            raise NoConnection(failure_reason(lost), partly=bool(outcome.get("rebuild")))
 
     def archive_list(videos: list[tuple[str, str | None]]):
         """--index: each video of the list (with its playlist, if from one)."""
@@ -7778,9 +7862,10 @@ def main(argv=None) -> int:
             "videos with a page are skipped.")
     except NoConnection as error:
         offline = True
-        log(f"FAILED: no connection to YouTube ({error}). The run stops here: this video "
-            f"and the ones after it are as they were. Run the same command again when the "
-            f"connection is back.")
+        log(f"FAILED: no connection to YouTube ({error}). The run stops here: "
+            + ("this video is saved as far as it got, the ones after it are as they were"
+               if error.partly else "this video and the ones after it are as they were")
+            + ". Run the same command again when the connection is back.")
     index_failed = listing and not index.write_index(args, lists)
     if sum(counts.values()) > 1 or playlists or listing or interrupted or offline:
         log(f"Done: {counts['saved']} saved, {counts['skipped']} skipped (page exists), "
