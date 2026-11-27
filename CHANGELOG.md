@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to this project. Versions: the second number for new features or visible changes, the third for fixes (see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#version-packaging-releases)).
+All notable changes to this project. Versions before 1.0: the third number for fixes and smaller changes, new features among them; the second for larger changes or a finished stage of work; where one ends and the other begins is the author's call (see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#version-packaging-releases)).
 
 ## [Unreleased]
 

@@ -48,7 +48,7 @@ After a change in `pyproject.toml` (dependencies, command) add `--reinstall`. To
 ## Version, packaging, releases
 
 - **One source of the version:** `__version__` in `yt2html.py`. `pyproject.toml` has `dynamic = ["version"]` and `[tool.hatch.version] path = "yt2html.py"`, so the package version and `yt2html --version` always agree. `--version` prints it together with the yt-dlp version (most problems come from an outdated yt-dlp).
-- **Versioning:** the second number for new features or visible changes (0.2.0, 0.3.0), the third for fixes (0.2.1). What changed in each version is in [CHANGELOG.md](../CHANGELOG.md).
+- **Versioning (before 1.0):** the third number for fixes and smaller changes, new features among them (0.13.1, 0.13.3); the second for larger changes or a finished stage of work (0.11.0: the new option syntax). Where one ends and the other begins is the author's call, not a rule: a release may wait for the second number until a stage is complete. What changed in each version is in [CHANGELOG.md](../CHANGELOG.md).
 - **Command:** `[project.scripts] yt2html = "yt2html:main"`; the wheel contains only `yt2html.py` (`[tool.hatch.build.targets.wheel] only-include`). `main()` returns the exit code, which the generated command passes on.
 - **Release:** run the tests (also `--online`), change `__version__`, move the *Unreleased* entries in `CHANGELOG.md` under the new version with its date (and update the compare links at the bottom), commit, then `git tag -a vX.Y.Z -m "..."`, `git push` and `git push origin vX.Y.Z`. The changelog entries can serve as the GitHub release notes.
 
