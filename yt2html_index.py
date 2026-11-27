@@ -1389,7 +1389,7 @@ def write_index(args: argparse.Namespace, playlists: dict[str, dict | None]) -> 
 
 # --------------------------------------------------------------------------
 # --reverse INDEX LIST [details:…]: an unofficial option (the user's,
-# 20.11.2026; not in --help, the README, DEVELOPMENT or the CHANGELOG;
+# 20.11.2026; not in --help, the user guides, DEVELOPMENT or the CHANGELOG;
 # described in his notes): the videos of an index page, one line each,
 # written to a list file; with details:title,date,lang (22.11.2026, as
 # --reverse-details until 24.11.2026) each video under "=" lines with what
@@ -1569,8 +1569,8 @@ def write_reverse(lines: list[str], count: int, target: Path, taken: Path | None
 
 # --------------------------------------------------------------------------
 # --channel CHANNEL LIST PERIOD: an unofficial option (the user's, 22.11.2026,
-# --channel-list until 24.11.2026; not in --help, the README, DEVELOPMENT or
-# the CHANGELOG; described in his notes, 5.4): some videos of a channel,
+# --channel-list until 24.11.2026; not in --help, the user guides, DEVELOPMENT
+# or the CHANGELOG; described in his notes, 5.4): some videos of a channel,
 # chosen by their publication dates or as the newest N, written to a list
 # file, without downloading them; at most --take of them (the videos to check
 # for a period, N for the newest N).

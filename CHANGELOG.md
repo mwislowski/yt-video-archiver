@@ -4,6 +4,10 @@ All notable changes to this project. Versions before 1.0: the third number for f
 
 ## [Unreleased]
 
+### Changed
+
+- **README is a short guide for everyday use; the full guide is [docs/USAGE.md](docs/USAGE.md).** README keeps what the program makes, installation, the options with their common tasks, list files, the player and the basics of saved data; every parameter, message and case in detail is in the full guide, which has what README had.
+
 ## [0.13.3] - 2026-11-27
 
 ### Added
