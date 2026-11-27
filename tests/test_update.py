@@ -107,7 +107,7 @@ def test_the_whole_transcript_when_the_data_have_none(capsys, saved, youtube):
     data = json.loads(saved.read_text("utf-8"))
     assert code == 0 and data[yt2html.TRANSCRIPT_KEY]["cues"]
     assert data[yt2html.UPDATES_KEY][0]["added"] == ["transcript", "translation pl"]
-    # no captions then: noted, and not asked for again (also as data before 0.14 kept it,
+    # no captions then: noted, and not asked for again (also as data of 0.13.0 kept it,
     # the transcript as None)
     for old in (False, True):
         data.pop(yt2html.TRANSCRIPT_KEY, None)
@@ -631,7 +631,7 @@ def test_upgrade_of_data_saved_by_0_12_3():
         "transcript": {"reason": "no captions", "again": False},
         "audio de": {"reason": "no connection", "again": True}}
     assert yt2html.TRANSCRIPT_MISSING_KEY not in info
-    assert yt2html.TRANSCRIPT_KEY not in info   # none came: only its note says so (0.14)
+    assert yt2html.TRANSCRIPT_KEY not in info   # none came: only its note says so (0.13.1)
     # a transcript saved as None (0.13.0): the key goes, its note stays; without one, made
     info = {yt2html.TRANSCRIPT_KEY: None,
             yt2html.NOT_SAVED_KEY: {"transcript": {"reason": "the video has no captions",

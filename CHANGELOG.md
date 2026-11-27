@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-27
+
 ### Changed
 
 - **`--json show` lists each part of a copy with its state, at three levels.** A part *Contents* replaces *Page*, *Video* and *Not saved*: the playlist, the video page, the markers, the info cards, the transcript and each of its translations and subtitles, the comments, the video file and each extra audio track, in the order of *About this copy*, each `saved`, `partly saved` (comments interrupted, a video page read without the player data) or `not saved` with the reason and the day. *Transcript* keeps the corrections and the versions `--json load` can show. `--json show:brief` gives one line per video with only what is missing (`all saved` when nothing is), for a look over a folder; `--json show:full` also names what no command asked for (`not asked for`); `--json show:standard` is the same as `--json show`. Lines stay within 100 characters where the program's own words make them; names, commands and YouTube's texts are never broken.
@@ -11,6 +13,7 @@ All notable changes to this project. Versions: the second number for new feature
 - **A video page that could not be read, and the info cards it would have given, are noted with the reason.** The saved data kept `"yt2html_watch_page": "failed"` (or `"partial"`) and `"yt2html_cards": null` without saying why; now the note `watch page` holds the error (e.g. `could not be read (Expecting value: …)`) and the day, and `cards` that they could not come. `--json show` shows both, and says that `--page ovr` reads the page anew (`--json refresh` takes from it only the chapters, as before). Saved data of 0.13.0 and before are read as they are and written in the new form by the next run that saves them. The page does not change.
 - **Comments that did not all come are noted with the reason and the day:** YouTube's message when it turned them off, none at all, or `Ctrl+C`. yt-dlp's own fields stay as yt-dlp gave them; the note is beside them and goes when the comments come, e.g. when `--json refresh` gets the rest. `--json show` shows the day and what helps (`--json refresh gets the rest`). Saved data of 0.13.0 and before get the note, without a day, when they are read.
 - **The images a page lacks are noted in the page itself:** the thumbnail, the cover, the channel's avatar, comment avatars or other images that could not be downloaded, each with the day, kept invisibly in the page's head (the images are there, not in the saved data). `--json show` shows them in the line `images`; a page made by 0.13.0 or before shows `unknown` until it is made again. Each build of the page tries the missing images again; the note goes when they come.
+- **README describes the program as it is now:** without notes on earlier versions and the options they had, and without what applies only to pages and data of earlier versions.
 
 ### Fixed
 
@@ -380,7 +383,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.3...v0.13.0
 [0.12.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.1...v0.12.2

@@ -47,7 +47,7 @@ from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
 from yt_dlp.utils import ISO639Utils
 
 # The program version; pyproject.toml reads it from here (single source).
-__version__ = "0.13.0"
+__version__ = "0.13.1"
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -219,7 +219,7 @@ PREVIOUS_KEY = "yt2html_previous"
 # What --json refresh takes anew besides the comments: the counts.
 REFRESHED_KEYS = ("view_count", "like_count", "channel_follower_count", YT_COUNT_KEY)
 
-# The watch page as saved data before 0.14 kept it: "read", "partial"
+# The watch page as saved data of 0.13.0 and before kept it: "read", "partial"
 # (without the player data) or "failed"; now NOT_SAVED_KEY notes it
 # (WATCH_PAGE_GAP, CARDS_GAP), and upgrade_saved() moves the old key there.
 WATCH_PAGE_KEY = "yt2html_watch_page"
@@ -1764,7 +1764,7 @@ def upgrade_saved(info: dict) -> dict:
     if CARDS_KEY in info and info[CARDS_KEY] is None:
         del info[CARDS_KEY]
         gaps[CARDS_GAP] = {"reason": "the video page was not read", "again": False}
-    reason = comments_gap_reason(info)   # no note before 0.14: the day is not known
+    reason = comments_gap_reason(info)   # no note before 0.13.1: the day is not known
     if reason:
         gaps[COMMENTS_GAP] = {"reason": reason, "again": comment_status(info) == "interrupted"}
     if gaps:
@@ -5257,7 +5257,7 @@ def contents_images(info: dict, gaps: dict, page=None) -> list[tuple]:
     "unknown" for a page made before them, None without a page: no line)."""
     if page is None:
         return []
-    if page == "unknown":   # transitional (notes 5.4): pages made before 0.14
+    if page == "unknown":   # transitional (notes 5.4): pages made by 0.13.0 and before
         return [("images", UNKNOWN, ["the page was made before this version",
                                      "(--json load makes it again and notes them)"])]
     notes = [page[key] for key in IMAGE_PARTS if key in page]
