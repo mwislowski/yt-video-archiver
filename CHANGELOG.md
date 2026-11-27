@@ -4,6 +4,14 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Added
+
+- **Who could watch the video, on the page.** An *Access* tile after *Published*, only for a video that was not plainly public: `Unlisted`, `Private`, `Members`, `Premium`, or `Sign-in` with a red `18+` in its corner for an age-restricted video. A new *On YouTube* row in *About this copy*, right after *Downloaded*, gives the video's state in one line: who could watch it, its age restriction and whether it was broadcast live (as a stream or a premiere, which yt-dlp does not tell apart), e.g. `unlisted; no age restriction; broadcast live as a stream or a premiere`. The data keep yt-dlp's `availability`, `age_limit` and `live_status` for it; `--json refresh` takes them anew and keeps the earlier state, which the row shows: `unlisted (public until 03.12.2026)`. Data saved by 0.13.2 lack them (the row says `not recorded in the saved data`); data of 0.13.1 and before still have them, so `--json write` keeps them when it writes such data anew.
+
+### Changed
+
+- **Every fact tile has one size** (120 px, as the narrowest was, with a smaller inner margin). A longer text (a short count from YouTube such as a localized `1,2 tys.`, a long label of the Player tile) is cut with an ellipsis instead of widening its tile. A number of a billion or more (in practice only views) is shown in a smaller type, so up to 999 999 999 999 fits whole; before, a tile with 100 million views or more grew wider.
+
 ## [0.13.2] - 2026-11-27
 
 ### Changed

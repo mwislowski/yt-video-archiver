@@ -12,7 +12,7 @@ from conftest import caption_formats, watch_page
 
 DAY = dt.date(2026, 11, 5)
 BUILT = dt.datetime(2026, 11, 8, 15, 40)
-ROWS = ["Downloaded", "Page built", "Playlist", "Command", "Video page", "Markers",
+ROWS = ["Downloaded", "On YouTube", "Page built", "Playlist", "Command", "Video page", "Markers",
         "Info cards", "Transcript", "Comments", "Images", "Video file", "Software", "Disclaimer"]
 
 

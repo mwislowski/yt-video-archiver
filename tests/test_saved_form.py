@@ -116,12 +116,14 @@ def test_a_page_from_the_data_file_is_the_page_from_the_whole_data(info):
 def test_the_data_file_keeps_what_the_program_reads(info):
     saved = through_file(youtube_data(info))
     for key in ("requested_formats", "format", "format_id", "url", "http_headers", "heatmap",
-                "availability", "age_limit", "_format_sort_fields", "webpage_url_domain",
-                "requested_subtitles", "live_status"):
+                "_format_sort_fields", "webpage_url_domain", "requested_subtitles"):
         assert key not in saved, key
-    # the four kept for the index and search (the user, 27.11.2026)
+    # the four kept for the index and search, and the video's state on YouTube
+    # (the user, 27.11.2026)
     assert (saved["tags"], saved["categories"], saved["channel_id"], saved["uploader_id"]) == \
            (["test"], ["Education"], "UCtest", "@Channel")
+    assert (saved["availability"], saved["age_limit"], saved["live_status"]) == \
+           ("public", 0, "not_live")
     # formats: no storyboard, no address; the kind of audio from the address
     formats = {f["format_id"]: f for f in saved["formats"]}
     assert "sb0" not in formats

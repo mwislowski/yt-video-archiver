@@ -296,7 +296,8 @@ def test_no_fixed_colours_outside_the_variables():
                "#000", "#ff4e45", "#fff", "#0e8f85", "#3cc8b4",
                "#9cc3e8", "#ffd54a", "#6d5bd0",   # --planned, --chosen, --audio
                "#b4b4b4", "#2b2b2b",             # --tag-bg, --tag-fg
-               "#3f2a2a", "#c09a9a"}             # --warn-bg, --warn-fg
+               "#3f2a2a", "#c09a9a",             # --warn-bg, --warn-fg
+               "#c97a7a"}                        # --age
     import re
     assert set(re.findall(r"#[0-9a-fA-F]{3,6}\b", yt2html.CSS)) <= allowed
 
@@ -370,8 +371,9 @@ def test_player_tile_label_gets_the_quality_and_the_language(info):
     assert f"var LADDER = {list(yt2html.QUALITY_LADDER)};" in js
     assert "if (video.videoWidth) labelTile();" in js
     # the label never widens the tile; what does not fit is cut off
-    assert ".fact.play .label{opacity:.85;width:0;min-width:100%;overflow:hidden;" \
-           "white-space:nowrap}" in yt2html.CSS
+    assert ".fact.play .label{opacity:.85}" in yt2html.CSS     # the rule of every tile:
+    assert ".fact .value,.fact .label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" \
+        in yt2html.CSS and "width:120px;height:60px;flex:none}" in yt2html.CSS
 
 
 def test_player_is_hidden_until_a_video_is_found():

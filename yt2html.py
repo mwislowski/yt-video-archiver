@@ -212,12 +212,16 @@ FIRST_SEEN_KEY = "yt2html_first_seen"
 # last entry without "until" means they are off now (a note on the page).
 COMMENTS_CLOSED_KEY = "yt2html_comments_closed"
 
-# --json refresh: the earlier title and description ([{until, title} or
-# {until, description}]); the page shows the current ones, without a note.
+# --json refresh: the earlier title, description and state on YouTube
+# ([{until, title}], [{until, availability}], …; STATUS_KEYS); the page shows
+# the current ones, the earlier state in the On YouTube row of About this copy.
 PREVIOUS_KEY = "yt2html_previous"
 
 # What --json refresh takes anew besides the comments: the counts.
 REFRESHED_KEYS = ("view_count", "like_count", "channel_follower_count", YT_COUNT_KEY)
+# ... and, keeping the earlier values in PREVIOUS_KEY, these: the title and
+# description, and the video's state on YouTube (STATUS_KEYS).
+STATUS_KEYS = ("availability", "age_limit", "live_status")
 
 # The watch page as saved data of 0.13.0 and before kept it: "read", "partial"
 # (without the player data) or "failed"; now NOT_SAVED_KEY notes it
@@ -2283,7 +2287,7 @@ CSS = """
 :root{
   --bg:#0f0f0f; --text:#f1f1f1; --muted:#aaaaaa; --panel:#272727;
   --line:#3f3f3f; --link:#3ea6ff; --chip:#3a3a3a; --media-bg:#000;
-  --tag-bg:#b4b4b4; --tag-fg:#2b2b2b; --warn-bg:#3f2a2a; --warn-fg:#c09a9a;
+  --tag-bg:#b4b4b4; --tag-fg:#2b2b2b; --warn-bg:#3f2a2a; --warn-fg:#c09a9a; --age:#c97a7a;
   --accent:#0e8f85; --on-accent:#fff; --accent-text:#3cc8b4;
   --accent-soft:rgba(14,143,133,.28); --hover:brightness(1.15);
   --planned:#9cc3e8; --chosen:#ffd54a; --audio:#6d5bd0;
@@ -2310,9 +2314,21 @@ h1.title a{color:var(--text)}
 .channel .subs{color:var(--muted);font-size:12px;line-height:18px}
 .badge{color:var(--muted);font-size:12px;margin-left:4px}
 .facts{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
-.fact{background:var(--panel);border-radius:12px;padding:10px 16px;min-width:120px}
-.fact .value{font-size:16px;font-weight:700;line-height:22px;white-space:nowrap}
+/* Every tile of one size: a text longer than the tile is cut, never widening
+   it; a number of a billion or more in a smaller type (LONG_NUMBER_DIGITS),
+   so 999 999 999 999 fits whole */
+.fact{position:relative;background:var(--panel);border-radius:12px;padding:10px;
+  width:120px;height:60px;flex:none}
+.fact .value,.fact .label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fact .value{font-size:16px;font-weight:700;line-height:22px}
 .fact .label{color:var(--muted);font-size:12px;line-height:18px}
+.fact.long .value{font-size:12px}
+/* A mark in the top right corner (18+ on the Access tile), within the margin: its
+   right edge on it, the top of its digits level with the top of the value's
+   letters; kept clear of the value */
+.fact .corner{position:absolute;top:12px;right:10px;font-size:11px;font-weight:700;
+  line-height:14px;color:var(--age)}
+.fact.marked .value{margin-right:22px}
 .fact.extra .value{color:var(--muted)}
 /* The video is no longer on YouTube: the Refreshed tile, red emerging from grey */
 .fact.warn{background:var(--warn-bg)}
@@ -2445,7 +2461,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
   background:var(--accent);color:var(--on-accent)}
 .has-video .fact.play{display:block}
 .fact.play .value,.fact.play .label{color:var(--on-accent)}
-.fact.play .label{opacity:.85;width:0;min-width:100%;overflow:hidden;white-space:nowrap}
+.fact.play .label{opacity:.85}
 .fact.play:hover{filter:var(--hover)}
 .fact.play:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .player{display:none}
@@ -2529,7 +2545,7 @@ h2 .source{color:var(--muted);font-size:12px;font-weight:400;margin-left:6px}
 LIGHT_VARIABLES = """
   --bg:#ffffff; --text:#0f0f0f; --muted:#606060; --panel:#f2f2f2;
   --line:#e5e5e5; --link:#065fd4; --chip:#e5e5e5; --media-bg:#e5e5e5;
-  --tag-bg:#5f5f5f; --tag-fg:#ececec; --warn-bg:#edd9d9; --warn-fg:#7d4c4c;
+  --tag-bg:#5f5f5f; --tag-fg:#ececec; --warn-bg:#edd9d9; --warn-fg:#7d4c4c; --age:#b55a5a;
   --accent:#0f766e; --accent-text:#0f766e; --accent-soft:rgba(15,118,110,.16);
   --hover:brightness(.92); --planned:#2f6a9e; --chosen:#9a6700; --audio:#5b47c4;
   --badge-bg:rgba(0,0,0,.8); --badge-fg:#fff;
@@ -2632,12 +2648,58 @@ def render_comment(c: dict, children: dict, avatars: AvatarStyles,
     return "\n".join(parts)
 
 
-def fact(label: str, value: str, extra: bool = False, warn: bool = False) -> str:
-    """One fact tile; extra=True marks information added by this program
-    (grey), warn=True a warning (the video no longer on YouTube)."""
-    cls = "fact" + (" extra" if extra else "") + (" warn" if warn else "")
-    return (f'<div class="{cls}"><div class="value">{esc(value)}</div>'
+def fact(label: str, value: str, extra: bool = False, warn: bool = False,
+         corner: str = "") -> str:
+    """One fact tile, every one of the same size (the CSS cuts a longer text);
+    extra=True marks information added by this program (grey), warn=True a
+    warning (the video no longer on YouTube), `corner` a mark in the top
+    right corner (18+ on the Access tile); a number of LONG_NUMBER_DIGITS
+    digits or more gets the smaller type (class long)."""
+    long = (re.fullmatch(r"[\d\s]+", value) is not None
+            and sum(c.isdigit() for c in value) >= LONG_NUMBER_DIGITS)
+    cls = "fact" + (" extra" if extra else "") + (" warn" if warn else "") \
+        + (" marked" if corner else "") + (" long" if long else "")
+    mark = f'<div class="corner">{esc(corner)}</div>' if corner else ""
+    return (f'<div class="{cls}">{mark}<div class="value">{esc(value)}</div>'
             f'<div class="label">{esc(label)}</div></div>')
+
+
+# A number from this many digits on (a billion) is shown in a smaller type:
+# 16 px fits 999 999 999 in a tile, 12 px fits 999 999 999 999 (measured
+# in Chromium, 27.11.2026: 91 and 92 px of 100).
+LONG_NUMBER_DIGITS = 10
+
+
+# Who could watch the video on YouTube (yt-dlp's availability: one value, by
+# priority: private, premium_only, subscriber_only, needs_auth, unlisted,
+# public; with YouTube needs_auth comes from an age limit of 18), its age
+# limit, whether it was broadcast live (yt-dlp's live_status: a premiere is
+# was_live too). The Access tile (only when not plainly public) and the On
+# YouTube row of About this copy.
+ACCESS_VALUES = {"unlisted": "Unlisted", "private": "Private", "subscriber_only": "Members",
+                 "premium_only": "Premium", "needs_auth": "Sign-in"}
+ADULT_AGE = 18
+AVAILABILITY_TEXT = {"public": "public", "unlisted": "unlisted", "private": "private",
+                     "subscriber_only": "members only", "premium_only": "YouTube Premium only",
+                     "needs_auth": "sign-in required"}
+LIVE_TEXT = {"not_live": "not broadcast live",
+             "was_live": "broadcast live as a stream or a premiere",
+             "post_live": "broadcast live as a stream or a premiere",
+             "is_live": "live during the copy",
+             "is_upcoming": "scheduled to be broadcast live"}
+
+
+def adult(age) -> bool:
+    return isinstance(age, int) and age >= ADULT_AGE
+
+
+def access_tile(info: dict) -> str:
+    """The Access tile, only for a video that was not plainly public: who
+    could watch it, 18+ in the corner when age-restricted (which on YouTube
+    means signing in)."""
+    restricted = adult(info.get("age_limit"))
+    value = ACCESS_VALUES.get(info.get("availability")) or ("Sign-in" if restricted else None)
+    return fact("Access", value, corner="18+" if restricted else "") if value else ""
 
 
 # Grey note next to a chapter heading; only for a source the program verified.
@@ -3985,6 +4047,33 @@ def about_downloaded(info: dict, archived: dt.date) -> str:
             (f"; {run_event(update)} {esc(format_date(update['date']))} "
              f"{esc(update.get('time') or '')}").rstrip() for update in before)
     return text
+
+
+def age_text(age) -> str:
+    if not isinstance(age, int):
+        return "age restriction not known"
+    return f"age-restricted ({age}+)" if age > 0 else "no age restriction"
+
+
+def about_on_youtube(info: dict) -> str:
+    """The On YouTube row: who could watch the video, its age limit, whether
+    it was broadcast live (STATUS_KEYS), each with what it was before a
+    --json refresh changed it ("unlisted (public until 03.12.2026)")."""
+    if not any(key in info for key in STATUS_KEYS):
+        return "not recorded in the saved data"
+    texts = {"availability": lambda v: AVAILABILITY_TEXT.get(v) or "who could watch it not known",
+             "age_limit": age_text,
+             "live_status": lambda v: LIVE_TEXT.get(v) or "live broadcast not known"}
+
+    def part(key: str) -> str:
+        earlier = [f"{texts[key](p[key])} until {format_date(p['until'])}"
+                   for p in info.get(PREVIOUS_KEY) or [] if key in p]
+        return texts[key](info.get(key)) + (f" ({', '.join(earlier)})" if earlier else "")
+    parts = [part(key) for key in STATUS_KEYS]
+    if info.get("availability") == "needs_auth" and adult(info.get("age_limit")):
+        # one fact: signing in because of the age limit; yt-dlp names no more
+        parts[:2] = [f"{parts[0]}: {parts[1]}, so whether public or unlisted is not known"]
+    return esc("; ".join(parts))
 
 
 def about_page_built(from_json: bool, built: dt.datetime) -> str:
@@ -5589,6 +5678,7 @@ def render_about(info: dict, archived: dt.date, thumbnail: str | None,
     Every row is always there, in a fixed order (see docs/DEVELOPMENT.md)."""
     rows = [
         ("Downloaded", about_downloaded(info, archived)),
+        ("On YouTube", about_on_youtube(info)),
         ("Page built", about_page_built(from_json, built)),
         ("Playlist", about_playlist(info)),
         ("Command", about_command(info, spec, theme, show_snapshot, no_avatars)),
@@ -5677,6 +5767,7 @@ def render_page(info: dict, thumbnail: str | None, avatar_uris: dict[str, str],
     body.append('<div class="facts">' + PLAYER_TILE
                 + fact("Duration", format_duration(duration))
                 + fact("Published", published_date(info))
+                + access_tile(info)
                 + fact("Views", format_int(info.get("view_count")))
                 + fact("Likes", format_int(info.get("like_count")))
                 + fact("Comments", youtube_comment_count(info)[0] or "—")
@@ -6075,7 +6166,7 @@ def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
 SAVED_FIELDS = (
     "id", "title", "description", "webpage_url", "_type", "_version", "epoch",
     "timestamp", "release_timestamp", "upload_date", "release_date", "duration",
-    "language", "license", "tags", "categories",
+    "language", "license", "tags", "categories", "availability", "age_limit", "live_status",
     "view_count", "like_count", "comment_count", "channel_follower_count",
     "channel", "channel_id", "channel_url", "channel_is_verified",
     "uploader", "uploader_id", "uploader_url",
@@ -6530,8 +6621,9 @@ def merge_comments(saved: list[dict], fresh: list[dict], complete: bool,
 
 
 def refresh_saved(info: dict, fresh: dict) -> dict | None:
-    """--json refresh: the counts from fresh data; the title and description
-    (the earlier ones kept in PREVIOUS_KEY) and the timestamp lists made from
+    """--json refresh: the counts from fresh data; the title, description and
+    state on YouTube (STATUS_KEYS; the earlier ones kept in PREVIOUS_KEY, a
+    state the saved data did not hold taken without one) and the timestamp lists made from
     them; and the comments merged (merge_comments()). Comments not downloaded
     now (--page comments:no) leave the saved ones; comments turned off on YouTube
     since leave them too, noted in COMMENTS_CLOSED_KEY. Returns what changed
@@ -6540,9 +6632,10 @@ def refresh_saved(info: dict, fresh: dict) -> dict | None:
     for key in REFRESHED_KEYS:
         if fresh.get(key) is not None:
             info[key] = fresh[key]
-    for key in ("title", "description"):
+    for key in ("title", "description") + STATUS_KEYS:
         if fresh.get(key) is not None and fresh[key] != info.get(key):
-            info.setdefault(PREVIOUS_KEY, []).append({"until": today, key: info.get(key)})
+            if key in info:
+                info.setdefault(PREVIOUS_KEY, []).append({"until": today, key: info.get(key)})
             info[key] = fresh[key]
     if fresh.get(MARKERS_KEY) is not None:   # None: the watch page not read now
         info[MARKERS_KEY] = fresh[MARKERS_KEY]
