@@ -4,6 +4,10 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+### Changed
+
+- **The saved data keep what yt2html uses, with no download addresses and no IP address.** The data file held yt-dlp's data whole: every format with its download address, every caption language in six formats with theirs, request headers, the heatmap and more. The addresses expire within hours, and they held the computer's IP address, which nobody expects in an archive. Now the file is yt2html's own format with yt-dlp's names for its fields: what the program reads (the description, counts, dates, the channel, formats without addresses, the comments, the thumbnails, the chapters), the caption languages with their names, `channel_id`, `uploader_id`, `tags` and `categories`, and all of yt2html's own keys (the transcript, its translations and one's own, the timestamp lists, cards, notes, history) whole. The kind of each audio track (original, dubbed, …), which only its address carried, is kept as `yt2html_audio_kind`. A page made from the file is the same as one made from the whole data. As a safety net, an address with an IP address in it is left out wherever it is, with a note. The file is no longer one for `yt-dlp --load-info-json`; yt2html never used it so: every download takes fresh data. Saved data of the older form are written anew by `--json write` even when nothing is missing, without asking YouTube for the video's data, and the page with them: `Saved data of an older form: written anew without the download addresses and the fields yt2html does not use.`, so `yt2html "*.info.json" --json write` brings a whole folder to the new form.
+
 ## [0.13.1] - 2026-11-27
 
 ### Changed

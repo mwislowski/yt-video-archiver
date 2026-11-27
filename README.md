@@ -220,7 +220,7 @@ The order of work: the page first, then a fresh list of formats (the formats' ad
 
 ### Saved data: `--json`
 
-The data a page is made from can be saved next to it as `Title [id].info.json`: yt-dlp's data of the video (description, counts, formats, comments, …) together with what yt2html adds (the transcript and its translations, the chapters and other timestamp lists, info cards, the extras of the video page, what `--video` downloaded). They let you make the page again later without YouTube (a newer look after an update of yt2html), add what is missing, and refresh what changes. `--json` takes one parameter:
+The data a page is made from can be saved next to it as `Title [id].info.json`: what yt2html uses of yt-dlp's data of the video (description, counts, formats, comments, the languages of the captions, …) together with what yt2html adds (the transcript and its translations, the chapters and other timestamp lists, info cards, the extras of the video page, what `--video` downloaded). They let you make the page again later without YouTube (a newer look after an update of yt2html), add what is missing, and refresh what changes. The file is yt2html's own format, with yt-dlp's names for its fields: it keeps no download addresses (they expire within hours, and they hold your IP address), so it is not a file for `yt-dlp --load-info-json`; whatever downloads takes fresh data from YouTube. `--json` takes one parameter:
 
 | Parameter | What it does | Asks YouTube for | Comments and counts | The copy's date |
 |---|---|---|---|---|

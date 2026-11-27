@@ -4402,7 +4402,10 @@ def audio_kind(fmt: dict) -> str | None:
     """YouTube's kind of the audio track (acont: original, dubbed, dubbed-auto,
     descriptive) from the xtags of the format's address (a query parameter,
     or a path part in HLS addresses); None without it. Undocumented, so the
-    row falls back to yt-dlp's language preference when it is missing."""
+    row falls back to yt-dlp's language preference when it is missing. The
+    data file keeps it without the address (AUDIO_KIND_KEY)."""
+    if fmt.get(AUDIO_KIND_KEY):
+        return fmt[AUDIO_KIND_KEY]
     for key in ("url", "manifest_url"):
         found = re.search(r"xtags[=/]([^&/?#]+)", str(fmt.get(key) or ""))
         if found:
@@ -6059,6 +6062,149 @@ def existing_page(output_dir: Path, video_id: str | None) -> Path | None:
     return file_with_id(output_dir, video_id, (".html",), "pages")
 
 
+# --------------------------------------------------------------------------
+# The data file: yt2html's own format, under yt-dlp's names
+# --------------------------------------------------------------------------
+# The data file keeps what the program uses, under yt-dlp's names and in its
+# shapes (one code reads fresh data and saved data), and every key of the
+# program's own (yt2html_*); nothing else (the user, 27.11.2026: our format
+# for our needs, yt-dlp is a tool; no download addresses, no IP address). A
+# caption list keeps its languages and their names: the transcript and its
+# translations are the program's own key, and caption and format addresses
+# expire within hours, so whatever downloads takes them from fresh data.
+SAVED_FIELDS = (
+    "id", "title", "description", "webpage_url", "_type", "_version", "epoch",
+    "timestamp", "release_timestamp", "upload_date", "release_date", "duration",
+    "language", "license", "tags", "categories",
+    "view_count", "like_count", "comment_count", "channel_follower_count",
+    "channel", "channel_id", "channel_url", "channel_is_verified",
+    "uploader", "uploader_id", "uploader_url",
+    "thumbnail", "thumbnails", "chapters", "subtitles", "automatic_captions",
+    "formats", "comments")
+FORMAT_FIELDS = ("format_id", "format_note", "protocol", "vcodec", "acodec", "width", "height",
+                 "fps", "dynamic_range", "tbr", "filesize", "filesize_approx", "language",
+                 "language_preference")
+COMMENT_FIELDS = ("id", "parent", "author", "author_id", "author_url", "author_thumbnail",
+                  "author_is_uploader", "author_is_verified", "text", "timestamp",
+                  "_time_text", "like_count", "is_pinned", "is_favorited")
+THUMBNAIL_FIELDS = ("url", "width", "height", "preference")
+CHAPTER_FIELDS = ("start_time", "end_time", "title")
+OWN_PREFIX = "yt2html_"
+# The kind of an audio track (audio_kind()) as the format's address had it.
+AUDIO_KIND_KEY = "yt2html_audio_kind"
+# An address with the computer's IP address in it (googlevideo: "ip=1.2.3.4"
+# in the query, "/ip/1.2.3.4/" in HLS paths): never in the data file.
+IP_ADDRESS = re.compile(r"(?:[?&]ip=|/ip/)[0-9A-Fa-f.:%]+", re.IGNORECASE)
+WHOLE_URL = re.compile(r"https?://\S+")
+FREE_TEXT = ("text", "description", "title")   # what people wrote, never an address
+
+
+def kept_fields(item: dict, fields: tuple) -> dict:
+    """The listed fields of `item` and the program's own keys, in its order."""
+    return {key: value for key, value in item.items()
+            if key in fields or key.startswith(OWN_PREFIX)}
+
+
+def saved_format(fmt: dict) -> dict:
+    """A format as the data file keeps it: what the Video formats table and
+    --video's choice read, the kind of an audio track taken from its address
+    (AUDIO_KIND_KEY), and no address."""
+    kept = kept_fields(fmt, FORMAT_FIELDS)
+    kind = audio_kind(fmt)
+    if kind:
+        kept[AUDIO_KIND_KEY] = kind
+    return kept
+
+
+def has_codec(fmt: dict) -> bool:
+    """A format with image or sound (storyboards have neither)."""
+    return any(fmt.get(key) not in (None, "none") for key in ("vcodec", "acodec"))
+
+
+def saved_captions(tracks) -> dict:
+    """A caption list (subtitles, automatic_captions): each language with its
+    name, without the formats and their addresses: [{"name": ...}]. A
+    language without formats is left out (the program reads it as absent)."""
+    if not isinstance(tracks, dict):
+        return tracks
+    kept = {}
+    for code, formats in tracks.items():
+        if not formats:
+            continue
+        name = next((f.get("name") for f in formats if isinstance(f, dict) and f.get("name")),
+                    None)
+        kept[code] = [{"name": name} if name else {}]
+    return kept
+
+
+def each_dict(value, change):
+    """`change` applied to every dict of a list (a list that is None stays)."""
+    return [change(item) if isinstance(item, dict) else item for item in value] \
+        if isinstance(value, list) else value
+
+
+def saved_form(info: dict, note: bool = True) -> dict:
+    """The data as the data file keeps them (SAVED_FIELDS and the program's
+    own keys), with no address that has an IP address in it (named in a
+    note: yt-dlp or YouTube put one where none was before)."""
+    kept = kept_fields(info, SAVED_FIELDS)
+    for key, change in (("formats", saved_format),
+                        ("comments", lambda c: kept_fields(c, COMMENT_FIELDS)),
+                        ("thumbnails", lambda t: kept_fields(t, THUMBNAIL_FIELDS)),
+                        ("chapters", lambda c: kept_fields(c, CHAPTER_FIELDS))):
+        if key in kept:
+            kept[key] = each_dict(kept[key], change)
+    if isinstance(kept.get("formats"), list):
+        kept["formats"] = [f for f in kept["formats"] if not isinstance(f, dict) or has_codec(f)]
+    for key in ("subtitles", "automatic_captions"):
+        if key in kept:
+            kept[key] = saved_captions(kept[key])
+    left_out = []
+    kept = without_ip_addresses(kept, "", left_out)
+    if left_out and note:
+        log(f"  Note: left out of the saved data, as they hold an IP address: "
+            f"{', '.join(dict.fromkeys(left_out))}")
+    return kept
+
+
+def without_ip_addresses(value, where: str, left_out: list):
+    """`value` without the addresses that hold an IP address (IP_ADDRESS),
+    wherever they are; what people wrote (FREE_TEXT) stays as it is.
+    `left_out` gets where each was."""
+    def holds_ip(key, item) -> bool:
+        return (key not in FREE_TEXT and isinstance(item, str) and WHOLE_URL.fullmatch(item)
+                and IP_ADDRESS.search(item) is not None)
+    if isinstance(value, dict):
+        kept = {}
+        for key, item in value.items():
+            if holds_ip(key, item):
+                left_out.append(where + key)
+            else:
+                kept[key] = without_ip_addresses(item, f"{where}{key}.", left_out)
+        return kept
+    if isinstance(value, list):
+        kept = []
+        for item in value:
+            if holds_ip(None, item):
+                left_out.append(where.rstrip(".") + "[]")
+            else:
+                kept.append(without_ip_addresses(item, where.rstrip(".") + "[].", left_out))
+        return kept
+    return value
+
+
+def data_text(info: dict) -> bytes:
+    """The data file's content: saved_form(), as JSON."""
+    return json.dumps(saved_form(info), ensure_ascii=False, indent=1).encode("utf-8")
+
+
+def old_form(info: dict) -> bool:
+    """Saved data of the older form (yt-dlp's data whole, download addresses
+    with the IP address among them): --json write writes them anew in
+    today's form. Transitional (YT2HTML.local.md 5.4)."""
+    return saved_form(info, note=False) != info
+
+
 def write_atomically(path: Path, content: str | bytes) -> None:
     """Write to a temporary file and rename it, so an interrupted run never
     leaves a cut-off file (a page or subtitles a later run would take as
@@ -6547,7 +6693,7 @@ def merge_fixed(path: Path, info: dict, data_path: Path, transcript: dict, langu
         log(f"  Replaces the corrections added on {format_date(earlier['date'])}.")
     transcript["fixed"] = {"cues": cues, "file": path.name, "date": dt.date.today().isoformat()}
     note_update(info, {}, ["own corrections of the transcript"])
-    write_atomically(data_path, json.dumps(info, ensure_ascii=False, indent=1))
+    write_atomically(data_path, data_text(info))
     log(f"Updated metadata: {data_path} (own corrections of the transcript, "
         f"{plural(len(cues), 'line')})")
     folder = "" if data_path.parent == Path(DEFAULT_OUTPUT_DIR) else f' -o "{data_path.parent}"'
@@ -6625,7 +6771,7 @@ def merge_own_translation(source: str, args: argparse.Namespace,
         "name": (info.get(TRANSLATIONS_KEY) or {}).get(language) or language,
         "cues": cues, "own": {"file": path.name, "date": dt.date.today().isoformat()}})
     note_update(info, {}, [f"own translation {language}"])
-    write_atomically(data_path, json.dumps(info, ensure_ascii=False, indent=1))
+    write_atomically(data_path, data_text(info))
     log(f"Updated metadata: {data_path} (own translation into '{language}', "
         f"{plural(len(cues), 'line')})")
     folder = "" if args.output_dir == DEFAULT_OUTPUT_DIR else f' -o "{args.output_dir}"'
@@ -6678,10 +6824,15 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
                  update_data_path(source, output_dir) if adding else None)
     updating = adding and data_path is not None
     read_mark = None   # the mark of the saved data read (data_mark())
+    rewrite = False    # saved data of an older form (old_form()), to be written anew
     if data_path:
         log(f"Reading {data_path}")
         info = read_saved(data_path)
         read_mark = data_mark(data_path.read_bytes())
+        if updating and old_form(info):   # transitional (YT2HTML.local.md 5.4)
+            rewrite = True
+            log("  Saved data of an older form: written anew without the download addresses "
+                "and the fields yt2html does not use.")
     else:
         if adding:
             found = existing_page(output_dir, video_id_from_url(source))
@@ -6746,7 +6897,8 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         log(f"  Transcript: {note}.")
     # --json write with nothing missing in the data: a page that is there stays
     # as it is (with --video, unless files are added: then it is made again)
-    idle = updating and not args.refresh_json and not (whole or targets) and not record
+    idle = (updating and not args.refresh_json and not (whole or targets) and not record
+            and not rewrite)
 
     saved = info.get(TRANSCRIPT_KEY) or {}
     missing = transcript_gaps(info)
@@ -6879,7 +7031,7 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
         B1: the images were downloaded between the two)."""
         content, mark = None, read_mark   # --json load: the data read; else none
         if write_json or updating:
-            content = json.dumps(info, ensure_ascii=False, indent=1).encode("utf-8")
+            content = data_text(info)
             mark = data_mark(content)
         page = page_html(mark)
         if content is not None:
