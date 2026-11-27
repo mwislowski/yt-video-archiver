@@ -47,7 +47,7 @@ from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
 from yt_dlp.utils import ISO639Utils
 
 # The program version; pyproject.toml reads it from here (single source).
-__version__ = "0.13.1"
+__version__ = "0.13.2"
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -6199,9 +6199,9 @@ def data_text(info: dict) -> bytes:
 
 
 def old_form(info: dict) -> bool:
-    """Saved data of the older form (yt-dlp's data whole, download addresses
-    with the IP address among them): --json write writes them anew in
-    today's form. Transitional (YT2HTML.local.md 5.4)."""
+    """Saved data of 0.13.1 and before (yt-dlp's data whole, download
+    addresses with the IP address among them): --json write writes them
+    anew in today's form. Transitional (YT2HTML.local.md 5.4)."""
     return saved_form(info, note=False) != info
 
 

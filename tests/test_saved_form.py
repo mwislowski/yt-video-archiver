@@ -179,8 +179,8 @@ def test_an_address_with_an_ip_address_is_left_out_wherever_it_is(capsys):
 
 
 def test_json_write_writes_old_data_anew(capsys, saved, youtube):
-    """Transitional (YT2HTML.local.md 5.4): data of the older form are
-    written anew by --json write, without asking YouTube, and the page with
+    """Transitional (YT2HTML.local.md 5.4): data of 0.13.1 and before
+    are written anew by --json write, without asking YouTube, and the page with
     them (it keeps the mark of its data)."""
     data = youtube_data(json.loads(saved.read_text("utf-8")))
     saved.write_text(json.dumps(data), encoding="utf-8")
