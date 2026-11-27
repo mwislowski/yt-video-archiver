@@ -4,6 +4,8 @@ All notable changes to this project. Versions: the second number for new feature
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-11-27
+
 ### Added
 
 - **Who could watch the video, on the page.** An *Access* tile after *Published*, only for a video that was not plainly public: `Unlisted`, `Private`, `Members`, `Premium`, or `Sign-in` with a red `18+` in its corner for an age-restricted video. A new *On YouTube* row in *About this copy*, right after *Downloaded*, gives the video's state in one line: who could watch it, its age restriction and whether it was broadcast live (as a stream or a premiere, which yt-dlp does not tell apart), e.g. `unlisted; no age restriction; broadcast live as a stream or a premiere`. The data keep yt-dlp's `availability`, `age_limit` and `live_status` for it; `--json refresh` takes them anew and keeps the earlier state, which the row shows: `unlisted (public until 03.12.2026)`. Data saved by 0.13.2 lack them (the row says `not recorded in the saved data`); data of 0.13.1 and before still have them, so `--json write` keeps them when it writes such data anew.
@@ -397,7 +399,8 @@ First release.
 - Themes with `--theme`: `auto` (follows the device), `dark`, `light`.
 - `--save-json` and `--from-json` to keep the data and rebuild pages without downloading.
 
-[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.13.2...HEAD
+[Unreleased]: https://github.com/mwislowski/yt-video-archiver/compare/v0.13.3...HEAD
+[0.13.3]: https://github.com/mwislowski/yt-video-archiver/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/mwislowski/yt-video-archiver/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/mwislowski/yt-video-archiver/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/mwislowski/yt-video-archiver/compare/v0.12.3...v0.13.0
