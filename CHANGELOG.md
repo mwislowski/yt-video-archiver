@@ -15,6 +15,7 @@ All notable changes to this project. Versions: the second number for new feature
 ### Fixed
 
 - **A video file that fails no longer stops the extra audio tracks, and it is noted.** With `--video audio:pl`, an error in the video file ended `--video` for the video, so `pl` was not downloaded, and nothing said in the saved data that the video file was missing. Now the tracks go on, and with `--json` the video file is noted (`video`, the reason, the day); so is what `Video skipped` did not take (no ffmpeg, no formats, nothing within the quality asked for). `--json show` shows it with the command to try again; the note goes when the file is there.
+- **`--page ovr --json write` names everything it replaces, and keeps the history.** The console listed only a few things only the old data had; the transcript, comments and cards the command did not ask for, the history of the comments and the notes went without a word. Now everything is named, part by part (the record of a file you deleted goes silently, as you deleted it). The earlier runs and the earlier titles and descriptions, which YouTube cannot give again, go into the new data, and the page's *Downloaded* row and `--json show` list the runs before the copy made again (`before it: …`).
 
 ## [0.13.0] - 2026-11-26
 

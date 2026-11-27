@@ -188,8 +188,9 @@ TRANSCRIPT_MISSING_KEY = "yt2html_transcript_missing"
 # [{date, time, yt2html, added: [text] ("translation pl", "subtitles pl
 # (translated)"), refreshed: true for --json refresh, comments: {new, gone,
 # back} when the comments were refreshed, unavailable: true for a
-# --json refresh that found the video no longer on YouTube}]; the copy's date
-# stays. The page names only the runs (Downloaded row); the rest is for the data.
+# --json refresh that found the video no longer on YouTube, replaced: the
+# day of the copy before for --page ovr --json write, which carries the list
+# into the copy made again (carry_history())}]; the copy's date stays. The page names only the runs (Downloaded row); the rest is for the data.
 UPDATES_KEY = "yt2html_updates"
 
 # --json refresh found the video no longer on YouTube (removed or private):
@@ -3971,16 +3972,18 @@ def about_downloaded(info: dict, archived: dt.date) -> str:
     if ytdlp:
         programs.append(f"yt-dlp {esc(ytdlp)}")
     text = f"{when} from {source}" + (f" with {' and '.join(programs)}" if programs else "")
-    updates = info.get(UPDATES_KEY) or []
+    updates, before, first = copy_runs(info)
     unavailable = info.get(UNAVAILABLE_KEY)
     last_check = max((i for i, u in enumerate(updates) if u.get("unavailable")), default=None)
     for i, update in enumerate(updates):   # the later runs; what they did: in the data
-        event = ("no longer on YouTube" if update.get("unavailable") else
-                 "refreshed" if update.get("refreshed") else "updated")
-        text += (f"; {event} {esc(format_date(update['date']))} "
+        text += (f"; {run_event(update)} {esc(format_date(update['date']))} "
                  f"{esc(update.get('time') or '')}").rstrip()
         if unavailable and i == last_check:   # YouTube's words, once, while it lasts
             text += f" “{esc(unavailable.get('reason') or '')}”"
+    if first:   # made again with --page ovr: the copies before it
+        text += f";<br>before it: downloaded {esc(format_date(first))}" + "".join(
+            (f"; {run_event(update)} {esc(format_date(update['date']))} "
+             f"{esc(update.get('time') or '')}").rstrip() for update in before)
     return text
 
 
@@ -5097,17 +5100,23 @@ def show_data(info: dict) -> list[str]:
     when = (date_time(dt.datetime.fromtimestamp(epoch)) if epoch else
             format_date(info[ARCHIVED_KEY]) if info.get(ARCHIVED_KEY) else "date unknown")
     version = (info.get(DOWNLOAD_KEY) or {}).get("yt2html")
-    lines = [f"downloaded {when}" + (f" (yt2html {version})" if version else "")]
-    for update in info.get(UPDATES_KEY) or []:
-        event = ("no longer on YouTube" if update.get("unavailable") else
-                 "refreshed" if update.get("refreshed") else "updated")
+    updates, before, first = copy_runs(info)
+    lines = [f"downloaded {when}" + (f" (yt2html {version})" if version else "")
+             + (", again (--page ovr)" if first else "")]
+
+    def run_line(update: dict) -> str:
         done = list(update.get("added") or [])
         comments = update.get("comments") or {}
         done += [plural(comments[key], word) + after for key, word, after in
                  (("new", "new comment", ""), ("gone", "comment", " gone"),
                   ("back", "comment", " back")) if comments.get(key)]
-        lines.append(f"{event} {format_date(update['date'])}"
-                     + (f" ({', '.join(done)})" if done else ""))
+        return (f"{run_event(update)} {format_date(update['date'])}"
+                + (f" ({', '.join(done)})" if done else ""))
+
+    lines += [run_line(update) for update in updates]
+    if first:   # the copies before this one
+        lines += [f"before it: downloaded {format_date(first)}"]
+        lines += [f"before it: {run_line(update)}" for update in before]
     unavailable = info.get(UNAVAILABLE_KEY)
     if unavailable:
         lines.append(f"no longer on YouTube: {unavailable.get('reason') or 'reason unknown'}")
@@ -6781,7 +6790,10 @@ def archive(source: str, args: argparse.Namespace, playlist: dict | None = None,
                 if write_json and args.overwrite else None)
 
     if replaced:
-        log(replaced_data_note(replaced, info))
+        log(replaced_data_note(replaced, info, args.video is not None))
+        old = readable_saved(replaced)
+        if old is not None:
+            carry_history(old, info)
     if not deferred and found and not args.load_json and not connected():
         raise NoConnection("the connection was lost before the page was made again")
 
@@ -7003,38 +7015,124 @@ def limit_text(spec: dict) -> str:
     return f"{spec['height']}p" + (str(spec["fps"]) if spec["fps"] else "")
 
 
-def replaced_data_note(path: Path, fresh: dict) -> str:
-    """--page ovr --json write: the saved data at `path` are replaced by fresh
-    ones; what only they had is lost and named, so nothing goes unnoticed:
-    translations of one's own, comments YouTube no longer has, YouTube's
-    translations the fresh data lack, the record of downloaded files."""
+def readable_saved(path: Path) -> dict | None:
+    """Saved data in today's form (read_saved()), None when they cannot be read."""
     try:
-        old = json.loads(path.read_text(encoding="utf-8"))
+        info = read_saved(path)
     except (OSError, ValueError):
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def replaced_data_note(path: Path, fresh: dict, video: bool = False) -> str:
+    """--page ovr --json write: the saved data at `path` are replaced by fresh
+    ones; what only they had is lost and named (review A8; the user,
+    27.11.2026), part by part in the order of ELEMENTS: the transcript or what
+    the fresh one lacks, the comments and their history, the info cards, the
+    record of the files still there (of a file deleted: nothing, the user's
+    own decision), the notes of what did not come that this run does not ask
+    for again (`video`: --video is given, so its own notes are made anew).
+    The history of the changes on YouTube is not lost: carry_history()."""
+    old = readable_saved(path)
+    if old is None:
         return f"Replacing saved data that could not be read: {path}"
     lost = []
     transcript = old.get(TRANSCRIPT_KEY) or {}
-    fresh_languages = set(translations_of(fresh.get(TRANSCRIPT_KEY) or {}))
-    own = sorted(own_of(transcript))
-    if own:
-        lost.append(f"own translation{'s' if len(own) > 1 else ''} {', '.join(own)}")
-    if (transcript.get("fixed") or {}).get("cues"):
-        lost.append("own corrections of the transcript")
-    gone = sum(1 for c in old.get("comments") or [] if c.get(MISSING_SINCE_KEY))
-    if gone:
-        lost.append(f"{plural(gone, 'comment')} no longer on YouTube")
-    youtube = sorted(code for code in translations_of(transcript) if code not in fresh_languages)
-    if youtube:
-        lost.append(f"YouTube's translation{'s' if len(youtube) > 1 else ''} into "
-                    f"{', '.join(youtube)}")
-    if old.get(VIDEO_KEY):
-        lost.append("the record of the downloaded files")
+    now = fresh.get(TRANSCRIPT_KEY) or {}
+    if transcript and not now:
+        lost += transcript_parts(transcript)
+    elif transcript:
+        own = sorted(own_of(transcript))
+        if own:
+            lost.append(f"own translation{'s' if len(own) > 1 else ''} {', '.join(own)}")
+        if (transcript.get("fixed") or {}).get("cues"):
+            lost.append("own corrections of the transcript")
+        youtube = sorted(set(translations_of(transcript)) - set(translations_of(now)))
+        if youtube:
+            lost.append(f"YouTube's translation{'s' if len(youtube) > 1 else ''} into "
+                        f"{', '.join(youtube)}")
+        tracks = sorted(set(transcript.get("tracks") or {}) - set(now.get("tracks") or {}))
+        if tracks:
+            lost.append(f"subtitles {', '.join(tracks)}")
+    comments = old.get("comments") if isinstance(old.get("comments"), list) else []
+    if comments and not isinstance(fresh.get("comments"), list):
+        lost.append(plural(len(comments), "comment"))
+    elif comments:
+        gone = sum(1 for c in comments if c.get(MISSING_SINCE_KEY))
+        if gone:
+            lost.append(f"{plural(gone, 'comment')} no longer on YouTube")
+        told = sum(1 for c in comments if not c.get(MISSING_SINCE_KEY) and any(
+            c.get(key) for key in (EDITS_KEY, MISSING_HISTORY_KEY, FIRST_SEEN_KEY)))
+        if told:
+            lost.append(f"the history of {plural(told, 'comment')}")
+    if old.get(COMMENTS_CLOSED_KEY):
+        lost.append("when the comments were turned off")
+    if old.get(CARDS_KEY) and CARDS_KEY not in fresh:
+        lost.append(plural(len(old[CARDS_KEY]), "info card"))
+    folder, ident = path.parent, old.get("id") or fresh.get("id")
+    record = old.get(VIDEO_KEY) or {}
+    files = []
+    if record.get("video") and video_files(folder, ident):
+        image = record["video"]
+        what = " ".join(str(v) for v in (image.get("quality"), image.get("codec")) if v)
+        files.append("the video file" + (f" ({what})" if what else ""))
+    tracks = [track["audio"] + (f" ({track['role']})" if track.get("role") else "")
+              for track in record.get("extra_audio") or []
+              if file_by_suffix(folder, ident, audio_suffix((track["audio"], track.get("role"))),
+                                "audio files")]
+    if tracks:
+        files.append(f"extra audio {', '.join(tracks)}")
+    if files:
+        lost.append("the record of " + " and of ".join(files))
+    again = set(fresh.get(NOT_SAVED_KEY) or {})
+    notes = sorted(key for key in old.get(NOT_SAVED_KEY) or {} if key not in again
+                   and not (video and key.partition(" ")[0] in (VIDEO_GAP, "audio")))
+    if notes:
+        lost.append(f"the notes of what did not come: {', '.join(notes)}")
     try:
         since = f" from {format_date(old.get(ARCHIVED_KEY))}" if old.get(ARCHIVED_KEY) else ""
     except ValueError:
         since = ""
     return (f"Replacing the saved data{since}: {path}"
             + (f" (lost: {'; '.join(lost)})" if lost else ""))
+
+
+def carry_history(old: dict, fresh: dict) -> None:
+    """--page ovr --json write (the user, 27.11.2026): the history of the
+    changes on YouTube goes into the fresh data, which YouTube cannot give
+    again: the runs (UPDATES_KEY), with this one as the copy made again
+    ("replaced": the day of the copy before), and the earlier titles and
+    descriptions (PREVIOUS_KEY), with the saved ones when the fresh differ."""
+    now = dt.datetime.now()
+    today = now.date().isoformat()
+    previous = list(old.get(PREVIOUS_KEY) or [])
+    for key in ("title", "description"):
+        if old.get(key) is not None and fresh.get(key) is not None and old[key] != fresh[key]:
+            previous.append({"until": today, key: old[key]})
+    if previous:
+        fresh[PREVIOUS_KEY] = previous
+    fresh[UPDATES_KEY] = list(old.get(UPDATES_KEY) or []) + [{
+        "date": today, "time": now.strftime("%H:%M"), "yt2html": __version__, "added": [],
+        "replaced": old.get(ARCHIVED_KEY) or today}]
+
+
+def copy_runs(info: dict) -> tuple[list[dict], list[dict], str | None]:
+    """The runs of this copy, those of the copies before it and the day the
+    first copy was downloaded (UPDATES_KEY, split at the last run that made
+    the copy again with --page ovr, which is this copy's download itself)."""
+    updates = info.get(UPDATES_KEY) or []
+    made_again = [i for i, u in enumerate(updates) if u.get("replaced")]
+    if not made_again:
+        return updates, [], None
+    return (updates[made_again[-1] + 1:], updates[:made_again[-1]],
+            updates[made_again[0]]["replaced"])
+
+
+def run_event(update: dict) -> str:
+    """A run of UPDATES_KEY as a word: what it did to the data."""
+    return ("downloaded again" if update.get("replaced") else
+            "no longer on YouTube" if update.get("unavailable") else
+            "refreshed" if update.get("refreshed") else "updated")
 
 
 def described(entry: dict, earlier: list, *same: str) -> dict:

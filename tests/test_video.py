@@ -660,6 +660,9 @@ def test_ovr_starts_from_scratch_with_the_files_found(tmp_path, youtube, capsys)
     yt2html.main([URL, "-o", str(tmp_path), "--video", "audio:pl", "--json", "write"])
     data_path = page(tmp_path).with_suffix(".info.json")
     day = yt2html.format_date(json.loads(data_path.read_text("utf-8"))[yt2html.ARCHIVED_KEY])
+    data = json.loads(data_path.read_text("utf-8"))   # a note --video makes anew now
+    data[yt2html.NOT_SAVED_KEY] = {"audio de": {"reason": "r", "again": True}}
+    data_path.write_text(json.dumps(data), encoding="utf-8")
     capsys.readouterr()
     assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr", "--video", "audio:pl",
                          "--json", "write"]) == 0
@@ -668,7 +671,7 @@ def test_ovr_starts_from_scratch_with_the_files_found(tmp_path, youtube, capsys)
     assert "Audio skipped (file exists)" in out and "Updated page" in out
     # the saved data are not read: what they said about the files is named as lost
     assert (f"Replacing the saved data from {day}: {data_path} (lost: the record of the "
-            "downloaded files)") in out
+            "video file (1080p, 25 fps av1) and of extra audio pl (dubbed))") in out
     html = page(tmp_path).read_text("utf-8")
     assert row(html, "Video file").startswith("next to the page: video ")
     assert 'data-audio="' + page(tmp_path).stem + '.pl.dubbed.m4a"' in html   # the switch
@@ -785,24 +788,64 @@ def test_described_only_the_same_file():
     assert yt2html.described(entry, [{**old[0], "date": None}], "audio", "role") == entry
 
 
+ID = "TESTVIDEO01"
+
+
 def test_replaced_data_note(tmp_path):
-    path = tmp_path / "x.info.json"
+    """Review A8 (the user, 27.11.2026): everything only the old data had is
+    named, part by part; the history of the changes on YouTube is not (it is
+    carried into the fresh data), nor the record of a file deleted."""
+    path = tmp_path / f"Title [{ID}].info.json"
     path.write_text("not json", encoding="utf-8")
     assert yt2html.replaced_data_note(path, {}) == f"Replacing saved data that could not be read: {path}"
     own = {"language": "pl", "cues": [], "own": {"file": "x.pl.own.srt", "date": "2026-11-01"}}
     youtube = {"language": "de", "cues": []}
-    path.write_text(json.dumps({
-        yt2html.ARCHIVED_KEY: "2026-10-12",
-        yt2html.TRANSCRIPT_KEY: {"language": "en", "translations": {"pl": own, "de": youtube,
-                                                                    "fr": youtube, "it": own}},
-        "comments": [{"id": "a"}, {"id": "b", yt2html.MISSING_SINCE_KEY: "2026-11-02"}],
-        yt2html.VIDEO_KEY: {"video": {}}}), encoding="utf-8")
-    fresh = {yt2html.TRANSCRIPT_KEY: {"translations": {"fr": youtube}}}
+    old = {"id": ID, yt2html.ARCHIVED_KEY: "2026-10-12",
+           yt2html.TRANSCRIPT_KEY: {"language": "en", "translations": {"de": youtube,
+                                                                       "fr": youtube},
+                                    "own": {"pl": own, "it": own},
+                                    "fixed": {"cues": [{"start": 0, "text": "x"}]},
+                                    "tracks": {"pl.author": {}, "es.auto-generated": {}}},
+           "comments": [{"id": "a"}, {"id": "b", yt2html.MISSING_SINCE_KEY: "2026-11-02",
+                                      yt2html.EDITS_KEY: [{"text": "y", "until": "2026-11-01"}]},
+                        {"id": "c", yt2html.EDITS_KEY: [{"text": "x", "until": "2026-11-03"}]},
+                        {"id": "d", yt2html.FIRST_SEEN_KEY: "2026-11-04"}],
+           "comment_count": 4,
+           yt2html.COMMENTS_CLOSED_KEY: [{"from": "2026-11-05", "until": "2026-11-06"}],
+           yt2html.CARDS_KEY: [{"type": "video"}, {"type": "link"}],
+           yt2html.VIDEO_KEY: {"video": {"file": f"Title [{ID}].mp4", "quality": "1080p",
+                                         "codec": "av1"},
+                               "extra_audio": [{"audio": "pl", "role": "dubbed"},
+                                               {"audio": "de", "role": None}]},
+           yt2html.NOT_SAVED_KEY: {"transcript fr": {"reason": "r", "again": True},
+                                   "audio es": {"reason": "r", "again": True}},
+           yt2html.UPDATES_KEY: [{"date": "2026-11-20", "added": ["translation pl"]}],
+           yt2html.PREVIOUS_KEY: [{"until": "2026-11-21", "title": "Old"}]}
+    path.write_text(json.dumps(old), encoding="utf-8")
+    (tmp_path / f"Title [{ID}].mp4").write_bytes(b"x")
+    (tmp_path / f"Title [{ID}].pl.dubbed.m4a").write_bytes(b"x")   # de: deleted by hand
+    fresh = {yt2html.TRANSCRIPT_KEY: {"translations": {"fr": youtube},
+                                      "tracks": {"es.auto-generated": {}}},
+             "comments": [{"id": "a"}], yt2html.CARDS_KEY: []}
     assert yt2html.replaced_data_note(path, fresh) == (
         f"Replacing the saved data from 12.10.2026: {path} (lost: own translations it, pl; "
-        "1 comment no longer on YouTube; YouTube's translation into de; the record of the "
-        "downloaded files)")
-    path.write_text(json.dumps({"comments": []}), encoding="utf-8")
+        "own corrections of the transcript; YouTube's translation into de; subtitles pl.author; "
+        "1 comment no longer on YouTube; the history of 2 comments; when the comments were "
+        "turned off; the record of the video file (1080p av1) and of extra audio pl (dubbed); "
+        "the notes of what did not come: audio es, transcript fr)")
+    # what this run does not ask for at all: the transcript, the comments, the cards;
+    # --video given: its notes are made anew, not lost
+    assert yt2html.replaced_data_note(path, {}, video=True) == (
+        f"Replacing the saved data from 12.10.2026: {path} (lost: the transcript in 'en'; "
+        "YouTube's translations into de, fr; own translation it (x.pl.own.srt); own translation "
+        "pl (x.pl.own.srt); own corrections; subtitles es.auto-generated, pl.author; 4 comments; "
+        "when the comments were turned off; 2 info cards; the record of the video file "
+        "(1080p av1) and of extra audio pl (dubbed); the notes of what did not come: "
+        "transcript fr)")
+    # the video file deleted by hand: its record is not named either
+    (tmp_path / f"Title [{ID}].mp4").unlink()
+    assert "the record of extra audio pl (dubbed);" in yt2html.replaced_data_note(path, fresh)
+    path.write_text(json.dumps({"comments": [], "comment_count": 0}), encoding="utf-8")
     assert yt2html.replaced_data_note(path, {}) == f"Replacing the saved data: {path}"
 
 
@@ -1380,3 +1423,54 @@ def test_a_video_file_found_there_clears_its_note(tmp_path, youtube, capsys):
         (tmp_path / f"{page(tmp_path).stem}.{code}.m4a").write_bytes(b"x")
     assert yt2html.main([URL, "-o", str(tmp_path), *TRACKS]) == 0
     assert "video" not in (saved_data(tmp_path).get(yt2html.NOT_SAVED_KEY) or {})
+
+
+def test_the_history_goes_into_the_copy_made_again(tmp_path, youtube, capsys):
+    """--page ovr --json write (the user, 27.11.2026): the runs and the earlier
+    titles and descriptions go into the fresh data, this run as the copy made
+    again; the page and --json show list the runs before it apart."""
+    assert yt2html.main([URL, "-o", str(tmp_path), "--json", "write"]) == 0
+    data_path = page(tmp_path).with_suffix(".info.json")
+    data = json.loads(data_path.read_text("utf-8"))
+    first = data[yt2html.ARCHIVED_KEY]
+    data["title"] = "The old title"
+    data[yt2html.UPDATES_KEY] = [
+        {"date": "2026-11-20", "time": "18:02", "added": ["translation pl"]},
+        {"date": "2026-11-22", "time": "21:15", "added": [], "refreshed": True,
+         "comments": {"new": 2}}]
+    data[yt2html.PREVIOUS_KEY] = [{"until": "2026-11-21", "description": "Older text"}]
+    data_path.write_text(json.dumps(data), encoding="utf-8")
+    assert yt2html.main([URL, "-o", str(tmp_path), "--page", "ovr", "--json", "write"]) == 0
+    data = json.loads(data_path.read_text("utf-8"))
+    today = dt.date.today().isoformat()
+    assert data[yt2html.PREVIOUS_KEY] == [{"until": "2026-11-21", "description": "Older text"},
+                                          {"until": today, "title": "The old title"}]
+    runs = data[yt2html.UPDATES_KEY]
+    assert [r["date"] for r in runs[:2]] == ["2026-11-20", "2026-11-22"]
+    assert runs[2]["replaced"] == first and runs[2]["date"] == today and len(runs) == 3
+    assert (f";<br>before it: downloaded {yt2html.format_date(first)}; updated 20.11.2026 "
+            "18:02; refreshed 22.11.2026 21:15</dd>") in page(tmp_path).read_text("utf-8")
+    lines = yt2html.show_data(data)
+    assert lines[0].endswith(", again (--page ovr)")
+    assert lines[1:] == [f"before it: downloaded {yt2html.format_date(first)}",
+                         "before it: updated 20.11.2026 (translation pl)",
+                         "before it: refreshed 22.11.2026 (2 new comments)"]
+    # a later run of this copy comes before "before it"; made again twice: the first copy
+    data[yt2html.UPDATES_KEY] += [{"date": "2026-11-28", "time": "09:00", "added": ["x"]}]
+    assert yt2html.show_data(data)[1] == "updated 28.11.2026 (x)"
+    data[yt2html.UPDATES_KEY] += [{"date": "2026-11-29", "replaced": today}]
+    lines = yt2html.show_data(data)
+    assert lines[1:3] == [f"before it: downloaded {yt2html.format_date(first)}",
+                          "before it: updated 20.11.2026 (translation pl)"]
+    assert lines[-2:] == [f"before it: downloaded again {yt2html.format_date(today)}",
+                          "before it: updated 28.11.2026 (x)"]
+
+
+def test_carry_history_without_any():
+    fresh = {"title": "T"}
+    yt2html.carry_history({"title": "T"}, fresh)
+    assert yt2html.PREVIOUS_KEY not in fresh
+    run = fresh[yt2html.UPDATES_KEY][0]
+    assert run["replaced"] == dt.date.today().isoformat() and run["added"] == []
+    assert run["yt2html"] == yt2html.__version__
+    assert yt2html.copy_runs({}) == ([], [], None)
